@@ -1,0 +1,8 @@
+[project]
+name = "nl-rpg-projection-worker"
+version = "0.0.0"
+requires-python = ">=3.11"
+description = "Restricted NoemaLoom feature projection worker package."
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
