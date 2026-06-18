@@ -1,0 +1,107 @@
+import { access, mkdir, readFile, writeFile, mkdtemp } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
+import { callRegisteredTool } from '../../packages/core/src/mcp/tool-registry.js';
+
+const require = createRequire(import.meta.url);
+const { DatabaseSync } = require('node:sqlite') as {
+  DatabaseSync: new (filename: string) => {
+    prepare: (sql: string) => { get: (...params: unknown[]) => unknown };
+    close: () => void;
+  };
+};
+
+async function createProject(): Promise<string> {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-refresh-all-'));
+  await writeProjectFile(projectRoot, 'package.json', JSON.stringify({ name: 'refresh-demo', scripts: { test: 'vitest' } }));
+  await writeProjectFile(projectRoot, 'src/client.ts', 'export function createClient() { return "client"; }\n');
+  await writeProjectFile(projectRoot, 'docs/api/client.md', '# Client API\n\nSee `createClient`.\n');
+  await writeProjectFile(projectRoot, 'tests/client.test.ts', 'test("creates client", () => createClient());\n');
+  return projectRoot;
+}
+
+async function writeProjectFile(projectRoot: string, repoPath: string, text: string): Promise<void> {
+  const absolutePath = path.join(projectRoot, repoPath);
+  await mkdir(path.dirname(absolutePath), { recursive: true });
+  await writeFile(absolutePath, text);
+}
+
+function scalar(dbPath: string, sql: string): number {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const row = db.prepare(sql).get() as { value: number };
+    return row.value;
+  } finally {
+    db.close();
+  }
+}
+
+describe('nl_refresh target all', () => {
+  it('writes files, spans, edges, derived map, and refresh revision', async () => {
+    const projectRoot = await createProject();
+
+    const result = await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'all',
+      mode: 'safe'
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.tool).toBe('nl_refresh');
+    expect(result.data).toMatchObject({
+      status: 'refreshed',
+      target: 'all',
+      mode: 'safe'
+    });
+    expect(result.graphRevision).toBe(result.data.graphRevision);
+    expect(result.data.steps).toEqual([
+      'FileInventory',
+      'CodeFactIndexer',
+      'DocumentSpanIndexer',
+      'ArtifactSpanIndexer',
+      'TestExampleSpanIndexer',
+      'FeatureProjectionWorker',
+      'ProjectionBuilder',
+      'CrossReferenceLinker',
+      'DerivedRepositoryMapBuilder',
+      'RefreshRevisionWriter'
+    ]);
+    await expect(access(path.join(projectRoot, '.noemaloom', 'files', 'inventory.sqlite'))).resolves.toBeUndefined();
+    await expect(access(path.join(projectRoot, '.noemaloom', 'fact', 'codegraph.db'))).resolves.toBeUndefined();
+    await expect(access(path.join(projectRoot, '.noemaloom', 'documents', 'anchor-index.json'))).resolves.toBeUndefined();
+    await expect(access(path.join(projectRoot, '.noemaloom', 'spans', 'spans.db'))).resolves.toBeUndefined();
+    await expect(access(path.join(projectRoot, '.noemaloom', 'derived-map', 'repository-map.json'))).resolves.toBeUndefined();
+
+    const dbPath = path.join(projectRoot, '.noemaloom', 'spans', 'spans.db');
+    expect(scalar(dbPath, 'SELECT COUNT(*) AS value FROM repo_spans')).toBeGreaterThan(0);
+    expect(scalar(dbPath, 'SELECT COUNT(*) AS value FROM repo_edges')).toBeGreaterThan(0);
+    expect(scalar(dbPath, 'SELECT COUNT(*) AS value FROM refresh_revisions')).toBe(1);
+    const map = JSON.parse(await readFile(path.join(projectRoot, '.noemaloom', 'derived-map', 'repository-map.json'), 'utf8')) as {
+      coreSourceModules: Array<{ label: string }>;
+      highConfidenceLinks: unknown[];
+    };
+    expect(map.coreSourceModules.some(item => item.label === 'createClient')).toBe(true);
+    expect(map.highConfidenceLinks.length).toBeGreaterThan(0);
+  });
+
+  it('can refresh the same graph twice without colliding revision ids', async () => {
+    const projectRoot = await createProject();
+    const first = await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'all',
+      mode: 'safe'
+    });
+    const second = await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'all',
+      mode: 'safe'
+    });
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(second.graphRevision).not.toBe(first.graphRevision);
+    expect(scalar(path.join(projectRoot, '.noemaloom', 'spans', 'spans.db'), 'SELECT COUNT(*) AS value FROM refresh_revisions')).toBe(2);
+  });
+});

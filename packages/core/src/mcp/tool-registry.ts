@@ -8,6 +8,7 @@ import {
   type NoemaLoomEnvelope
 } from './envelope.js';
 import { handleNlSkill, nlSkillInputSchema } from './tools/nl-skill.js';
+import { handleNlRefresh, nlRefreshInputSchema } from './tools/nl-refresh.js';
 import { handleNlStatus, nlStatusInputSchema } from './tools/nl-status.js';
 import { isBlockedToolName } from './validation.js';
 
@@ -83,6 +84,15 @@ function createToolDefinition(name: NoemaLoomToolName): NoemaLoomToolDefinition 
       description: 'Report NoemaLoom state and disabled raw writer surfaces.',
       inputSchema: nlStatusInputSchema,
       handler: wrapHandler(name, handleNlStatus)
+    };
+  }
+
+  if (name === 'nl_refresh') {
+    return {
+      name,
+      description: 'Refresh NoemaLoom derived repository indexes.',
+      inputSchema: nlRefreshInputSchema,
+      handler: wrapHandler(name, handleNlRefresh)
     };
   }
 
