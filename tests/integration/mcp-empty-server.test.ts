@@ -20,7 +20,11 @@ describe('empty NoemaLoom MCP server', () => {
   });
 
   it('returns not_implemented envelopes from registered placeholder handlers', async () => {
-    const [firstTool] = createToolRegistry();
+    const firstTool = createToolRegistry().find(tool => tool.name === 'nl_refresh');
+
+    if (!firstTool) {
+      throw new Error('nl_refresh tool is missing from the registry');
+    }
 
     const result = await firstTool.handler({});
 

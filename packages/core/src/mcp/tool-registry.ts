@@ -1,5 +1,16 @@
 import { z } from 'zod';
 
+import {
+  createEnvelope,
+  createToolUnavailableEnvelope,
+  createUnhandledErrorEnvelope,
+  resolveProjectRootFromInput,
+  type NoemaLoomEnvelope
+} from './envelope.js';
+import { handleNlSkill, nlSkillInputSchema } from './tools/nl-skill.js';
+import { handleNlStatus, nlStatusInputSchema } from './tools/nl-status.js';
+import { isBlockedToolName } from './validation.js';
+
 export const NOEMALOOM_TOOL_NAMES = [
   'nl_skill',
   'nl_status',
@@ -15,29 +26,6 @@ export const NOEMALOOM_TOOL_NAMES = [
 
 export type NoemaLoomToolName = (typeof NOEMALOOM_TOOL_NAMES)[number];
 
-export type NoemaLoomEnvelope = {
-  ok: false;
-  tool: NoemaLoomToolName;
-  projectRoot: string;
-  graphRevision: null;
-  graphState: 'empty';
-  tokenBudget: {
-    requested: 0;
-    used: 0;
-    truncated: false;
-  };
-  warnings: Array<{
-    code: 'not_implemented';
-    severity: 'warning';
-    message: string;
-  }>;
-  data: {
-    status: 'not_implemented';
-  };
-  evidence: [];
-  nextActions: [];
-};
-
 const placeholderInputSchema = z.object({}).passthrough();
 
 export type NoemaLoomToolDefinition = {
@@ -47,18 +35,12 @@ export type NoemaLoomToolDefinition = {
   handler: (args: unknown) => Promise<NoemaLoomEnvelope>;
 };
 
-function createNotImplementedEnvelope(tool: NoemaLoomToolName): NoemaLoomEnvelope {
-  return {
+function createNotImplementedEnvelope(tool: NoemaLoomToolName, input: unknown): NoemaLoomEnvelope {
+  return createEnvelope({
     ok: false,
     tool,
-    projectRoot: process.cwd(),
-    graphRevision: null,
     graphState: 'empty',
-    tokenBudget: {
-      requested: 0,
-      used: 0,
-      truncated: false
-    },
+    projectRoot: resolveProjectRootFromInput(input),
     warnings: [
       {
         code: 'not_implemented',
@@ -68,17 +50,64 @@ function createNotImplementedEnvelope(tool: NoemaLoomToolName): NoemaLoomEnvelop
     ],
     data: {
       status: 'not_implemented'
-    },
-    evidence: [],
-    nextActions: []
+    }
+  });
+}
+
+function wrapHandler(
+  tool: NoemaLoomToolName,
+  handler: (args: unknown) => Promise<NoemaLoomEnvelope>
+): (args: unknown) => Promise<NoemaLoomEnvelope> {
+  return async args => {
+    try {
+      return await handler(args);
+    } catch (error) {
+      return createUnhandledErrorEnvelope(tool, resolveProjectRootFromInput(args), error);
+    }
+  };
+}
+
+function createToolDefinition(name: NoemaLoomToolName): NoemaLoomToolDefinition {
+  if (name === 'nl_skill') {
+    return {
+      name,
+      description: 'Return packaged NoemaLoom workflow guidance.',
+      inputSchema: nlSkillInputSchema,
+      handler: wrapHandler(name, handleNlSkill)
+    };
+  }
+
+  if (name === 'nl_status') {
+    return {
+      name,
+      description: 'Report NoemaLoom state and disabled raw writer surfaces.',
+      inputSchema: nlStatusInputSchema,
+      handler: wrapHandler(name, handleNlStatus)
+    };
+  }
+
+  return {
+    name,
+    description: `${name} placeholder tool.`,
+    inputSchema: placeholderInputSchema,
+    handler: wrapHandler(name, async args => createNotImplementedEnvelope(name, args))
   };
 }
 
 export function createToolRegistry(): NoemaLoomToolDefinition[] {
-  return NOEMALOOM_TOOL_NAMES.map(name => ({
-    name,
-    description: `${name} placeholder tool.`,
-    inputSchema: placeholderInputSchema,
-    handler: async () => createNotImplementedEnvelope(name)
-  }));
+  return NOEMALOOM_TOOL_NAMES.map(createToolDefinition);
+}
+
+export async function callRegisteredTool(toolName: string, args: unknown): Promise<NoemaLoomEnvelope> {
+  if (isBlockedToolName(toolName)) {
+    return createToolUnavailableEnvelope(toolName, resolveProjectRootFromInput(args));
+  }
+
+  const tool = createToolRegistry().find(candidate => candidate.name === toolName);
+
+  if (!tool) {
+    return createToolUnavailableEnvelope(toolName, resolveProjectRootFromInput(args));
+  }
+
+  return tool.handler(args);
 }
