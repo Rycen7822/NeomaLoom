@@ -9,11 +9,14 @@ import {
 } from './envelope.js';
 import { handleNlSkill, nlSkillInputSchema } from './tools/nl-skill.js';
 import { handleNlContext, nlContextInputSchema } from './tools/nl-context.js';
+import { handleNlImpact, nlImpactInputSchema } from './tools/nl-impact.js';
 import { handleNlLocate, nlLocateInputSchema } from './tools/nl-locate.js';
 import { handleNlQuery, nlQueryInputSchema } from './tools/nl-query.js';
 import { handleNlReadSpan, nlReadSpanInputSchema } from './tools/nl-read-span.js';
 import { handleNlRefresh, nlRefreshInputSchema } from './tools/nl-refresh.js';
 import { handleNlStatus, nlStatusInputSchema } from './tools/nl-status.js';
+import { handleNlTrace, nlTraceInputSchema } from './tools/nl-trace.js';
+import { handleNlVerifyCoverage, nlVerifyCoverageInputSchema } from './tools/nl-verify-coverage.js';
 import { isBlockedToolName } from './validation.js';
 
 export const NOEMALOOM_TOOL_NAMES = [
@@ -133,6 +136,33 @@ function createToolDefinition(name: NoemaLoomToolName): NoemaLoomToolDefinition 
       description: 'Read a bounded current-disk span with relocation support.',
       inputSchema: nlReadSpanInputSchema,
       handler: wrapHandler(name, handleNlReadSpan)
+    };
+  }
+
+  if (name === 'nl_trace') {
+    return {
+      name,
+      description: 'Trace indexed cross-surface span relations.',
+      inputSchema: nlTraceInputSchema,
+      handler: wrapHandler(name, handleNlTrace)
+    };
+  }
+
+  if (name === 'nl_impact') {
+    return {
+      name,
+      description: 'Group trace results into code, docs, config, tests, examples, and features.',
+      inputSchema: nlImpactInputSchema,
+      handler: wrapHandler(name, handleNlImpact)
+    };
+  }
+
+  if (name === 'nl_verify_coverage') {
+    return {
+      name,
+      description: 'Verify changed files for old terms, links, anchors, and coverage gaps.',
+      inputSchema: nlVerifyCoverageInputSchema,
+      handler: wrapHandler(name, handleNlVerifyCoverage)
     };
   }
 

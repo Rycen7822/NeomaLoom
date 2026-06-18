@@ -19,27 +19,10 @@ describe('empty NoemaLoom MCP server', () => {
     expect(createToolRegistry().map(tool => tool.name)).toEqual(NOEMALOOM_TOOL_NAMES);
   });
 
-  it('returns not_implemented envelopes from registered placeholder handlers', async () => {
-    const firstTool = createToolRegistry().find(tool => tool.name === 'nl_trace');
-
-    if (!firstTool) {
-      throw new Error('nl_trace tool is missing from the registry');
-    }
-
-    const result = await firstTool.handler({});
-
-    expect(result).toMatchObject({
-      ok: false,
-      tool: firstTool.name,
-      graphState: 'empty',
-      data: {
-        status: 'not_implemented'
-      }
-    });
-    expect(result.warnings[0]).toMatchObject({
-      code: 'not_implemented',
-      severity: 'warning'
-    });
+  it('does not leave planned tools registered as placeholders', () => {
+    expect(createToolRegistry().map(tool => tool.description)).not.toEqual(
+      expect.arrayContaining([expect.stringContaining('placeholder')])
+    );
   });
 
   it('creates a stdio-capable server adapter without exposing SDK imports outside sdk.ts', () => {
