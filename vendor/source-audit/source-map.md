@@ -14,6 +14,14 @@ source is reference-only, planned for a narrow port, or explicitly cropped.
 | MDX | `reference/mdx/packages/remark-mdx/readme.md` | dependency role | MDX syntax parsing uses `remark-mdx`; NoemaLoom does not compile or render MDX. |
 | tree-sitter | `reference/tree-sitter/README.md` | dependency role | Code parsing uses tree-sitter concepts and runtime bindings for robust AST extraction. |
 
+## Locked Implementation Packages
+
+- MCP server package: `@modelcontextprotocol/server@2.0.0-alpha.2` from `package-lock.json`.
+- Required MCP runtime peer: `@cfworker/json-schema@4.1.1` from `package-lock.json`.
+- MCP input schema package: `zod@4.4.3` from `package-lock.json`.
+- MCP SDK imports are restricted to `packages/core/src/mcp/sdk.ts`.
+- The selected MCP package exports `McpServer` and `StdioServerTransport` from the main package entry; `@modelcontextprotocol/server/stdio` is not an exported subpath in this lock.
+
 ## Cropped Upstream Behaviors
 
 The following upstream behaviors are forbidden in NoemaLoom:
