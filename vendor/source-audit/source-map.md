@@ -12,7 +12,7 @@ source is reference-only, planned for a narrow port, or explicitly cropped.
 | MCP TypeScript SDK | `reference/typescript-sdk/README.md`, `reference/typescript-sdk/package.json` | reference-only | NoemaLoom uses a small MCP adapter boundary and locks the chosen package during implementation. |
 | remark | `reference/remark/packages/remark-parse/readme.md` | dependency role | Markdown parsing uses the unified/remark mdast pipeline for document spans. |
 | MDX | `reference/mdx/packages/remark-mdx/readme.md` | dependency role | MDX syntax parsing uses `remark-mdx`; NoemaLoom does not compile or render MDX. |
-| tree-sitter | `reference/tree-sitter/README.md` | dependency role | Code parsing uses tree-sitter concepts and runtime bindings for robust AST extraction. |
+| tree-sitter | `reference/tree-sitter/README.md` | dependency role | Code parsing keeps a `tree-sitter-loader` boundary and uses tree-sitter concepts; Phase 8 does not load WASM runtimes. |
 
 ## Locked Implementation Packages
 
@@ -46,3 +46,13 @@ The following upstream behaviors are forbidden in NoemaLoom:
 Every ported reference file must be copied or adapted only after a focused audit
 entry is added here. The audit entry must name the source file, the destination
 file, the retained behavior, and the cropped behavior.
+
+## Focused Port Entries
+
+| upstream source | NoemaLoom destination | retained behavior | cropped behavior |
+|---|---|---|---|
+| `reference/codegraph/src/types.ts` | `packages/core/src/code-fact/extractor.ts`, `packages/core/src/code-fact/reference-resolver.ts` | Code node and edge vocabulary mapped into NoemaLoom `code.*` span kinds and `calls`/`imports`/`contains` edges. | CodeGraph raw node IDs, raw MCP result shapes, and non-NoemaLoom edge kinds are not exposed. |
+| `reference/codegraph/src/db/schema.sql` | `packages/core/src/code-fact/codegraph-db.ts` | Local SQLite fact tables and FTS symbol/name/signature search idea. | `.codegraph/` storage, CodeGraph schema migrations, daemon-owned DB lifecycle, and raw CodeGraph query tables are not copied. |
+| `reference/codegraph/src/extraction/languages/typescript.ts` | `packages/core/src/code-fact/extractor.ts` | Symbol/import/call extraction categories for TypeScript/JavaScript plus method/property distinction awareness. | CodeGraph tree-sitter WASM runtime, full AST walkers, installer asset copying, and language-specific generated code are not copied. |
+| `reference/codegraph/src/resolution/import-resolver.ts` | `packages/core/src/code-fact/reference-resolver.ts` | Import and name-based reference resolution into graph edges. | Workspace alias caches, filesystem probing outside inventory, and raw unresolved-reference tables are not copied. |
+| `reference/codegraph/src/graph/queries.ts` | `packages/core/src/code-fact/code-fact-indexer.ts` | Query surface idea for searchable symbols and edge-backed context. | Raw `codegraph_*` MCP tools, context prose formatting, explore tool output, and aggressive agent instructions are not copied. |
