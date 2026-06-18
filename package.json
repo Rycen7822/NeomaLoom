@@ -21,6 +21,11 @@
   "dependencies": {
     "@cfworker/json-schema": "^4.1.1",
     "@modelcontextprotocol/server": "^2.0.0-alpha.2",
+    "mdast-util-to-string": "^4.0.0",
+    "remark-gfm": "^4.0.1",
+    "remark-mdx": "^3.1.1",
+    "remark-parse": "^11.0.0",
+    "unified": "^11.0.5",
     "zod": "^4.4.3"
   }
 }

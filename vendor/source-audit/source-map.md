@@ -21,6 +21,8 @@ source is reference-only, planned for a narrow port, or explicitly cropped.
 - MCP input schema package: `zod@4.4.3` from `package-lock.json`.
 - MCP SDK imports are restricted to `packages/core/src/mcp/sdk.ts`.
 - The selected MCP package exports `McpServer` and `StdioServerTransport` from the main package entry; `@modelcontextprotocol/server/stdio` is not an exported subpath in this lock.
+- Markdown parser stack: `unified@11.0.5`, `remark-parse@11.0.0`, `remark-gfm@4.0.1`, and `mdast-util-to-string@4.0.0` from `package-lock.json`.
+- MDX parser package: `remark-mdx@3.1.1` from `package-lock.json`; NoemaLoom parses and degrades MDX blocks but does not compile or render MDX.
 
 ## Cropped Upstream Behaviors
 
