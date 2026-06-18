@@ -1,0 +1,8 @@
+{
+  "features": [
+    {
+      "id": "auth",
+      "title": "Authentication feature"
+    }
+  ]
+}

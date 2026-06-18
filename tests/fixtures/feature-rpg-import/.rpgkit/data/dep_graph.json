@@ -1,0 +1,8 @@
+{
+  "edges": [
+    {
+      "source": "auth",
+      "target": "login"
+    }
+  ]
+}

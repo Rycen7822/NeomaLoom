@@ -20,20 +20,20 @@ export function decideCandidate(candidate: RankedCandidate): CandidateDecision {
     };
   }
 
-  if (candidate.sourcePlanSources.includes('old_term_sweep')) {
-    return {
-      decision: 'verify_only',
-      confidence,
-      reason: 'contains oldTerm sweep hit',
-      editRisk
-    };
-  }
-
   if (candidate.role === 'test_file' || String(candidate.kind).startsWith('test.')) {
     return {
       decision: 'verify_only',
       confidence,
       reason: 'test target must be verified after edit',
+      editRisk
+    };
+  }
+
+  if (candidate.sourcePlanSources.includes('old_term_sweep')) {
+    return {
+      decision: candidate.score >= 70 ? 'must_edit' : 'maybe_edit',
+      confidence,
+      reason: 'contains oldTerm sweep hit',
       editRisk
     };
   }

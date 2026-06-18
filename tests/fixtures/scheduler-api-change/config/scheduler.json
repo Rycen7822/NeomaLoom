@@ -1,0 +1,5 @@
+{
+  "SchedulerConfig": {
+    "timeout": 30
+  }
+}

@@ -10,6 +10,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "build": "tsc --noEmit",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
