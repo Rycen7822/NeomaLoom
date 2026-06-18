@@ -8,6 +8,10 @@ import {
   type NoemaLoomEnvelope
 } from './envelope.js';
 import { handleNlSkill, nlSkillInputSchema } from './tools/nl-skill.js';
+import { handleNlContext, nlContextInputSchema } from './tools/nl-context.js';
+import { handleNlLocate, nlLocateInputSchema } from './tools/nl-locate.js';
+import { handleNlQuery, nlQueryInputSchema } from './tools/nl-query.js';
+import { handleNlReadSpan, nlReadSpanInputSchema } from './tools/nl-read-span.js';
 import { handleNlRefresh, nlRefreshInputSchema } from './tools/nl-refresh.js';
 import { handleNlStatus, nlStatusInputSchema } from './tools/nl-status.js';
 import { isBlockedToolName } from './validation.js';
@@ -32,7 +36,7 @@ const placeholderInputSchema = z.object({}).passthrough();
 export type NoemaLoomToolDefinition = {
   name: NoemaLoomToolName;
   description: string;
-  inputSchema: typeof placeholderInputSchema;
+  inputSchema: z.ZodTypeAny;
   handler: (args: unknown) => Promise<NoemaLoomEnvelope>;
 };
 
@@ -93,6 +97,42 @@ function createToolDefinition(name: NoemaLoomToolName): NoemaLoomToolDefinition 
       description: 'Refresh NoemaLoom derived repository indexes.',
       inputSchema: nlRefreshInputSchema,
       handler: wrapHandler(name, handleNlRefresh)
+    };
+  }
+
+  if (name === 'nl_query') {
+    return {
+      name,
+      description: 'Search indexed repository spans without edit decisions.',
+      inputSchema: nlQueryInputSchema,
+      handler: wrapHandler(name, handleNlQuery)
+    };
+  }
+
+  if (name === 'nl_locate') {
+    return {
+      name,
+      description: 'Locate repository spans relevant to an edit or verification goal.',
+      inputSchema: nlLocateInputSchema,
+      handler: wrapHandler(name, handleNlLocate)
+    };
+  }
+
+  if (name === 'nl_context') {
+    return {
+      name,
+      description: 'Build a compact context package by reusing the locator path.',
+      inputSchema: nlContextInputSchema,
+      handler: wrapHandler(name, handleNlContext)
+    };
+  }
+
+  if (name === 'nl_read_span') {
+    return {
+      name,
+      description: 'Read a bounded current-disk span with relocation support.',
+      inputSchema: nlReadSpanInputSchema,
+      handler: wrapHandler(name, handleNlReadSpan)
     };
   }
 
