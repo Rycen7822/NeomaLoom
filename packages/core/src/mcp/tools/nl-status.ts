@@ -1,4 +1,4 @@
-import { access } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 
@@ -21,6 +21,15 @@ async function exists(targetPath: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+async function countJsonArray(targetPath: string): Promise<number> {
+  try {
+    const parsed = JSON.parse(await readFile(targetPath, 'utf8')) as unknown;
+    return Array.isArray(parsed) ? parsed.length : 0;
+  } catch {
+    return 0;
   }
 }
 
@@ -76,6 +85,9 @@ export async function handleNlStatus(input: unknown): Promise<NoemaLoomEnvelope>
     hasFeatureProjection,
     hasDerivedMap
   ].some(Boolean);
+  const featureCount = hasFeatureProjection
+    ? await countJsonArray(path.join(paths.planningDir, 'features.json'))
+    : 0;
 
   return createEnvelope({
     ok: true,
@@ -89,7 +101,7 @@ export async function handleNlStatus(input: unknown): Promise<NoemaLoomEnvelope>
       factIndex: { state: stateFromPresence(hasFactIndex), symbols: 0, edges: 0 },
       documentIndex: { state: stateFromPresence(hasDocumentIndex), blocks: 0, parseErrors: 0 },
       artifactIndex: { state: 'missing' as const, entries: 0 },
-      featureProjection: { state: stateFromPresence(hasFeatureProjection), features: 0 },
+      featureProjection: { state: stateFromPresence(hasFeatureProjection), features: featureCount },
       derivedMap: { state: stateFromPresence(hasDerivedMap), tokens: 0 },
       rawToolExposure: false,
       writerEnabled: false

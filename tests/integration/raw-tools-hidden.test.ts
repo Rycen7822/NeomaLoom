@@ -1,4 +1,4 @@
-import { access, readFile, mkdtemp } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -87,5 +87,32 @@ describe('safe tool surface', () => {
     await expect(readFile(path.join(projectRoot, '.noemaloom', '.gitignore'), 'utf8')).resolves.toBe(
       '*\n!.gitignore\n'
     );
+  });
+
+  it('reports ready feature projection counts from planning output', async () => {
+    const projectRoot = await createTempProject();
+    const planningDir = path.join(projectRoot, '.noemaloom', 'planning');
+    await mkdir(planningDir, { recursive: true });
+    await writeFile(
+      path.join(planningDir, 'features.json'),
+      JSON.stringify([
+        { id: 'feature.docs', title: 'Docs', source: 'rpgkit' },
+        { id: 'feature.api', title: 'API', source: 'deterministic' }
+      ])
+    );
+
+    const result = await callRegisteredTool('nl_status', {
+      projectPath: projectRoot,
+      includeRepositoryMap: false
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      tool: 'nl_status',
+      graphState: 'partial',
+      data: {
+        featureProjection: { state: 'ready', features: 2 }
+      }
+    });
   });
 });
