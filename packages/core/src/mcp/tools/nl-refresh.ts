@@ -48,6 +48,8 @@ const FULL_REFRESH_STEPS = [
   'RefreshRevisionWriter'
 ] as const;
 
+const FILE_REFRESH_STEPS = ['FileInventory'] as const;
+
 function isDocument(file: InventoryFile): boolean {
   return ['markdown', 'mdx', 'rst'].includes(file.language);
 }
@@ -140,6 +142,27 @@ async function runRefresh(input: { projectRoot: string; target: (typeof refreshT
 
   const inventory = await buildFileInventory({ projectRoot: input.projectRoot });
   const changed = detectChangedFiles(previousInventory, inventory.files);
+
+  if (input.target === 'files') {
+    await writeInventoryOutputs(input.projectRoot, inventory);
+    return {
+      status: 'refreshed',
+      target: input.target,
+      mode: input.mode,
+      graphRevision: null,
+      graphState: 'partial' as const,
+      steps: [...FILE_REFRESH_STEPS],
+      counts: {
+        files: inventory.files.length,
+        spans: 0,
+        edges: 0,
+        warnings: 0
+      },
+      warnings: [],
+      changed: undefined
+    };
+  }
+
   const codeFacts = await indexCodeFacts({ projectRoot: input.projectRoot });
   const documentResults = await Promise.all(
     inventory.files.filter(file => !file.oversized && isDocument(file)).map(file =>
@@ -214,6 +237,7 @@ async function runRefresh(input: { projectRoot: string; target: (typeof refreshT
     target: input.target,
     mode: input.mode,
     graphRevision,
+    graphState: 'ready' as const,
     steps: [...FULL_REFRESH_STEPS],
     changed: input.target === 'changed' ? changed : undefined,
     counts: {
@@ -272,7 +296,7 @@ export async function handleNlRefresh(input: unknown): Promise<NoemaLoomEnvelope
     tool: 'nl_refresh',
     projectRoot,
     graphRevision: locked.result.graphRevision,
-    graphState: 'ready',
+    graphState: locked.result.graphState,
     warnings: locked.result.warnings.map(warning => ({
       code: 'refresh_warning',
       severity: 'warning' as const,

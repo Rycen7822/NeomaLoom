@@ -125,4 +125,21 @@ describe('nl_prepare_context for a documentation update', () => {
       ])
     );
   });
+
+  it('does not recommend native edits when indexes are empty or unreadable', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-prepare-empty-'));
+
+    const prepared = await callRegisteredTool('nl_prepare_context', {
+      projectPath: projectRoot,
+      goal: 'rename missing symbol',
+      limit: 5,
+      includeQueryPreview: true
+    });
+
+    expect(prepared.ok).toBe(true);
+    expect(prepared.graphState).not.toBe('ready');
+    expect((prepared.data as { targets: unknown[] }).targets).toEqual([]);
+    expect(prepared.nextActions).not.toContain('edit with native agent tools');
+    expect(prepared.nextActions).toEqual(expect.arrayContaining(['call nl_refresh before editing']));
+  });
 });

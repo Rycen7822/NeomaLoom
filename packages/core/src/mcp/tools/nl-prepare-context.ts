@@ -87,13 +87,18 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
   );
   const envelopes = [query, locate, context, ...readResults];
   const queryData = query?.data as QueryData | undefined;
+  const ok = aggregateOk(envelopes);
+  const graphState = combineGraphState(envelopes);
+  const nextActions = ok && graphState === 'ready' && locateData.targets.length > 0
+    ? ['edit with native agent tools', 'call nl_verify_task after edits']
+    : ['call nl_refresh before editing', 'inspect nl_status warnings'];
 
   return createEnvelope({
-    ok: aggregateOk(envelopes),
+    ok,
     tool: 'nl_prepare_context',
     projectRoot,
     graphRevision: combineGraphRevision(envelopes),
-    graphState: combineGraphState(envelopes),
+    graphState,
     tokenBudget: combineTokenBudget(envelopes),
     warnings: combineWarnings(envelopes),
     data: {
@@ -106,6 +111,6 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
       steps: summarizeSteps(envelopes)
     },
     evidence: combineEvidence(envelopes),
-    nextActions: ['edit with native agent tools', 'call nl_verify_task after edits']
+    nextActions
   });
 }

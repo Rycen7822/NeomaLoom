@@ -11,6 +11,8 @@ export type CodeFactSpan = {
   label: string;
   startLine: number;
   endLine: number;
+  startColumn?: number;
+  endColumn?: number;
   text: string;
   metadata: Record<string, unknown>;
 };
@@ -56,6 +58,8 @@ function createSpan(input: {
   label: string;
   startLine: number;
   endLine?: number;
+  startColumn?: number;
+  endColumn?: number;
   text: string;
   metadata?: Record<string, unknown>;
 }): CodeFactSpan {
@@ -74,6 +78,8 @@ function createSpan(input: {
     label: input.label,
     startLine: input.startLine,
     endLine: input.endLine ?? input.startLine,
+    startColumn: input.startColumn,
+    endColumn: input.endColumn,
     text: input.text,
     metadata: input.metadata ?? {}
   };
@@ -112,6 +118,9 @@ function addCallsiteSpans(input: {
 }): void {
   for (const call of input.line.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)) {
     const name = call[1];
+    const zeroBasedColumn = call.index ?? input.line.indexOf(call[0]);
+    const startColumn = Math.max(1, zeroBasedColumn + 1);
+    const endColumn = startColumn + call[0].length - 1;
     if (
       ['if', 'for', 'while', 'switch', 'function', 'return'].includes(name) ||
       name === input.callerLabel ||
@@ -126,11 +135,15 @@ function addCallsiteSpans(input: {
         path: input.path,
         label: name,
         startLine: input.lineNumber,
+        startColumn,
+        endColumn,
         text: input.line,
         metadata: {
           callerLabel: input.callerLabel,
-          qualifiedName: `${input.path}:call:${input.lineNumber}:${name}`,
-          signature: `${name}(...)`
+          qualifiedName: `${input.path}:call:${input.lineNumber}:${startColumn}:${name}`,
+          signature: `${name}(...)`,
+          startColumn,
+          endColumn
         }
       })
     );

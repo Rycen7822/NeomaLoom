@@ -73,6 +73,8 @@ function createRepoSpan(input: {
   label: string;
   startLine: number;
   endLine: number;
+  startColumn?: number;
+  endColumn?: number;
   language: string;
   headingPath?: string[];
   symbolPath?: string[];
@@ -92,6 +94,8 @@ function createRepoSpan(input: {
     label: input.label,
     startLine: input.startLine,
     endLine: input.endLine,
+    startColumn: input.startColumn,
+    endColumn: input.endColumn,
     language: input.language,
     headingPath: input.headingPath ?? [],
     symbolPath: input.symbolPath ?? [],
@@ -270,6 +274,8 @@ export function buildProjectionGraph(input: BuildProjectionGraphInput): Projecti
         label: span.label,
         startLine: span.startLine,
         endLine: span.endLine,
+        startColumn: span.startColumn,
+        endColumn: span.endColumn,
         language: languageForPath(span.path),
         symbolPath: [span.label],
         indexedText: span.text,

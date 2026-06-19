@@ -13,6 +13,12 @@ async function createTempProject(): Promise<string> {
   return mkdtemp(path.join(tmpdir(), 'noemaloom-phase3-'));
 }
 
+async function writeProjectFile(projectRoot: string, repoPath: string, text: string): Promise<void> {
+  const absolutePath = path.join(projectRoot, repoPath);
+  await mkdir(path.dirname(absolutePath), { recursive: true });
+  await writeFile(absolutePath, text);
+}
+
 describe('safe tool surface', () => {
   it('does not list raw or writer tools and rejects direct calls to them', async () => {
     const registryNames = createToolRegistry().map(tool => tool.name);
@@ -135,5 +141,50 @@ describe('safe tool surface', () => {
         featureProjection: { state: 'ready', features: 2 }
       }
     });
+  });
+
+  it('reports ready index counts after a successful full refresh', async () => {
+    const projectRoot = await createTempProject();
+    await writeProjectFile(projectRoot, 'src/a.ts', 'export function foo() { return 1; }\n');
+    await writeProjectFile(projectRoot, 'README.md', '# Demo\n\nUse `foo`.\n');
+    await callRegisteredTool('nl_refresh', { projectPath: projectRoot, target: 'all', mode: 'safe' });
+
+    const result = await callRegisteredTool('nl_status', {
+      projectPath: projectRoot,
+      includeRepositoryMap: false
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.graphState).toBe('ready');
+    expect(result.data).toMatchObject({
+      fileInventory: { state: 'ready' },
+      spanIndex: { state: 'ready' },
+      factIndex: { state: 'ready' },
+      derivedMap: { state: 'ready' }
+    });
+    expect((result.data as { fileInventory: { files: number } }).fileInventory.files).toBeGreaterThan(0);
+    expect((result.data as { spanIndex: { spans: number; edges: number } }).spanIndex.spans).toBeGreaterThan(0);
+    expect((result.data as { factIndex: { symbols: number } }).factIndex.symbols).toBeGreaterThan(0);
+  });
+
+  it('reports corrupt zero-byte DBs as errors instead of ready indexes', async () => {
+    const projectRoot = await createTempProject();
+    const spansDir = path.join(projectRoot, '.noemaloom', 'spans');
+    await mkdir(spansDir, { recursive: true });
+    await writeFile(path.join(spansDir, 'spans.db'), '');
+
+    const result = await callRegisteredTool('nl_status', {
+      projectPath: projectRoot,
+      includeRepositoryMap: false
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.graphState).toBe('error');
+    expect(result.data).toMatchObject({
+      spanIndex: { state: 'error', spans: 0, edges: 0 }
+    });
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'span_index_unreadable', severity: 'error' })])
+    );
   });
 });

@@ -1,3 +1,4 @@
+import { rename, stat, unlink } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -29,6 +30,28 @@ function openDatabase(filename: string): Database {
 
 function sha1(value: string): string {
   return createHash('sha1').update(value).digest('hex');
+}
+
+function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error;
+}
+
+async function fileExists(targetPath: string): Promise<boolean> {
+  try {
+    return (await stat(targetPath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function unlinkIfExists(targetPath: string): Promise<void> {
+  try {
+    await unlink(targetPath);
+  } catch (error) {
+    if (!isErrnoException(error) || error.code !== 'ENOENT') {
+      throw error;
+    }
+  }
 }
 
 function resetSchema(db: Database): void {
@@ -117,10 +140,24 @@ export async function writeRefreshRevision(input: {
 }): Promise<string> {
   const paths = await ensureStateDir(input.projectRoot);
   const dbPath = assertWritableStatePath(paths.projectRoot, path.join(paths.spansDir, 'spans.db'));
-  const db = openDatabase(dbPath);
+  const tempDbPath = assertWritableStatePath(
+    paths.projectRoot,
+    path.join(paths.spansDir, `spans.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp.db`)
+  );
+  let existingRevisions: RevisionRow[] = [];
+  if (await fileExists(dbPath)) {
+    const existingDb = openDatabase(dbPath);
+    try {
+      existingRevisions = readExistingRevisions(existingDb);
+    } finally {
+      existingDb.close();
+    }
+  }
+  await unlinkIfExists(tempDbPath);
+  const db = openDatabase(tempDbPath);
+  let wroteSuccessfully = false;
 
   try {
-    const existingRevisions = readExistingRevisions(db);
     resetSchema(db);
     const insertFile = db.prepare(
       `INSERT INTO repo_files
@@ -236,9 +273,15 @@ export async function writeRefreshRevision(input: {
       input.edges.length,
       JSON.stringify(input.warnings)
     );
+    wroteSuccessfully = true;
   } finally {
     db.close();
+    if (!wroteSuccessfully) {
+      await unlinkIfExists(tempDbPath);
+    }
   }
+
+  await rename(tempDbPath, dbPath);
 
   await writeFileInsideStateDir(
     paths.projectRoot,

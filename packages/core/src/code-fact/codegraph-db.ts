@@ -1,3 +1,4 @@
+import { rename, unlink } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
@@ -67,6 +68,20 @@ function createSchema(db: Database): void {
   `);
 }
 
+function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error;
+}
+
+async function unlinkIfExists(targetPath: string): Promise<void> {
+  try {
+    await unlink(targetPath);
+  } catch (error) {
+    if (!isErrnoException(error) || error.code !== 'ENOENT') {
+      throw error;
+    }
+  }
+}
+
 export async function writeCodeGraphDb(input: {
   projectRoot: string;
   files: Array<{ path: string; language: string }>;
@@ -75,7 +90,13 @@ export async function writeCodeGraphDb(input: {
 }): Promise<string> {
   const paths = await ensureStateDir(input.projectRoot);
   const dbPath = assertWritableStatePath(paths.projectRoot, path.join(paths.factDir, 'codegraph.db'));
-  const db = openDatabase(dbPath);
+  const tempDbPath = assertWritableStatePath(
+    paths.projectRoot,
+    path.join(paths.factDir, `codegraph.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp.db`)
+  );
+  await unlinkIfExists(tempDbPath);
+  const db = openDatabase(tempDbPath);
+  let wroteSuccessfully = false;
 
   try {
     createSchema(db);
@@ -126,10 +147,15 @@ export async function writeCodeGraphDb(input: {
         JSON.stringify(edge.evidence)
       );
     }
+    wroteSuccessfully = true;
   } finally {
     db.close();
+    if (!wroteSuccessfully) {
+      await unlinkIfExists(tempDbPath);
+    }
   }
 
+  await rename(tempDbPath, dbPath);
   return dbPath;
 }
 

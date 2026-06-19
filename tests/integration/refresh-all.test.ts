@@ -86,6 +86,53 @@ describe('nl_refresh target all', () => {
     expect(map.highConfidenceLinks.length).toBeGreaterThan(0);
   });
 
+  it('handles same-line duplicate callsites during full projection without repo span collisions', async () => {
+    const projectRoot = await createProject();
+    await writeProjectFile(
+      projectRoot,
+      'src/duplicates.ts',
+      'export function foo() { return 1; }\nexport function bar() { return foo() + foo(); }\n'
+    );
+
+    const result = await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'all',
+      mode: 'safe'
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.graphState).toBe('ready');
+    const dbPath = path.join(projectRoot, '.noemaloom', 'spans', 'spans.db');
+    expect(scalar(dbPath, "SELECT COUNT(*) AS value FROM repo_spans WHERE kind = 'code.callsite' AND label = 'foo'")).toBe(2);
+  });
+
+  it('refreshes only file inventory for target files without touching code/span DBs', async () => {
+    const projectRoot = await createProject();
+    await writeProjectFile(
+      projectRoot,
+      'src/duplicates.ts',
+      'export function foo() { return 1; }\nexport function bar() { return foo() + foo(); }\n'
+    );
+
+    const result = await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'files',
+      mode: 'safe'
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.graphState).toBe('partial');
+    expect(result.data).toMatchObject({
+      status: 'refreshed',
+      target: 'files',
+      steps: ['FileInventory'],
+      counts: { spans: 0, edges: 0 }
+    });
+    await expect(access(path.join(projectRoot, '.noemaloom', 'files', 'inventory.sqlite'))).resolves.toBeUndefined();
+    await expect(access(path.join(projectRoot, '.noemaloom', 'fact', 'codegraph.db'))).rejects.toThrow();
+    await expect(access(path.join(projectRoot, '.noemaloom', 'spans', 'spans.db'))).rejects.toThrow();
+  });
+
   it('can refresh the same graph twice without colliding revision ids', async () => {
     const projectRoot = await createProject();
     const first = await callRegisteredTool('nl_refresh', {

@@ -73,6 +73,22 @@ export function createEnvelope<TData>(input: EnvelopeInput<TData>): NoemaLoomEnv
   };
 }
 
+function formatErrorMessage(error: unknown, depth = 0): string {
+  if (depth > 3) {
+    return 'nested error omitted';
+  }
+  if (error instanceof AggregateError) {
+    const nested = error.errors.map((inner, index) => `[${index}] ${formatErrorMessage(inner, depth + 1)}`).join('; ');
+    return `${error.name}: ${error.message}${nested ? `; ${nested}` : ''}`;
+  }
+  if (error instanceof Error) {
+    const cause = 'cause' in error && error.cause ? `; caused by ${formatErrorMessage(error.cause, depth + 1)}` : '';
+    const stackHead = error.stack?.split(/\r?\n/).slice(1, 4).map(line => line.trim()).join(' | ');
+    return `${error.name}: ${error.message}${cause}${stackHead ? ` (${stackHead})` : ''}`;
+  }
+  return String(error);
+}
+
 export function createToolUnavailableEnvelope(tool: string, projectRoot = process.cwd()): NoemaLoomEnvelope {
   return createEnvelope({
     ok: false,
@@ -106,7 +122,7 @@ export function createUnhandledErrorEnvelope(
       {
         code: 'handler_error',
         severity: 'error',
-        message: error instanceof Error ? error.message : String(error)
+        message: formatErrorMessage(error)
       }
     ],
     data: {

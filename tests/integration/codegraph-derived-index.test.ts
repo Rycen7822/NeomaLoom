@@ -1,8 +1,19 @@
 import { access, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { indexCodeFacts, searchCodeFacts } from '../../packages/core/src/code-fact/code-fact-indexer.js';
+import { writeCodeGraphDb } from '../../packages/core/src/code-fact/codegraph-db.js';
+import type { CodeFactSpan } from '../../packages/core/src/code-fact/extractor.js';
+
+const require = createRequire(import.meta.url);
+const { DatabaseSync } = require('node:sqlite') as {
+  DatabaseSync: new (filename: string) => {
+    prepare: (sql: string) => { get: (...params: unknown[]) => unknown };
+    close: () => void;
+  };
+};
 
 async function createTempProject(): Promise<string> {
   return mkdtemp(path.join(tmpdir(), 'noemaloom-codegraph-index-'));
@@ -12,6 +23,16 @@ async function writeProjectFile(projectRoot: string, repoPath: string, text: str
   const absolutePath = path.join(projectRoot, repoPath);
   await mkdir(path.dirname(absolutePath), { recursive: true });
   await writeFile(absolutePath, text);
+}
+
+function scalar(dbPath: string, sql: string): number {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const row = db.prepare(sql).get() as { value: number };
+    return row.value;
+  } finally {
+    db.close();
+  }
 }
 
 describe('CodeGraph-derived code fact indexer', () => {
@@ -126,6 +147,57 @@ describe('CodeGraph-derived code fact indexer', () => {
       })
       ]);
     });
+
+  it('keeps same-line duplicate callsites distinct and writes a searchable codegraph DB', async () => {
+    const projectRoot = await createTempProject();
+    await writeProjectFile(
+      projectRoot,
+      'src/a.ts',
+      [
+        'export function foo() { return 1; }',
+        'export function bar() { return foo() + foo(); }',
+        ''
+      ].join('\n')
+    );
+
+    const result = await indexCodeFacts({ projectRoot });
+    const callsites = result.spans.filter(span => span.kind === 'code.callsite' && span.label === 'foo');
+
+    expect(callsites).toHaveLength(2);
+    expect(new Set(callsites.map(span => span.spanId)).size).toBe(2);
+    expect(callsites.map(span => span.metadata.startColumn)).toEqual(expect.arrayContaining([32, 40]));
+    expect(scalar(result.dbPath, "SELECT COUNT(*) AS value FROM facts_nodes WHERE kind = 'code.callsite' AND label = 'foo'")).toBe(2);
+  });
+
+  it('keeps the previous codegraph DB when a failed write hits duplicate span ids', async () => {
+    const projectRoot = await createTempProject();
+    const span: CodeFactSpan = {
+      spanId: 'code:stable',
+      kind: 'code.function',
+      path: 'src/a.ts',
+      label: 'foo',
+      startLine: 1,
+      endLine: 1,
+      text: 'export function foo() {}',
+      metadata: { qualifiedName: 'src/a.ts:foo', signature: 'foo()' }
+    };
+    const firstDbPath = await writeCodeGraphDb({
+      projectRoot,
+      files: [{ path: 'src/a.ts', language: 'typescript' }],
+      spans: [span],
+      edges: []
+    });
+
+    await expect(
+      writeCodeGraphDb({
+        projectRoot,
+        files: [{ path: 'src/a.ts', language: 'typescript' }],
+        spans: [span, { ...span, label: 'fooDuplicate' }],
+        edges: []
+      })
+    ).rejects.toThrow(/UNIQUE|constraint|duplicate/i);
+    expect(scalar(firstDbPath, 'SELECT COUNT(*) AS value FROM facts_nodes')).toBe(1);
+  });
 
   it('extracts basic symbols from Go, Rust, and Java-family files', async () => {
     const projectRoot = await createTempProject();
