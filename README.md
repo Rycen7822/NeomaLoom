@@ -2,9 +2,11 @@
 
 English | [中文](README.zh-CN.md)
 
-NoemaLoom is a local MCP server for span-first repository modification localization. It builds derived indexes under `.noemaloom/`, gives coding agents a compact read-only view of the repository, and helps them prepare context, plan impact, and verify coverage after changes.
+NoemaLoom is a local span-first repository modification localization runtime. It builds derived indexes under `.noemaloom/`, gives coding agents a compact read-only view of the repository, and helps them prepare context, plan impact, and verify coverage after changes.
 
-NoemaLoom does not edit source files. It identifies and verifies repository spans; Codex, Hermes, or another agent performs the actual file edits with its native tools.
+NoemaLoom does not edit source files. It identifies and verifies repository spans; Hermes, Codex, or another agent performs the actual file edits with its native tools.
+
+For Hermes, the recommended integration is now the native plugin in `hermes-plugin/noemaloom`. The manual MCP server remains available for Codex or other MCP-only clients.
 
 ## What It Provides
 
@@ -21,9 +23,9 @@ NoemaLoom writes only project-local derived state under `.noemaloom/`.
 
 It does not write global config, does not install Git hooks, does not patch Codex cache, does not expose writer tools, and does not expose raw backend tool surfaces. The derived cache can be deleted and rebuilt from repository content.
 
-## MCP Tools
+## Agent-Facing Tools
 
-The server exposes exactly these five agent-facing tools:
+The Hermes plugin and MCP server expose exactly these five agent-facing tools:
 
 - `nl_status`
 - `nl_refresh`
@@ -33,7 +35,45 @@ The server exposes exactly these five agent-facing tools:
 
 `nl_refresh` writes derived cache files under `.noemaloom/`. The other tools are read-only with respect to project source files.
 
+## Hermes Plugin
+
+Use `hermes-plugin/noemaloom` when Hermes should use NoemaLoom directly as a native plugin. This keeps the Hermes-facing setup in one plugin directory: tool registration, runtime bridge, and bundled usage skill.
+
+No separate Hermes MCP server entry is required for this plugin. The plugin registers the five curated tools directly in Hermes and internally starts a short-lived local NoemaLoom stdio process for each tool call.
+
+Development/source-linked install:
+
+```bash
+cd <NOEMALOOM_REPO>
+npm ci --include=dev
+ln -sfn "$PWD/hermes-plugin/noemaloom" "${HERMES_HOME:-$HOME/.hermes}/plugins/noemaloom"
+hermes plugins enable noemaloom
+```
+
+If you copy `hermes-plugin/noemaloom` instead of symlinking it from this repository, set `NOEMALOOM_REPO` before starting Hermes so the plugin can find the TypeScript runtime and Python feature worker package:
+
+```bash
+export NOEMALOOM_REPO=/path/to/NoemaLoom
+```
+
+Start a new Hermes session or restart the gateway after enabling the plugin. When a task needs NoemaLoom workflow guidance, load the bundled skill explicitly:
+
+```python
+skill_view(name="noemaloom:usage")
+```
+
+Expected Hermes verification:
+
+```bash
+hermes plugins list --plain --no-bundled
+hermes tools list
+```
+
+Then call `nl_status` in the target project before any refresh or localization work.
+
 ## Manual MCP Configuration
+
+Use this compatibility path for Codex or other clients that consume stdio MCP servers directly. Hermes users should prefer the native plugin above unless they specifically want NoemaLoom as a separate MCP server.
 
 Make the `noemaloom` command available from this repository workspace, then start the MCP stdio server with:
 
@@ -70,27 +110,37 @@ Give this prompt to an agent when you want it to install NoemaLoom from this loc
 ```text
 Install NoemaLoom from the local source repository at <NOEMALOOM_REPO>.
 
+For Hermes, prefer the native plugin at <NOEMALOOM_REPO>/hermes-plugin/noemaloom. Do not add a separate Hermes MCP server entry unless the user explicitly asks for MCP compatibility mode.
+
 First choose the installation scope and keep the two scopes separate.
 
 User-level installation:
-- Use this when this user account's agent clients should be able to start NoemaLoom across multiple projects.
-- Verify or create a user-local way to run the `noemaloom` command from <NOEMALOOM_REPO>. Do not assume a published npm package.
-- Add the MCP server entry to the user's agent configuration with the command `noemaloom` and args `["serve", "--mcp"]`.
+- Use this when this user account's Hermes sessions should be able to use NoemaLoom across multiple projects.
+- Verify or install Node.js 20+, Python 3.11+, and npm dependencies in <NOEMALOOM_REPO> with `npm ci --include=dev`.
+- Install the plugin by symlinking or clean-copying <NOEMALOOM_REPO>/hermes-plugin/noemaloom to `${HERMES_HOME:-$HOME/.hermes}/plugins/noemaloom`.
+- If copied instead of symlinked, set `NOEMALOOM_REPO=<NOEMALOOM_REPO>` before starting Hermes.
+- Enable the plugin with `hermes plugins enable noemaloom`, start a new session or restart the gateway, and load `skill_view(name="noemaloom:usage")` when workflow guidance is needed.
 
 Project-level installation:
 - Use this when the current project should declare that agents must use NoemaLoom, without changing user-wide agent defaults.
-- Add project instructions such as an `AGENTS.md` NoemaLoom section that tells agents to read `skill/noemaloom/SKILL.md` and the relevant `skill/noemaloom/references/*.md` workflow.
-- If the project has project-scoped MCP configuration, add the same MCP server entry there. Otherwise document the required user-level MCP entry and leave user-level config unchanged.
+- Install the plugin into `<target-project>/.hermes/plugins/noemaloom` and launch Hermes from `<target-project>` with `HERMES_ENABLE_PROJECT_PLUGINS=true`.
+- Remember that standalone project plugins still require a `plugins.enabled` allow-list in the active `$HERMES_HOME/config.yaml`, unless the run intentionally uses a project-local `HERMES_HOME`.
+- Add project instructions such as an `AGENTS.md` NoemaLoom section that tells agents to load `skill_view(name="noemaloom:usage")` and use only the five public tools.
+
+Compatibility MCP installation:
+- Use this only for Codex or other MCP-only clients.
+- Verify or create a user-local way to run the `noemaloom` command from <NOEMALOOM_REPO>. Do not assume a published npm package.
+- Add the MCP server entry with command `noemaloom` and args `["serve", "--mcp"]`.
 
 Rules:
 - Do not install Git hooks, patch agent caches, expose raw backend tools, or edit unrelated files.
 - Before changing any user-level agent config, show the exact target file and diff.
-- Verify the result by running the MCP server command or the agent's MCP health check, then call `nl_status` in the target project.
+- Verify the result with `hermes plugins list`, a fresh plugin loader smoke, and then call `nl_status` in the target project.
 ```
 
 ## Recommended Agent Workflow
 
-1. Read `skill/noemaloom/SKILL.md` and the relevant `skill/noemaloom/references/*.md` workflow.
+1. Load `skill_view(name="noemaloom:usage")` and the relevant bundled reference workflow.
 2. Call `nl_status` to inspect index state and safety flags.
 3. Call `nl_refresh` with `target="all"` and `mode="safe"` when indexes are missing or stale.
 4. Call `nl_prepare_context` for the task goal.

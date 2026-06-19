@@ -1,0 +1,11 @@
+name: noemaloom
+version: 0.1.0
+description: "Native Hermes plugin for NoemaLoom span-first repository localization. Exposes five curated nl_* tools and a bundled noemaloom:usage skill; no separate Hermes MCP server entry is required."
+author: Rycen7822
+kind: standalone
+provides_tools:
+  - nl_status
+  - nl_refresh
+  - nl_prepare_context
+  - nl_plan_change
+  - nl_verify_task

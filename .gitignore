@@ -4,3 +4,4 @@
 /node_modules/
 /.noemaloom/
 __pycache__/
+/.noemaloom-hermes-build/
