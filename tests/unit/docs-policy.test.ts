@@ -92,6 +92,9 @@ describe('documentation policy', () => {
     expect(readme).toContain('[mcp_servers.noemaloom]');
     expect(readme).toContain('args = ["serve", "--mcp"]');
     expect(readme).toContain('# NoemaLoom');
+    expect(readme).toContain('User-level installation');
+    expect(readme).toContain('Project-level installation');
+    expect(readme).toContain('Before changing any user-level agent config');
     expect(readme).toContain('.noemaloom/');
     expect(readme).toContain('does not write global config');
     expect(readme).toContain('does not install Git hooks');

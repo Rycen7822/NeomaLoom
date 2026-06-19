@@ -63,6 +63,31 @@ command = "noemaloom"
 args = ["serve", "--mcp"]
 ```
 
+## Agent Installation Prompt
+
+Give this prompt to an agent when you want it to install NoemaLoom from this local source repository:
+
+```text
+Install NoemaLoom from the local source repository at <NOEMALOOM_REPO>.
+
+First choose the installation scope and keep the two scopes separate.
+
+User-level installation:
+- Use this when this user account's agent clients should be able to start NoemaLoom across multiple projects.
+- Verify or create a user-local way to run the `noemaloom` command from <NOEMALOOM_REPO>. Do not assume a published npm package.
+- Add the MCP server entry to the user's agent configuration with the command `noemaloom` and args `["serve", "--mcp"]`.
+
+Project-level installation:
+- Use this when the current project should declare that agents must use NoemaLoom, without changing user-wide agent defaults.
+- Add project instructions such as an `AGENTS.md` NoemaLoom section that tells agents to read `skill/noemaloom/SKILL.md` and the relevant `skill/noemaloom/references/*.md` workflow.
+- If the project has project-scoped MCP configuration, add the same MCP server entry there. Otherwise document the required user-level MCP entry and leave user-level config unchanged.
+
+Rules:
+- Do not install Git hooks, patch agent caches, expose raw backend tools, or edit unrelated files.
+- Before changing any user-level agent config, show the exact target file and diff.
+- Verify the result by running the MCP server command or the agent's MCP health check, then call `nl_status` in the target project.
+```
+
 ## Recommended Agent Workflow
 
 1. Read `skill/noemaloom/SKILL.md` and the relevant `skill/noemaloom/references/*.md` workflow.

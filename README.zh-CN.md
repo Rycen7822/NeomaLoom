@@ -64,6 +64,31 @@ command = "noemaloom"
 args = ["serve", "--mcp"]
 ```
 
+## Agent 安装 Prompt
+
+当你希望 agent 从这个本地源码仓库安装 NoemaLoom 时，把下面的 prompt 交给它：
+
+```text
+从本地源码仓库 <NOEMALOOM_REPO> 安装 NoemaLoom。
+
+先选择安装范围，并严格区分两种范围。
+
+用户级安装：
+- 当这个用户账号下的 agent 客户端需要在多个项目中启动 NoemaLoom 时，使用用户级安装。
+- 验证或建立一种用户本地方式，让 `noemaloom` 命令从 <NOEMALOOM_REPO> 运行。不要假设已经存在发布到 npm 的包。
+- 在用户的 agent 配置中加入 MCP server entry，command 使用 `noemaloom`，args 使用 `["serve", "--mcp"]`。
+
+项目级安装：
+- 当当前项目需要声明 agent 必须使用 NoemaLoom，但不改变用户范围的 agent 默认配置时，使用项目级安装。
+- 添加项目说明，例如 `AGENTS.md` 的 NoemaLoom 小节，要求 agent 阅读 `skill/noemaloom/SKILL.md` 和相关的 `skill/noemaloom/references/*.md` 工作流。
+- 如果项目存在项目级 MCP 配置，就在项目级配置中加入同一个 MCP server entry；否则只记录所需的用户级 MCP entry，不修改用户级配置。
+
+规则：
+- 不要安装 Git hooks，不要 patch agent cache，不要暴露原始后端工具，也不要修改无关文件。
+- 修改任何用户级 agent 配置之前，先展示准确的目标文件和 diff。
+- 通过运行 MCP server command 或 agent 的 MCP health check 验证结果，然后在目标项目中调用 `nl_status`。
+```
+
 ## 推荐智能体工作流
 
 1. 阅读 `skill/noemaloom/SKILL.md` 和对应的 `skill/noemaloom/references/*.md` 工作流。
