@@ -9,26 +9,23 @@ describe('e2e context compression recovery', () => {
     expect(status.ok).toBe(true);
     expect(status.data).toMatchObject({ derivedMap: { state: 'ready' } });
 
-    const context = await callRegisteredTool('nl_context', {
+    const prepared = await callRegisteredTool('nl_prepare_context', {
       projectPath: projectRoot,
       goal: 'Update createClient API docs',
       budget: 1024,
       includeSnippets: false
     });
-    expect(context.ok).toBe(true);
-    const contextData = context.data as { repositoryMap: { directoryRoles: unknown[]; canonicalDocs: unknown[]; coreSourceModules: unknown[]; highConfidenceLinks: unknown[] } };
+    expect(prepared.ok).toBe(true);
+    const preparedData = prepared.data as {
+      context: { repositoryMap: { directoryRoles: unknown[]; canonicalDocs: unknown[]; coreSourceModules: unknown[]; highConfidenceLinks: unknown[] } };
+      targets: unknown[];
+    };
+    const contextData = preparedData.context;
     expect(contextData.repositoryMap.directoryRoles.length).toBeGreaterThan(0);
     expect(contextData.repositoryMap.canonicalDocs.length).toBeGreaterThan(0);
     expect(contextData.repositoryMap.coreSourceModules.length).toBeGreaterThan(0);
     expect(contextData.repositoryMap.highConfidenceLinks.length).toBeGreaterThan(0);
-    expect(JSON.stringify(context.data)).not.toMatch(/long-term memory|experiment conclusion|chat summary/i);
-
-    const locate = await callRegisteredTool('nl_locate', {
-      projectPath: projectRoot,
-      goal: 'Update createClient API docs',
-      targetRoles: ['canonical_api_doc', 'source_file', 'readme_doc'],
-      limit: 10
-    });
-    expect((locate.data as { targets: unknown[] }).targets.length).toBeGreaterThan(0);
+    expect(JSON.stringify(prepared.data)).not.toMatch(/long-term memory|experiment conclusion|chat summary/i);
+    expect(preparedData.targets.length).toBeGreaterThan(0);
   });
 });

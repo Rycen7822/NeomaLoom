@@ -61,19 +61,29 @@ describe('final safety assertions', () => {
     expect(await exists(path.join(projectRoot, '.noemaloom/claim-ledger.jsonl'))).toBe(false);
 
     const toolNames = createToolRegistry().map(tool => tool.name);
+    expect(toolNames).not.toContain('nl_skill');
+    expect(toolNames).not.toEqual(expect.arrayContaining([
+      'nl_query',
+      'nl_locate',
+      'nl_context',
+      'nl_read_span',
+      'nl_trace',
+      'nl_impact',
+      'nl_verify_coverage'
+    ]));
     expect(toolNames).not.toEqual(expect.arrayContaining([
       expect.stringMatching(/^codegraph_/),
       expect.stringMatching(/^rpg/),
       expect.stringMatching(/writer|memory|ledger/)
     ]));
 
-    const coverage = await callRegisteredTool('nl_verify_coverage', {
+    const coverage = await callRegisteredTool('nl_verify_task', {
       projectPath: projectRoot,
       goal: 'Remove oldTerm',
       changedPaths: ['docs/api/client.md'],
       oldTerms: ['oldTerm'],
       newTerms: ['newTerm']
     });
-    expect(coverage.data).toMatchObject({ status: 'fail' });
+    expect(coverage.data).toMatchObject({ status: 'fail', coverage: { status: 'fail' } });
   });
 });

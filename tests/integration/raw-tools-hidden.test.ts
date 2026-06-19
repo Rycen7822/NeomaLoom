@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import {
+  callInternalTool,
   callRegisteredTool,
   createToolRegistry,
   NOEMALOOM_TOOL_NAMES
@@ -29,29 +30,49 @@ describe('safe tool surface', () => {
     }
   });
 
-  it('returns packaged workflow text without reading or creating project state', async () => {
+  it('does not expose workflow guidance as an MCP tool', async () => {
     const projectRoot = await createTempProject();
 
-    const result = await callRegisteredTool('nl_skill', {
-      workflow: 'all',
-      format: 'markdown',
-      projectPath: projectRoot
-    });
+    const result = await callRegisteredTool('nl_skill', { projectPath: projectRoot });
 
     expect(result).toMatchObject({
-      ok: true,
+      ok: false,
       tool: 'nl_skill',
       projectRoot,
       graphState: 'empty',
       data: {
-        workflow: 'all',
-        format: 'markdown'
+        status: 'tool_not_available'
       }
     });
-    expect(String(result.data.text)).toContain('repository_locator');
-    expect(String(result.data.text)).toContain('compression_recovery');
-    expect(String(result.data.text)).not.toContain('NoemaLoom_final_development_plan');
     await expect(access(path.join(projectRoot, '.noemaloom'))).rejects.toThrow();
+  });
+
+  it('hides low-level primitives from MCP while keeping internal test access', async () => {
+    const projectRoot = await createTempProject();
+
+    for (const hiddenPrimitive of [
+      'nl_query',
+      'nl_locate',
+      'nl_context',
+      'nl_read_span',
+      'nl_trace',
+      'nl_impact',
+      'nl_verify_coverage'
+    ]) {
+      expect(createToolRegistry().map(tool => tool.name)).not.toContain(hiddenPrimitive);
+      await expect(callRegisteredTool(hiddenPrimitive, { projectPath: projectRoot, goal: 'demo' })).resolves.toMatchObject({
+        ok: false,
+        tool: hiddenPrimitive,
+        data: {
+          status: 'tool_not_available'
+        }
+      });
+    }
+
+    await expect(callInternalTool('nl_status', { projectPath: projectRoot, includeRepositoryMap: false })).resolves.toMatchObject({
+      ok: true,
+      tool: 'nl_status'
+    });
   });
 
   it('creates default config and reports missing indexes from nl_status', async () => {

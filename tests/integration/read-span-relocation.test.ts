@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { callRegisteredTool } from '../../packages/core/src/mcp/tool-registry.js';
+import { callInternalTool, callRegisteredTool } from '../../packages/core/src/mcp/tool-registry.js';
 
 async function writeProjectFile(projectRoot: string, repoPath: string, text: string): Promise<void> {
   const absolutePath = path.join(projectRoot, repoPath);
@@ -42,7 +42,7 @@ describe('nl_read_span relocation and block sizing', () => {
       target: 'all',
       mode: 'safe'
     });
-    const locate = await callRegisteredTool('nl_locate', {
+    const locate = await callInternalTool('nl_locate', {
       projectPath: projectRoot,
       goal: 'Read createClient timeout paragraph',
       targetRoles: ['canonical_api_doc'],
@@ -65,7 +65,7 @@ describe('nl_read_span relocation and block sizing', () => {
     const original = await readFile(docPath, 'utf8');
     await writeFile(docPath, ['# Preface', '', 'Inserted drift line.', '', original].join('\n'), 'utf8');
 
-    const read = await callRegisteredTool('nl_read_span', {
+    const read = await callInternalTool('nl_read_span', {
       projectPath: projectRoot,
       spanId: target.spanId,
       contextLines: 1
@@ -85,7 +85,7 @@ describe('nl_read_span relocation and block sizing', () => {
       target: 'all',
       mode: 'safe'
     });
-    const locate = await callRegisteredTool('nl_locate', {
+    const locate = await callInternalTool('nl_locate', {
       projectPath: projectRoot,
       goal: 'Read Large Fence code fence',
       targetRoles: ['canonical_api_doc'],
@@ -104,7 +104,7 @@ describe('nl_read_span relocation and block sizing', () => {
       throw new Error('fence span was not located');
     }
 
-    const read = await callRegisteredTool('nl_read_span', {
+    const read = await callInternalTool('nl_read_span', {
       projectPath: projectRoot,
       spanId: fence.spanId,
       contextLines: 0
@@ -130,7 +130,7 @@ describe('nl_read_span relocation and block sizing', () => {
       target: 'all',
       mode: 'safe'
     });
-    const locate = await callRegisteredTool('nl_locate', {
+    const locate = await callInternalTool('nl_locate', {
       projectPath: projectRoot,
       goal: 'Read createClient timeout paragraph',
       targetRoles: ['canonical_api_doc'],
@@ -155,7 +155,7 @@ describe('nl_read_span relocation and block sizing', () => {
       'utf8'
     );
 
-    const read = await callRegisteredTool('nl_read_span', {
+    const read = await callInternalTool('nl_read_span', {
       projectPath: projectRoot,
       spanId: target.spanId,
       contextLines: 1
@@ -177,7 +177,7 @@ describe('nl_read_span relocation and block sizing', () => {
       target: 'all',
       mode: 'safe'
     });
-    const locate = await callRegisteredTool('nl_locate', {
+    const locate = await callInternalTool('nl_locate', {
       projectPath: projectRoot,
       goal: 'Read createClient timeout paragraph',
       targetRoles: ['canonical_api_doc'],
@@ -196,7 +196,7 @@ describe('nl_read_span relocation and block sizing', () => {
       throw new Error('target span was not located');
     }
 
-    const read = await callRegisteredTool('nl_read_span', {
+    const read = await callInternalTool('nl_read_span', {
       projectPath: projectRoot,
       spanId: target.spanId,
       contextLines: 80,

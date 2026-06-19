@@ -11,4 +11,4 @@ Process existing document roles in this order:
 7. `design_doc`
 8. `changelog_doc`
 
-Do not stop after the first high-score document. Finish only after `nl_verify_coverage` reports pass.
+Do not stop after the first high-score document. Finish only after `nl_verify_task` reports pass.

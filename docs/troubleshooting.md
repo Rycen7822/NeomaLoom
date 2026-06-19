@@ -6,7 +6,7 @@ Run `nl_status`, then `nl_refresh` with `target="all"` and `mode="safe"`.
 
 ## Stale Spans
 
-Use `nl_read_span`; it reads current disk content and reports relocation metadata. After coverage passes, refresh changed indexes.
+Rerun `nl_prepare_context` with top-span reads; it reads current disk content and reports relocation metadata. After coverage passes, refresh changed indexes.
 
 ## Failed Coverage
 

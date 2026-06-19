@@ -10,13 +10,20 @@ const requiredDocs = [
   'docs/locating.md',
   'docs/safety.md',
   'docs/troubleshooting.md',
+  'README.md',
+  'README.zh-CN.md',
   'skill/noemaloom/SKILL.md'
 ];
 
 const toolNames = [
-  'nl_skill',
   'nl_status',
   'nl_refresh',
+  'nl_prepare_context',
+  'nl_plan_change',
+  'nl_verify_task'
+];
+
+const hiddenPrimitiveToolNames = [
   'nl_query',
   'nl_locate',
   'nl_context',
@@ -43,10 +50,10 @@ const forbiddenRawToolPatterns = [
 ];
 
 async function readAllDocs(): Promise<string> {
-  const workflowFiles = (await readdir('skill/noemaloom/workflows'))
+  const referenceFiles = (await readdir('skill/noemaloom/references'))
     .filter(file => file.endsWith('.md'))
-    .map(file => path.join('skill/noemaloom/workflows', file));
-  const files = [...requiredDocs, ...workflowFiles];
+    .map(file => path.join('skill/noemaloom/references', file));
+  const files = [...requiredDocs, ...referenceFiles];
   const chunks = await Promise.all(files.map(file => readFile(file, 'utf8')));
   return chunks.join('\n');
 }
@@ -64,6 +71,9 @@ describe('documentation policy', () => {
     for (const toolName of toolNames) {
       expect(text).toContain(toolName);
     }
+    for (const hiddenToolName of hiddenPrimitiveToolNames) {
+      expect(text).not.toContain(hiddenToolName);
+    }
   });
 
   it('README contains exact manual MCP snippets and runtime safety statements', async () => {
@@ -80,7 +90,7 @@ describe('documentation policy', () => {
     expect(readme).toContain('does not patch Codex cache');
   });
 
-  it('skill contains the six required workflows and states that native agents perform edits', async () => {
+  it('skill is a lightweight router to the six workflow references', async () => {
     const skill = await readFile('skill/noemaloom/SKILL.md', 'utf8');
 
     for (const workflow of [
@@ -91,9 +101,10 @@ describe('documentation policy', () => {
       'coverage_verification',
       'compression_recovery'
     ]) {
-      expect(skill).toContain(workflow);
+      expect(skill).toContain(`references/${workflow}.md`);
     }
     expect(skill).toContain('NoemaLoom locates and verifies spans');
     expect(skill).toContain('Codex or Hermes edits files with native tools');
+    expect(skill).not.toContain('## Tool Surface');
   });
 });

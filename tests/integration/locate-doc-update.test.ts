@@ -58,7 +58,7 @@ async function createProject(): Promise<string> {
   return projectRoot;
 }
 
-describe('nl_locate and nl_context for a documentation update', () => {
+describe('nl_prepare_context for a documentation update', () => {
   it('returns multi-document targets with decisions and coverage plan without collapsing similar docs', async () => {
     const projectRoot = await createProject();
     const refresh = await callRegisteredTool('nl_refresh', {
@@ -68,21 +68,27 @@ describe('nl_locate and nl_context for a documentation update', () => {
     });
     expect(refresh.ok).toBe(true);
 
-    const locate = await callRegisteredTool('nl_locate', {
+    const prepared = await callRegisteredTool('nl_prepare_context', {
       projectPath: projectRoot,
       goal: 'Update createClient timeout documentation across API docs, README, examples, source, and tests',
       targetRoles: ['canonical_api_doc', 'readme_doc', 'example_doc', 'source_file', 'test_file'],
-      limit: 20
+      limit: 20,
+      budget: 900,
+      includeSnippets: true
     });
 
-    expect(locate.ok).toBe(true);
-    expect(locate.tool).toBe('nl_locate');
-    expect(locate.graphRevision).toBe(refresh.graphRevision);
-    const locateData = locate.data as {
+    expect(prepared.ok).toBe(true);
+    expect(prepared.tool).toBe('nl_prepare_context');
+    expect(prepared.graphRevision).toBe(refresh.graphRevision);
+    const preparedData = prepared.data as {
+      queryPreview: Array<Record<string, unknown>>;
       targets: Array<{ path: string; role: string; decision: string }>;
       coveragePlan: { pathRolesToVerify: string[] };
+      context: {
+        primaryTargets: Array<{ path: string; decision: string }>;
+      };
     };
-    expect(locateData.targets).toEqual(
+    expect(preparedData.targets).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           path: 'docs/api/client.md',
@@ -104,42 +110,19 @@ describe('nl_locate and nl_context for a documentation update', () => {
         })
       ])
     );
-    expect(locateData.coveragePlan).toMatchObject({
+    expect(preparedData.coveragePlan).toMatchObject({
       pathRolesToVerify: expect.arrayContaining(['canonical_api_doc', 'readme_doc', 'example_doc', 'source_file', 'test_file'])
     });
 
-    const docPaths = locateData.targets
+    const docPaths = preparedData.targets
       .filter((target: { role: string }) => ['canonical_api_doc', 'readme_doc', 'example_doc'].includes(target.role))
       .map((target: { path: string }) => target.path);
     expect(new Set(docPaths)).toEqual(new Set(['docs/api/client.md', 'README.md', 'examples/client.md']));
-
-    const query = await callRegisteredTool('nl_query', {
-      projectPath: projectRoot,
-      query: 'createClient timeout docs',
-      limit: 5
-    });
-    expect(query.ok).toBe(true);
-    const queryData = query.data as { results: Array<Record<string, unknown>> };
-    expect(queryData.results[0]).not.toHaveProperty('decision');
-
-    const context = await callRegisteredTool('nl_context', {
-      projectPath: projectRoot,
-      goal: 'Update createClient timeout documentation',
-      budget: 900,
-      includeSnippets: true
-    });
-    expect(context.ok).toBe(true);
-    const contextData = context.data as {
-      primaryTargets: Array<{ path: string; decision: string }>;
-      supportingTests: Array<{ path: string }>;
-    };
-    expect(contextData.primaryTargets).toEqual(
+    expect(preparedData.queryPreview[0]).not.toHaveProperty('decision');
+    expect(preparedData.context.primaryTargets).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ path: 'docs/api/client.md', decision: 'must_edit' })
       ])
-    );
-    expect(contextData.supportingTests).toEqual(
-      expect.arrayContaining([expect.objectContaining({ path: 'tests/client.test.ts' })])
     );
   });
 });

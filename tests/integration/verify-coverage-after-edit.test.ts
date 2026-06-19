@@ -46,7 +46,7 @@ async function createProject(): Promise<string> {
   return projectRoot;
 }
 
-describe('trace, impact, and coverage verification after edits', () => {
+describe('aggregated impact planning and coverage verification after edits', () => {
   it('traces cross-surface edges, groups impact, and verifies current changed file contents', async () => {
     const projectRoot = await createProject();
     const refresh = await callRegisteredTool('nl_refresh', {
@@ -56,18 +56,31 @@ describe('trace, impact, and coverage verification after edits', () => {
     });
     expect(refresh.ok).toBe(true);
 
-    const trace = await callRegisteredTool('nl_trace', {
+    const plan = await callRegisteredTool('nl_plan_change', {
       projectPath: projectRoot,
       target: 'createClient',
-      direction: 'both',
+      targetType: 'auto',
       depth: 2,
       relationTypes: ['all']
     });
-    expect(trace.ok).toBe(true);
-    const traceData = trace.data as {
-      nodes: Array<{ path: string; kind: string; role: string }>;
-      edges: Array<{ relation: string; confidence: number; source: string; evidence: unknown }>;
+    expect(plan.ok).toBe(true);
+    expect(plan.tool).toBe('nl_plan_change');
+    const planData = plan.data as {
+      trace: {
+        nodes: Array<{ path: string; kind: string; role: string }>;
+        edges: Array<{ relation: string; confidence: number; source: string; evidence: unknown }>;
+      };
+      impact: {
+        codeImpact: unknown[];
+        docImpact: unknown[];
+        configImpact: unknown[];
+        testImpact: unknown[];
+        exampleImpact: unknown[];
+        featureImpact: unknown[];
+        requiredVerification: string[];
+      };
     };
+    const traceData = planData.trace;
     expect(traceData.nodes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ path: 'src/client.ts', role: 'source_file' }),
@@ -85,22 +98,7 @@ describe('trace, impact, and coverage verification after edits', () => {
       ...traceData.edges.slice(1).map(edge => expect.objectContaining(edge))
     ]);
 
-    const impact = await callRegisteredTool('nl_impact', {
-      projectPath: projectRoot,
-      target: 'createClient',
-      targetType: 'auto',
-      depth: 2
-    });
-    expect(impact.ok).toBe(true);
-    const impactData = impact.data as {
-      codeImpact: unknown[];
-      docImpact: unknown[];
-      configImpact: unknown[];
-      testImpact: unknown[];
-      exampleImpact: unknown[];
-      featureImpact: unknown[];
-      requiredVerification: string[];
-    };
+    const impactData = planData.impact;
     expect(impactData.codeImpact.length).toBeGreaterThan(0);
     expect(impactData.docImpact.length).toBeGreaterThan(0);
     expect(impactData.configImpact.length).toBeGreaterThan(0);
@@ -109,9 +107,10 @@ describe('trace, impact, and coverage verification after edits', () => {
     expect(impactData.featureImpact.length).toBeGreaterThan(0);
     expect(impactData.requiredVerification).toEqual(expect.arrayContaining(['tests/client.test.ts', 'docs/api/client.md']));
 
-    const sourceCoverage = await callRegisteredTool('nl_verify_coverage', {
+    const sourceCoverage = await callRegisteredTool('nl_verify_task', {
       projectPath: projectRoot,
       goal: 'Update createClient implementation',
+      target: 'createClient',
       changedPaths: ['src/client.ts'],
       oldTerms: [],
       newTerms: []
@@ -119,7 +118,13 @@ describe('trace, impact, and coverage verification after edits', () => {
     expect(sourceCoverage.ok).toBe(true);
     expect(sourceCoverage.data).toMatchObject({
       status: 'needs_attention',
-      unverifiedLinkedTests: [expect.objectContaining({ path: 'tests/client.test.ts' })]
+      coverage: {
+        status: 'needs_attention',
+        unverifiedLinkedTests: [expect.objectContaining({ path: 'tests/client.test.ts' })]
+      },
+      impact: expect.objectContaining({
+        requiredVerification: expect.arrayContaining(['tests/client.test.ts'])
+      })
     });
 
     await writeProjectFile(
@@ -127,7 +132,7 @@ describe('trace, impact, and coverage verification after edits', () => {
       'docs/api/client.md',
       ['# Client API', '', '`createClient` still has `legacyTimeout` in current disk content.', ''].join('\n')
     );
-    const failingCoverage = await callRegisteredTool('nl_verify_coverage', {
+    const failingCoverage = await callRegisteredTool('nl_verify_task', {
       projectPath: projectRoot,
       goal: 'Rename legacyTimeout to timeoutMs in docs',
       changedPaths: ['docs/api/client.md'],
@@ -137,8 +142,11 @@ describe('trace, impact, and coverage verification after edits', () => {
     expect(failingCoverage.ok).toBe(true);
     expect(failingCoverage.data).toMatchObject({
       status: 'fail',
-      remainingOldTermHits: [expect.objectContaining({ path: 'docs/api/client.md', term: 'legacyTimeout' })],
-      unsyncedDocRoles: [expect.objectContaining({ path: 'README.md', role: 'readme_doc', term: 'legacyTimeout' })]
+      coverage: {
+        status: 'fail',
+        remainingOldTermHits: [expect.objectContaining({ path: 'docs/api/client.md', term: 'legacyTimeout' })],
+        unsyncedDocRoles: [expect.objectContaining({ path: 'README.md', role: 'readme_doc', term: 'legacyTimeout' })]
+      }
     });
 
     await writeProjectFile(projectRoot, 'README.md', '# Verify Demo\n\nUse `createClient` with `timeoutMs`.\n');
@@ -147,7 +155,7 @@ describe('trace, impact, and coverage verification after edits', () => {
       'docs/api/client.md',
       ['# Client API', '', '`createClient` now documents `timeoutMs` in current disk content.', ''].join('\n')
     );
-    const passingCoverage = await callRegisteredTool('nl_verify_coverage', {
+    const passingCoverage = await callRegisteredTool('nl_verify_task', {
       projectPath: projectRoot,
       goal: 'Rename legacyTimeout to timeoutMs in docs',
       changedPaths: ['docs/api/client.md'],
@@ -157,9 +165,12 @@ describe('trace, impact, and coverage verification after edits', () => {
     expect(passingCoverage.ok).toBe(true);
     expect(passingCoverage.data).toMatchObject({
       status: 'pass',
-      remainingOldTermHits: [],
-      brokenLinks: [],
-      codeDocMismatches: []
+      coverage: {
+        status: 'pass',
+        remainingOldTermHits: [],
+        brokenLinks: [],
+        codeDocMismatches: []
+      }
     });
   });
 });

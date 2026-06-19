@@ -7,22 +7,29 @@ import {
   resolveProjectRootFromInput,
   type NoemaLoomEnvelope
 } from './envelope.js';
-import { handleNlSkill, nlSkillInputSchema } from './tools/nl-skill.js';
 import { handleNlContext, nlContextInputSchema } from './tools/nl-context.js';
 import { handleNlImpact, nlImpactInputSchema } from './tools/nl-impact.js';
 import { handleNlLocate, nlLocateInputSchema } from './tools/nl-locate.js';
+import { handleNlPlanChange, nlPlanChangeInputSchema } from './tools/nl-plan-change.js';
+import { handleNlPrepareContext, nlPrepareContextInputSchema } from './tools/nl-prepare-context.js';
 import { handleNlQuery, nlQueryInputSchema } from './tools/nl-query.js';
 import { handleNlReadSpan, nlReadSpanInputSchema } from './tools/nl-read-span.js';
 import { handleNlRefresh, nlRefreshInputSchema } from './tools/nl-refresh.js';
 import { handleNlStatus, nlStatusInputSchema } from './tools/nl-status.js';
 import { handleNlTrace, nlTraceInputSchema } from './tools/nl-trace.js';
+import { handleNlVerifyTask, nlVerifyTaskInputSchema } from './tools/nl-verify-task.js';
 import { handleNlVerifyCoverage, nlVerifyCoverageInputSchema } from './tools/nl-verify-coverage.js';
 import { isBlockedToolName } from './validation.js';
 
 export const NOEMALOOM_TOOL_NAMES = [
-  'nl_skill',
   'nl_status',
   'nl_refresh',
+  'nl_prepare_context',
+  'nl_plan_change',
+  'nl_verify_task'
+] as const;
+
+export const NOEMALOOM_HIDDEN_TOOL_NAMES = [
   'nl_query',
   'nl_locate',
   'nl_context',
@@ -32,7 +39,9 @@ export const NOEMALOOM_TOOL_NAMES = [
   'nl_verify_coverage'
 ] as const;
 
-export type NoemaLoomToolName = (typeof NOEMALOOM_TOOL_NAMES)[number];
+export type NoemaLoomToolName =
+  | (typeof NOEMALOOM_TOOL_NAMES)[number]
+  | (typeof NOEMALOOM_HIDDEN_TOOL_NAMES)[number];
 
 const placeholderInputSchema = z.object({}).passthrough();
 
@@ -76,15 +85,6 @@ function wrapHandler(
 }
 
 function createToolDefinition(name: NoemaLoomToolName): NoemaLoomToolDefinition {
-  if (name === 'nl_skill') {
-    return {
-      name,
-      description: 'Return packaged NoemaLoom workflow guidance.',
-      inputSchema: nlSkillInputSchema,
-      handler: wrapHandler(name, handleNlSkill)
-    };
-  }
-
   if (name === 'nl_status') {
     return {
       name,
@@ -100,6 +100,33 @@ function createToolDefinition(name: NoemaLoomToolName): NoemaLoomToolDefinition 
       description: 'Refresh NoemaLoom derived repository indexes.',
       inputSchema: nlRefreshInputSchema,
       handler: wrapHandler(name, handleNlRefresh)
+    };
+  }
+
+  if (name === 'nl_prepare_context') {
+    return {
+      name,
+      description: 'Prepare compact task context by combining query preview, locating, context assembly, and optional top-span reads.',
+      inputSchema: nlPrepareContextInputSchema,
+      handler: wrapHandler(name, handleNlPrepareContext)
+    };
+  }
+
+  if (name === 'nl_plan_change') {
+    return {
+      name,
+      description: 'Plan change impact by combining locating, trace, and grouped impact analysis.',
+      inputSchema: nlPlanChangeInputSchema,
+      handler: wrapHandler(name, handleNlPlanChange)
+    };
+  }
+
+  if (name === 'nl_verify_task') {
+    return {
+      name,
+      description: 'Verify an edited task with coverage checks and optional impact context.',
+      inputSchema: nlVerifyTaskInputSchema,
+      handler: wrapHandler(name, handleNlVerifyTask)
     };
   }
 
@@ -178,12 +205,30 @@ export function createToolRegistry(): NoemaLoomToolDefinition[] {
   return NOEMALOOM_TOOL_NAMES.map(createToolDefinition);
 }
 
+export function createInternalToolRegistry(): NoemaLoomToolDefinition[] {
+  return [...NOEMALOOM_TOOL_NAMES, ...NOEMALOOM_HIDDEN_TOOL_NAMES].map(createToolDefinition);
+}
+
 export async function callRegisteredTool(toolName: string, args: unknown): Promise<NoemaLoomEnvelope> {
   if (isBlockedToolName(toolName)) {
     return createToolUnavailableEnvelope(toolName, resolveProjectRootFromInput(args));
   }
 
   const tool = createToolRegistry().find(candidate => candidate.name === toolName);
+
+  if (!tool) {
+    return createToolUnavailableEnvelope(toolName, resolveProjectRootFromInput(args));
+  }
+
+  return tool.handler(args);
+}
+
+export async function callInternalTool(toolName: string, args: unknown): Promise<NoemaLoomEnvelope> {
+  if (isBlockedToolName(toolName)) {
+    return createToolUnavailableEnvelope(toolName, resolveProjectRootFromInput(args));
+  }
+
+  const tool = createInternalToolRegistry().find(candidate => candidate.name === toolName);
 
   if (!tool) {
     return createToolUnavailableEnvelope(toolName, resolveProjectRootFromInput(args));
