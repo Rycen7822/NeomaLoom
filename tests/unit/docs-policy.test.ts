@@ -33,6 +33,15 @@ const hiddenPrimitiveToolNames = [
   'nl_verify_coverage'
 ];
 
+const workflowReferences = [
+  'repository_locator',
+  'markdown_update',
+  'code_change_impact',
+  'multi_doc_sync',
+  'coverage_verification',
+  'compression_recovery'
+];
+
 const forbiddenCommands = [
   'install-agent',
   'uninstall-agent',
@@ -93,18 +102,50 @@ describe('documentation policy', () => {
   it('skill is a lightweight router to the six workflow references', async () => {
     const skill = await readFile('skill/noemaloom/SKILL.md', 'utf8');
 
-    for (const workflow of [
-      'repository_locator',
-      'markdown_update',
-      'code_change_impact',
-      'multi_doc_sync',
-      'coverage_verification',
-      'compression_recovery'
-    ]) {
+    expect(skill).toMatch(/^---\nname: noemaloom\n/);
+    expect(skill).toMatch(/description: "?Use when Codex needs NoemaLoom/);
+    expect(skill).toContain('Only call these public MCP tools');
+    expect(skill).toContain('Load references in the listed order');
+
+    for (const workflow of workflowReferences) {
       expect(skill).toContain(`references/${workflow}.md`);
     }
     expect(skill).toContain('NoemaLoom locates and verifies spans');
     expect(skill).toContain('Codex or Hermes edits files with native tools');
     expect(skill).not.toContain('## Tool Surface');
+  });
+
+  it('workflow references give unambiguous public-tool payload fields', async () => {
+    const references = new Map(
+      await Promise.all(
+        workflowReferences.map(async workflow => [
+          workflow,
+          await readFile(`skill/noemaloom/references/${workflow}.md`, 'utf8')
+        ] as const)
+      )
+    );
+
+    expect(references.get('repository_locator')).toContain('includeRepositoryMap');
+    expect(references.get('repository_locator')).toContain('targetRoles');
+    expect(references.get('repository_locator')).toContain('readTopSpans');
+    expect(references.get('repository_locator')).toContain('changedPaths');
+    expect(references.get('repository_locator')).toContain('target="changed"');
+
+    expect(references.get('markdown_update')).toContain('canonical_api_doc');
+    expect(references.get('markdown_update')).toContain('readme_doc');
+    expect(references.get('markdown_update')).toContain('oldTerms');
+
+    expect(references.get('code_change_impact')).toContain('targetType="auto"');
+    expect(references.get('code_change_impact')).toContain('depth=2');
+    expect(references.get('code_change_impact')).toContain('target');
+
+    expect(references.get('multi_doc_sync')).toContain('targetRoles');
+    expect(references.get('coverage_verification')).toContain('status="pass"');
+    expect(references.get('compression_recovery')).toContain('budget=1024');
+
+    for (const text of references.values()) {
+      expect(text).not.toMatch(/\b(document|code|config|example|feature) roles\b/);
+      expect(text).not.toContain('NoemaLoom MCP tools for locating');
+    }
   });
 });

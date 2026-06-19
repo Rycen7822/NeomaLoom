@@ -70,5 +70,5 @@ NoemaLoom does not write global config, does not install Git hooks, and does not
 
 - If indexes are missing, run `nl_refresh` with `target="all"` and `mode="safe"`.
 - If a span is stale, rerun `nl_prepare_context` with top-span reads and refresh changed paths after verification.
-- If coverage fails, remove remaining old terms, repair links or anchors, sync document roles, and verify linked tests.
+- If coverage fails, remove remaining old terms, repair links or anchors, sync affected docs, and verify linked tests.
 - If the feature projection worker is unavailable, NoemaLoom continues with warnings and deterministic indexed spans.
