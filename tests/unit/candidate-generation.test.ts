@@ -113,6 +113,49 @@ async function createScopedSpanDb(projectRoot: string): Promise<void> {
   }
 }
 
+async function createLargeScopedInventoryDb(projectRoot: string): Promise<void> {
+  const spansDir = path.join(projectRoot, '.noemaloom', 'spans');
+  await mkdir(spansDir, { recursive: true });
+  const db = new DatabaseSync(path.join(spansDir, 'spans.db'));
+  try {
+    applySpanMigrations(db);
+    const insertFile = db.prepare(
+      `INSERT INTO repo_files
+        (path, absolute_path, role, language, content_hash, size_bytes, modified_at, indexed_at, generated, ignored, metadata_json)
+       VALUES (?, ?, ?, ?, ?, 32, 0, 0, 0, 0, '{}')`
+    );
+    const insertSpan = db.prepare(
+      `INSERT INTO repo_spans
+        (span_id, path, kind, role, label, start_line, end_line, language, heading_path_json,
+         symbol_path_json, stable_locator_json, text_hash, indexed_text, summary, metadata_json, source, updated_at)
+       VALUES ('hot-stage10', 'DeepScientist/quests/001/STAGE10_推进规划.md', 'doc.section', 'design_doc', 'STAGE10 推进规划', 1, 8, 'markdown', '["STAGE10"]',
+         '[]', ?, 'hot-stage10-hash', 'STAGE10 fp08 floorplan GPU CURRENT_STATUS bash_exec', 'STAGE10 plan', '{}', 'test', 0)`
+    );
+    const insertRevision = db.prepare(
+      `INSERT INTO refresh_revisions
+        (graph_revision, project_root, target, started_at, finished_at, file_count, span_count, edge_count, warnings_json)
+       VALUES ('rev-large-scoped', ?, 'hotset', 0, 1, 1202, 1, 0, '[]')`
+    );
+
+    db.exec('BEGIN');
+    const hotPath = 'DeepScientist/quests/001/STAGE10_推进规划.md';
+    insertFile.run(hotPath, path.join(projectRoot, hotPath), 'design_doc', 'markdown', 'hot-stage10-hash');
+    insertFile.run('CURRENT_STATUS.md', path.join(projectRoot, 'CURRENT_STATUS.md'), 'readme_doc', 'markdown', 'status-hash');
+    for (let index = 0; index < 1200; index += 1) {
+      const repoPath = `stage10/runs/fp08/floorplan/bash_exec_${String(index).padStart(4, '0')}.jsonl`;
+      insertFile.run(repoPath, path.join(projectRoot, repoPath), 'generated_file', 'jsonl', `cold-${index}`);
+    }
+    insertSpan.run(stableLocator(hotPath, 0));
+    insertRevision.run(projectRoot);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  } finally {
+    db.close();
+  }
+}
+
 describe('candidate generation', () => {
   it('does not drop relevant spans that sort after the first five thousand rows', async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-many-spans-'));
@@ -152,6 +195,22 @@ describe('candidate generation', () => {
       promotionAction: expect.objectContaining({ target: 'paths', paths: ['docs/cold-api.md'] })
     });
     expect(generated.unindexedCandidates.map(candidate => candidate.path)).toContain('docs/cold-api.md');
+    expect(generated.warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'unindexed_candidates' })]));
+  });
+
+  it('caps broad scoped inventory matches and keeps exact Codex work targets', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-large-scoped-candidates-'));
+    await createLargeScopedInventoryDb(projectRoot);
+
+    const generated = await generateCandidates({
+      projectRoot,
+      query: 'STAGE10_推进规划.md fp08 floorplan GPU PID CURRENT_STATUS bash_exec',
+      limit: 20
+    });
+
+    expect(generated.candidates.length).toBeLessThanOrEqual(260);
+    expect(generated.candidates.map(candidate => candidate.path)).toContain('DeepScientist/quests/001/STAGE10_推进规划.md');
+    expect(generated.unindexedCandidates.length).toBeLessThanOrEqual(250);
     expect(generated.warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'unindexed_candidates' })]));
   });
 });

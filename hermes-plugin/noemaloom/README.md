@@ -17,11 +17,11 @@ No separate Hermes MCP server entry is required for this plugin. The plugin star
 ```bash
 cd /path/to/NoemaLoom
 npm ci --include=dev
-ln -sfn "$PWD/hermes-plugin/noemaloom" "${HERMES_HOME:-$HOME/.hermes}/plugins/noemaloom"
+python3 scripts/sync-hermes-plugin.py --mode symlink --replace
 hermes plugins enable noemaloom
 ```
 
-If the plugin directory is copied instead of symlinked, set `NOEMALOOM_REPO=/path/to/NoemaLoom` before starting Hermes so the plugin can find the TypeScript runtime and Python feature worker package.
+For copy installs, use `python3 scripts/sync-hermes-plugin.py --mode copy --backup`. The sync script writes `INSTALL_METADATA.json` with the source checkout, Git HEAD, dirty-file count, and build/schema hashes; fresh bridge calls warn if the installed metadata falls out of sync with the source checkout.
 
 Start a new Hermes session or restart the gateway after enabling the plugin, then load the workflow skill when needed:
 

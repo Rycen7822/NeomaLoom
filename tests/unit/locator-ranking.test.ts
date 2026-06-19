@@ -41,6 +41,17 @@ describe('locator query normalization and ranking', () => {
     expect(normalized.targetRoles).toEqual(['canonical_api_doc', 'source_file']);
   });
 
+  it('extracts Unicode file paths intact for Codex-style targets', () => {
+    const normalized = normalizeQuery({
+      query: 'Plan DeepScientist/quests/001/STAGE10_推进规划.md with CURRENT_STATUS.md'
+    });
+
+    expect(normalized.pathTerms).toEqual(expect.arrayContaining([
+      'DeepScientist/quests/001/STAGE10_推进规划.md',
+      'CURRENT_STATUS.md'
+    ]));
+  });
+
   it('returns deterministic score breakdowns and decisions from the fixed formula', () => {
     const normalized = normalizeQuery({
       query: 'Update docs/api/client.md for createClient --timeout timeout option',

@@ -60,6 +60,13 @@ function isPathLike(term: string): boolean {
   return term.includes('/') || /\.[A-Za-z0-9]+$/.test(term);
 }
 
+function rawPathLikeTerms(query: string): string[] {
+  return query
+    .split(/\s+/)
+    .map(term => cleanTerm(term).replace(/^[([{<]+|[\])}>]+$/g, ''))
+    .filter(term => term.length > 0 && isPathLike(term));
+}
+
 function isConfigLike(term: string): boolean {
   return /^--[A-Za-z0-9][A-Za-z0-9-]*$/.test(term) || /^[A-Z][A-Z0-9_]{2,}$/.test(term) || /^[a-z]+(?:\.[a-z0-9_-]+)+$/.test(term);
 }
@@ -125,7 +132,7 @@ export function normalizeQuery(input: { query: string; targetRoles?: string[] })
       .filter(term => term.length >= 2 && !STOP_WORDS.has(term))
   );
   const configTerms = unique(terms.filter(isConfigLike));
-  const pathTerms = unique(terms.filter(isPathLike));
+  const pathTerms = unique([...rawPathLikeTerms(raw), ...terms.filter(isPathLike)]);
   const symbolTerms = unique([
     ...terms.filter(isSymbolLike),
     ...oldTerms,

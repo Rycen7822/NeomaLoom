@@ -26,9 +26,72 @@ export type ArtifactParseInput = {
 };
 
 const DEFAULT_MAX_ARTIFACT_SPANS = 1000;
+export const MAX_ARTIFACT_SPAN_TEXT_BYTES = 8192;
+const MAX_ARTIFACT_SPAN_LABEL_BYTES = 1024;
+const JSON_VALUE_PREVIEW_BYTES = 1024;
 
 function sha1(value: string): string {
   return createHash('sha1').update(value).digest('hex');
+}
+
+function byteLength(value: string): number {
+  return Buffer.byteLength(value, 'utf8');
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  if (byteLength(value) <= maxBytes) {
+    return value;
+  }
+  const suffix = '\n…[truncated]';
+  const suffixBytes = byteLength(suffix);
+  let used = 0;
+  let output = '';
+  for (const char of value) {
+    const charBytes = byteLength(char);
+    if (used + charBytes + suffixBytes > maxBytes) {
+      break;
+    }
+    output += char;
+    used += charBytes;
+  }
+  return `${output}${suffix}`;
+}
+
+function boundedText(input: {
+  text: string;
+  metadata?: Record<string, unknown>;
+  maxBytes?: number;
+}): { text: string; metadata: Record<string, unknown>; truncated: boolean } {
+  const maxBytes = input.maxBytes ?? MAX_ARTIFACT_SPAN_TEXT_BYTES;
+  const originalBytes = byteLength(input.text);
+  if (originalBytes <= maxBytes) {
+    return { text: input.text, metadata: input.metadata ?? {}, truncated: false };
+  }
+  return {
+    text: truncateUtf8(input.text, maxBytes),
+    metadata: {
+      ...(input.metadata ?? {}),
+      truncatedIndexedText: true,
+      originalTextBytes: originalBytes,
+      originalTextHash: sha1(input.text)
+    },
+    truncated: true
+  };
+}
+
+function boundedLabel(label: string): { label: string; metadata: Record<string, unknown> } {
+  const originalBytes = byteLength(label);
+  if (originalBytes <= MAX_ARTIFACT_SPAN_LABEL_BYTES) {
+    return { label, metadata: {} };
+  }
+  return {
+    label: truncateUtf8(label, MAX_ARTIFACT_SPAN_LABEL_BYTES),
+    metadata: {
+      labelTruncated: true,
+      originalLabelBytes: originalBytes,
+      originalLabelHash: sha1(label)
+    }
+  };
 }
 
 function stableStringify(value: unknown): string {
@@ -62,14 +125,43 @@ export function createArtifactSpan(input: {
   text: string;
   metadata?: Record<string, unknown>;
 }): ArtifactSpan {
+  const bounded = boundedText({ text: input.text, metadata: input.metadata });
+  const label = boundedLabel(input.label);
   return {
     kind: input.kind,
     path: input.path,
-    label: input.label,
+    label: label.label,
     startLine: input.startLine,
     endLine: input.endLine ?? input.startLine,
-    text: input.text,
-    metadata: input.metadata ?? {}
+    text: bounded.text,
+    metadata: { ...bounded.metadata, ...label.metadata }
+  };
+}
+
+function jsonSpanText(input: {
+  sourceLine: string;
+  pointer: string;
+  key?: string;
+  value: unknown;
+}): { text: string; metadata: Record<string, unknown>; truncated: boolean } {
+  if (byteLength(input.sourceLine) <= MAX_ARTIFACT_SPAN_TEXT_BYTES) {
+    return { text: input.sourceLine, metadata: {}, truncated: false };
+  }
+  const previewSource = typeof input.value === 'string' ? input.value : stableStringify(input.value);
+  const descriptor = [
+    `jsonPointer=${input.pointer || '/'}`,
+    ...(input.key ? [`key=${input.key}`] : []),
+    `valueHash=${normalizedValueHash(input.value)}`,
+    `valuePreview=${truncateUtf8(previewSource, JSON_VALUE_PREVIEW_BYTES)}`
+  ].join('\n');
+  return {
+    text: truncateUtf8(descriptor, MAX_ARTIFACT_SPAN_TEXT_BYTES),
+    metadata: {
+      truncatedIndexedText: true,
+      sourceLineBytes: byteLength(input.sourceLine),
+      sourceLineHash: sha1(input.sourceLine)
+    },
+    truncated: true
   };
 }
 
@@ -100,6 +192,7 @@ function traverseJson(input: {
   arrayItem?: boolean;
   maxSpans: number;
   truncated: { value: boolean };
+  indexedTextTruncated: { value: boolean };
 }): void {
   if (input.spans.length >= input.maxSpans) {
     input.truncated.value = true;
@@ -112,16 +205,20 @@ function traverseJson(input: {
       : 1;
   if (input.arrayItem) {
     if (input.spans.length < input.maxSpans) {
+      const sourceLine = input.lines[line - 1] ?? '';
+      const spanText = jsonSpanText({ sourceLine, pointer: input.pointer, key: input.key, value: input.value });
+      input.indexedTextTruncated.value ||= spanText.truncated;
       input.spans.push(
       createArtifactSpan({
         kind: 'config.array_item',
         path: input.path,
         label: typeof input.value === 'string' ? input.value : (input.key ?? 'item'),
         startLine: line,
-        text: input.lines[line - 1] ?? '',
+        text: spanText.text,
         metadata: {
           pointer: input.pointer,
           normalizedValueHash: normalizedValueHash(input.value),
+          ...spanText.metadata,
           ...primitiveMentions(input.value)
         }
       })
@@ -132,17 +229,21 @@ function traverseJson(input: {
   } else if (input.key) {
     const schemaFieldName = input.pointer.match(/^\/properties\/([^/]+)$/)?.[1];
     if (input.spans.length < input.maxSpans) {
+      const sourceLine = input.lines[line - 1] ?? '';
+      const spanText = jsonSpanText({ sourceLine, pointer: input.pointer, key: input.key, value: input.value });
+      input.indexedTextTruncated.value ||= spanText.truncated;
       input.spans.push(
       createArtifactSpan({
         kind: 'config.entry',
         path: input.path,
         label: input.key,
         startLine: line,
-        text: input.lines[line - 1] ?? '',
+        text: spanText.text,
         metadata: {
           pointer: input.pointer,
           configKey: input.key,
           normalizedValueHash: normalizedValueHash(input.value),
+          ...spanText.metadata,
           ...(schemaFieldName ? { schemaFieldName } : {})
         }
       })
@@ -188,15 +289,19 @@ function traverseJson(input: {
   const mentions = primitiveMentions(input.value);
   if (!input.arrayItem && Object.keys(mentions).length > 0) {
     if (input.spans.length < input.maxSpans) {
+      const sourceLine = input.lines[line - 1] ?? '';
+      const spanText = jsonSpanText({ sourceLine, pointer: input.pointer, value: input.value });
+      input.indexedTextTruncated.value ||= spanText.truncated;
       input.spans.push(
       createArtifactSpan({
         kind: 'config.entry',
         path: input.path,
         label: String(input.value),
         startLine: line,
-        text: input.lines[line - 1] ?? '',
+        text: spanText.text,
         metadata: {
           pointer: input.pointer,
+          ...spanText.metadata,
           ...mentions
         }
       })
@@ -211,6 +316,14 @@ export function parseJsonArtifact(input: ArtifactParseInput): ArtifactParseResul
   const lines = input.text.split(/\r?\n/);
   const maxSpans = input.maxSpans ?? DEFAULT_MAX_ARTIFACT_SPANS;
   const truncated = { value: false };
+  const indexedTextTruncated = { value: false };
+  const fileText = boundedText({
+    text: input.text,
+    metadata: byteLength(input.text) > MAX_ARTIFACT_SPAN_TEXT_BYTES
+      ? { fullTextBytes: byteLength(input.text), fullTextHash: sha1(input.text), truncatedIndexedText: true }
+      : {}
+  });
+  indexedTextTruncated.value ||= fileText.truncated;
   const spans: ArtifactSpan[] = [
     createArtifactSpan({
       kind: 'config.file',
@@ -218,7 +331,8 @@ export function parseJsonArtifact(input: ArtifactParseInput): ArtifactParseResul
       label: path.basename(input.path),
       startLine: 1,
       endLine: lines.length,
-      text: input.text
+      text: fileText.text,
+      metadata: fileText.metadata
     })
   ];
 
@@ -231,12 +345,17 @@ export function parseJsonArtifact(input: ArtifactParseInput): ArtifactParseResul
       value,
       pointer: '',
       maxSpans,
-      truncated
+      truncated,
+      indexedTextTruncated
     });
+    const warnings = [
+      ...(truncated.value ? [`Artifact span limit reached (${maxSpans}); remaining JSON entries omitted.`] : []),
+      ...(indexedTextTruncated.value ? ['Artifact indexed text truncated to avoid duplicating large source lines.'] : [])
+    ];
     return {
       path: input.path,
       spans,
-      warnings: truncated.value ? [`Artifact span limit reached (${maxSpans}); remaining JSON entries omitted.`] : []
+      warnings
     };
   } catch (error) {
     return {

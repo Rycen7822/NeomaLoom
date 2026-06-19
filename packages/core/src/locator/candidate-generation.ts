@@ -16,6 +16,7 @@ import type { LocatorCandidate } from './ranking.js';
 
 type Statement = {
   all: (...params: unknown[]) => unknown[];
+  get: (...params: unknown[]) => unknown;
 };
 
 type Database = {
@@ -381,35 +382,274 @@ function fileRowToCandidate(input: {
   };
 }
 
-function rowsFromDb(dbPath: string): { spans: SpanRow[]; edges: EdgeRow[]; files: FileRow[] } {
+const MAX_INDEXED_TEXT_READ_BYTES = 8192;
+
+function candidateCaps(limit?: number): { spanCap: number; fileCap: number; edgeCap: number } {
+  const requested = Math.max(limit ?? 50, 20);
+  return {
+    spanCap: Math.max(requested * 8, 200),
+    fileCap: Math.max(requested * 10, 250),
+    edgeCap: Math.max(requested * 20, 1000)
+  };
+}
+
+function unique<T>(values: T[]): T[] {
+  return [...new Set(values)];
+}
+
+function likePattern(term: string): string {
+  return `%${term.toLowerCase().replace(/[\\%_]/g, match => `\\${match}`)}%`;
+}
+
+function searchTerms(query: NormalizedQuery): string[] {
+  return unique([
+    ...query.pathTerms,
+    ...query.symbolTerms,
+    ...query.configTerms,
+    ...query.oldTerms,
+    ...query.exactTerms,
+    ...query.featureTerms
+  ].filter(term => term.trim().length >= 2)).slice(0, 24);
+}
+
+const SPAN_SELECT = `SELECT s.span_id, s.path, s.kind, s.role, s.label, s.start_line, s.end_line, s.language,
+    s.heading_path_json, s.symbol_path_json, s.anchor, s.stable_locator_json,
+    s.text_hash, substr(s.indexed_text, 1, ${MAX_INDEXED_TEXT_READ_BYTES}) AS indexed_text,
+    s.summary, s.metadata_json, s.source, s.updated_at,
+    f.content_hash AS file_content_hash, f.generated AS file_generated, f.ignored AS file_ignored
+  FROM repo_spans s
+  LEFT JOIN repo_files f ON f.path = s.path`;
+
+function selectSpanRowsByIds(db: Database, ids: string[]): SpanRow[] {
+  if (ids.length === 0) {
+    return [];
+  }
+  const placeholders = ids.map(() => '?').join(', ');
+  return db
+    .prepare(`${SPAN_SELECT}
+      WHERE s.span_id IN (${placeholders})
+      ORDER BY s.path ASC, s.start_line ASC, s.span_id ASC`)
+    .all(...ids) as SpanRow[];
+}
+
+function addSpanIdsFromRows(target: string[], rows: Array<{ span_id: string }>, cap: number): void {
+  const seen = new Set(target);
+  for (const row of rows) {
+    if (target.length >= cap) {
+      break;
+    }
+    if (!seen.has(row.span_id)) {
+      seen.add(row.span_id);
+      target.push(row.span_id);
+    }
+  }
+}
+
+function safeFtsQuery(term: string): string | undefined {
+  const cleaned = term.trim().replace(/"/g, '""');
+  if (!cleaned || /[\u0000-\u001f]/.test(cleaned)) {
+    return undefined;
+  }
+  return `"${cleaned}"`;
+}
+
+function selectSpanCandidateIds(db: Database, query: NormalizedQuery, cap: number): string[] {
+  const ids: string[] = [];
+  const terms = searchTerms(query);
+  const pathTerms = unique([...query.pathTerms, ...terms.filter(term => term.includes('.') || term.includes('/') || term.includes('_'))]);
+
+  for (const term of pathTerms) {
+    if (ids.length >= cap) break;
+    addSpanIdsFromRows(
+      ids,
+      db
+        .prepare(`SELECT span_id FROM repo_spans
+          WHERE lower(path) LIKE ? ESCAPE '\\'
+          ORDER BY CASE WHEN lower(path) = ? THEN 0 WHEN lower(path) LIKE ? ESCAPE '\\' THEN 1 ELSE 2 END,
+                   length(path) ASC, path ASC, start_line ASC
+          LIMIT ?`)
+        .all(likePattern(term), term.toLowerCase(), `%/${term.toLowerCase()}`, Math.max(25, Math.min(cap - ids.length, 100))) as Array<{ span_id: string }>,
+      cap
+    );
+  }
+
+  for (const role of query.targetRoles) {
+    if (ids.length >= cap) break;
+    addSpanIdsFromRows(
+      ids,
+      db
+        .prepare(`SELECT span_id FROM repo_spans
+          WHERE role = ?
+          ORDER BY path ASC, start_line ASC, span_id ASC
+          LIMIT ?`)
+        .all(role, Math.max(10, Math.min(cap - ids.length, 50))) as Array<{ span_id: string }>,
+      cap
+    );
+  }
+
+  for (const term of terms) {
+    if (ids.length >= cap) break;
+    const ftsQuery = safeFtsQuery(term);
+    if (ftsQuery) {
+      try {
+        addSpanIdsFromRows(
+          ids,
+          db
+            .prepare(`SELECT span_id FROM repo_spans_fts
+              WHERE repo_spans_fts MATCH ?
+              LIMIT ?`)
+            .all(ftsQuery, Math.max(25, Math.min(cap - ids.length, 100))) as Array<{ span_id: string }>,
+          cap
+        );
+      } catch {
+        // Some ad-hoc test databases may not populate FTS or may reject punctuation-heavy terms.
+      }
+    }
+    if (ids.length >= cap) break;
+    const pattern = likePattern(term);
+    addSpanIdsFromRows(
+      ids,
+      db
+        .prepare(`SELECT span_id FROM repo_spans
+          WHERE lower(path) LIKE ? ESCAPE '\\'
+             OR lower(label) LIKE ? ESCAPE '\\'
+             OR lower(role) LIKE ? ESCAPE '\\'
+             OR lower(kind) LIKE ? ESCAPE '\\'
+             OR lower(summary) LIKE ? ESCAPE '\\'
+             OR lower(metadata_json) LIKE ? ESCAPE '\\'
+             OR lower(symbol_path_json) LIKE ? ESCAPE '\\'
+             OR lower(heading_path_json) LIKE ? ESCAPE '\\'
+             OR lower(substr(indexed_text, 1, ${MAX_INDEXED_TEXT_READ_BYTES})) LIKE ? ESCAPE '\\'
+          ORDER BY path ASC, start_line ASC, span_id ASC
+          LIMIT ?`)
+        .all(pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, Math.max(25, Math.min(cap - ids.length, 100))) as Array<{ span_id: string }>,
+      cap
+    );
+  }
+
+  return ids;
+}
+
+function selectNeighborEdges(db: Database, spanIds: string[], edgeCap: number): EdgeRow[] {
+  if (spanIds.length === 0) {
+    return [];
+  }
+  const limitedIds = spanIds.slice(0, Math.min(spanIds.length, 250));
+  const placeholders = limitedIds.map(() => '?').join(', ');
+  return db
+    .prepare(`SELECT source_span_id, target_span_id, relation, confidence
+      FROM repo_edges
+      WHERE source_span_id IN (${placeholders}) OR target_span_id IN (${placeholders})
+      ORDER BY confidence DESC, source_span_id ASC, target_span_id ASC
+      LIMIT ?`)
+    .all(...limitedIds, ...limitedIds, edgeCap) as EdgeRow[];
+}
+
+function selectFileRows(db: Database, query: NormalizedQuery, cap: number): FileRow[] {
+  const rows: FileRow[] = [];
+  const seen = new Set<string>();
+  const addRows = (candidates: FileRow[]): void => {
+    for (const row of candidates) {
+      if (rows.length >= cap) break;
+      if (!seen.has(row.path)) {
+        seen.add(row.path);
+        rows.push(row);
+      }
+    }
+  };
+  const select = `SELECT f.path, f.absolute_path, f.role, f.language, f.content_hash, f.size_bytes, f.generated, f.ignored, f.metadata_json
+    FROM repo_files f
+    WHERE NOT EXISTS (SELECT 1 FROM repo_spans s WHERE s.path = f.path) AND`;
+  const terms = searchTerms(query);
+  const pathTerms = unique([...query.pathTerms, ...terms.filter(term => term.includes('.') || term.includes('/') || term.includes('_'))]);
+
+  for (const term of pathTerms) {
+    if (rows.length >= cap) break;
+    addRows(
+      db
+        .prepare(`${select} lower(f.path) LIKE ? ESCAPE '\\'
+          ORDER BY CASE WHEN lower(f.path) = ? THEN 0 WHEN lower(f.path) LIKE ? ESCAPE '\\' THEN 1 ELSE 2 END,
+                   length(f.path) ASC, f.path ASC
+          LIMIT ?`)
+        .all(likePattern(term), term.toLowerCase(), `%/${term.toLowerCase()}`, Math.max(25, Math.min(cap - rows.length, 100))) as FileRow[]
+    );
+  }
+
+  for (const role of query.targetRoles) {
+    if (rows.length >= cap) break;
+    addRows(
+      db
+        .prepare(`${select} f.role = ?
+          ORDER BY f.path ASC
+          LIMIT ?`)
+        .all(role, Math.max(10, Math.min(cap - rows.length, 50))) as FileRow[]
+    );
+  }
+
+  for (const term of terms) {
+    if (rows.length >= cap) break;
+    const pattern = likePattern(term);
+    addRows(
+      db
+        .prepare(`${select} (
+             lower(f.path) LIKE ? ESCAPE '\\'
+          OR lower(f.role) LIKE ? ESCAPE '\\'
+          OR lower(f.language) LIKE ? ESCAPE '\\'
+          OR lower(f.metadata_json) LIKE ? ESCAPE '\\'
+        )
+        ORDER BY CASE WHEN lower(f.path) LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END,
+                 f.generated ASC, length(f.path) ASC, f.path ASC
+        LIMIT ?`)
+        .all(pattern, pattern, pattern, pattern, pattern, Math.max(25, Math.min(cap - rows.length, 100))) as FileRow[]
+    );
+  }
+
+  return rows;
+}
+
+function coverageFromDb(db: Database): IndexCoverage | undefined {
+  try {
+    const filesRow = db.prepare('SELECT COUNT(*) AS value FROM repo_files').get() as { value: number };
+    const spansRow = db.prepare('SELECT COUNT(*) AS value FROM repo_spans').get() as { value: number };
+    const indexedPathsRow = db.prepare('SELECT COUNT(DISTINCT path) AS value FROM repo_spans').get() as { value: number };
+    const fileCount = Number(filesRow.value ?? 0);
+    const spanCount = Number(spansRow.value ?? 0);
+    const indexedPathCount = Number(indexedPathsRow.value ?? 0);
+    if (fileCount === 0) {
+      return undefined;
+    }
+    const coldFiles = Math.max(0, fileCount - indexedPathCount);
+    return {
+      inventory: 'full',
+      deepSpans: spanCount === 0 ? 'none' : coldFiles > 0 ? 'scoped' : 'full',
+      hotsetRevision: null,
+      hotFiles: indexedPathCount,
+      coldFiles,
+      unindexedCandidateCount: coldFiles
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function rowsFromDb(dbPath: string, query: NormalizedQuery, limit?: number): { spans: SpanRow[]; edges: EdgeRow[]; files: FileRow[]; coverage?: IndexCoverage } {
   const db = openDatabase(dbPath);
   try {
-    const spans = db
-      .prepare(
-        `SELECT s.span_id, s.path, s.kind, s.role, s.label, s.start_line, s.end_line, s.language,
-                s.heading_path_json, s.symbol_path_json, s.anchor, s.stable_locator_json,
-                s.text_hash, s.indexed_text, s.summary, s.metadata_json, s.source, s.updated_at,
-                f.content_hash AS file_content_hash, f.generated AS file_generated, f.ignored AS file_ignored
-         FROM repo_spans s
-         LEFT JOIN repo_files f ON f.path = s.path
-         ORDER BY s.path ASC, s.start_line ASC, s.span_id ASC`
-      )
-      .all() as SpanRow[];
-    const edges = db
-      .prepare(
-        `SELECT source_span_id, target_span_id, relation, confidence
-         FROM repo_edges
-         ORDER BY confidence DESC, source_span_id ASC, target_span_id ASC`
-      )
-      .all() as EdgeRow[];
-    const files = db
-      .prepare(
-        `SELECT path, absolute_path, role, language, content_hash, size_bytes, generated, ignored, metadata_json
-         FROM repo_files
-         ORDER BY path ASC`
-      )
-      .all() as FileRow[];
-    return { spans, edges, files };
+    const caps = candidateCaps(limit);
+    const initialSpanIds = selectSpanCandidateIds(db, query, caps.spanCap);
+    const initialEdges = selectNeighborEdges(db, initialSpanIds, caps.edgeCap);
+    const spanIds = [...initialSpanIds];
+    addSpanIdsFromRows(
+      spanIds,
+      initialEdges
+        .filter(edge => edge.confidence >= 0.6)
+        .flatMap(edge => [{ span_id: edge.source_span_id }, { span_id: edge.target_span_id }]),
+      caps.spanCap
+    );
+    const edges = selectNeighborEdges(db, spanIds, caps.edgeCap);
+    const spans = selectSpanRowsByIds(db, spanIds);
+    const files = selectFileRows(db, query, caps.fileCap);
+    return { spans, edges, files, coverage: coverageFromDb(db) };
   } finally {
     db.close();
   }
@@ -456,13 +696,15 @@ export async function generateCandidates(input: {
   let spans: SpanRow[] = [];
   let edges: EdgeRow[] = [];
   let files: FileRow[] = [];
+  let dbCoverage: IndexCoverage | undefined;
   const warnings: EnvelopeWarning[] = [];
 
   try {
-    const rows = rowsFromDb(dbPath);
+    const rows = rowsFromDb(dbPath, normalizedQuery, input.limit);
     spans = rows.spans;
     edges = rows.edges;
     files = rows.files;
+    dbCoverage = rows.coverage;
   } catch (error) {
     files = await filesFromInventorySnapshot(input.projectRoot);
     warnings.push({
@@ -472,7 +714,7 @@ export async function generateCandidates(input: {
     });
   }
 
-  const coverage = inferCoverage(files, spans, await readIndexCoverage(input.projectRoot));
+  const coverage = (await readIndexCoverage(input.projectRoot)) ?? dbCoverage ?? inferCoverage(files, spans);
   const hotsetManifest = await readHotsetManifest(input.projectRoot);
 
   if (spans.length === 0 && files.length === 0) {

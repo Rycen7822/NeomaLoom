@@ -8,6 +8,7 @@ export const nlTraceInputSchema = z
   .object({
     projectPath: z.string().optional(),
     target: z.string().min(1),
+    targetType: z.enum(['auto', 'span', 'symbol', 'file', 'feature', 'config', 'doc']).default('auto'),
     direction: z.enum(['upstream', 'downstream', 'both']).default('both'),
     depth: z.number().int().min(0).max(5).default(2),
     relationTypes: z.array(z.string()).default(['all'])
@@ -21,6 +22,7 @@ export async function handleNlTrace(input: unknown): Promise<NoemaLoomEnvelope> 
   const graph = traceGraph({
     projectRoot,
     target: parsed.target,
+    targetType: parsed.targetType,
     direction: parsed.direction,
     depth: parsed.depth,
     relationTypes: parsed.relationTypes

@@ -73,12 +73,90 @@ def _error_envelope(tool: str, message: str, *, project_root: str | None = None,
     )
 
 
+def _timeout_envelope(tool: str, timeout: float, *, project_root: str | None = None) -> str:
+    return _error_envelope(
+        tool,
+        f"NoemaLoom tool timed out after {timeout:g}s; the per-call MCP subprocess was closed by the stdio client cleanup path.",
+        project_root=project_root,
+        code="noemaloom_tool_timeout",
+    )
+
+
 def _repo_marker(path: Path) -> bool:
     return (
         (path / "package.json").exists()
         and (path / "packages" / "core" / "src" / "cli" / "main.ts").exists()
         and (path / "python" / "nl_rpg_projection_worker").exists()
     )
+
+
+def _install_metadata_path() -> Path:
+    return Path(__file__).resolve().parent / "INSTALL_METADATA.json"
+
+
+def _read_install_metadata() -> dict[str, Any]:
+    metadata_path = _install_metadata_path()
+    if not metadata_path.exists():
+        return {}
+    try:
+        loaded = json.loads(metadata_path.read_text(encoding="utf-8"))
+        return loaded if isinstance(loaded, dict) else {}
+    except Exception:
+        return {}
+
+
+def _git_output(repo: Path, args: list[str]) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), *args],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def _git_head(repo: Path) -> str | None:
+    return _git_output(repo, ["rev-parse", "HEAD"])
+
+
+def _git_dirty_count(repo: Path) -> int | None:
+    output = _git_output(repo, ["status", "--porcelain"])
+    if output is None:
+        return None
+    return len([line for line in output.splitlines() if line.strip()])
+
+
+def _provenance_warnings(repo: Path) -> list[dict[str, str]]:
+    metadata = _read_install_metadata()
+    if not metadata:
+        return []
+    warnings: list[dict[str, str]] = []
+    head = _git_head(repo)
+    if head and metadata.get("commit") and metadata.get("commit") != head:
+        warnings.append(
+            {
+                "code": "installed_plugin_source_mismatch",
+                "severity": "warning",
+                "message": f"Installed NoemaLoom metadata commit {metadata.get('commit')} differs from source HEAD {head}; rerun scripts/sync-hermes-plugin.py.",
+            }
+        )
+    dirty = _git_dirty_count(repo)
+    if dirty is not None and metadata.get("dirtyFiles") is not None and int(metadata.get("dirtyFiles") or 0) != dirty:
+        warnings.append(
+            {
+                "code": "installed_plugin_dirty_count_mismatch",
+                "severity": "warning",
+                "message": f"Installed NoemaLoom metadata dirtyFiles={metadata.get('dirtyFiles')} differs from source dirtyFiles={dirty}; rerun scripts/sync-hermes-plugin.py.",
+            }
+        )
+    return warnings
 
 
 def resolve_repo_root() -> Path:
@@ -88,6 +166,13 @@ def resolve_repo_root() -> Path:
         if _repo_marker(candidate):
             return candidate
         raise RuntimeError(f"NOEMALOOM_REPO does not point at a valid NoemaLoom checkout: {candidate}")
+
+    metadata = _read_install_metadata()
+    source = metadata.get("source")
+    if isinstance(source, str) and source:
+        candidate = Path(source).expanduser().resolve()
+        if _repo_marker(candidate):
+            return candidate
 
     here = Path(__file__).resolve()
     for parent in here.parents:
@@ -238,15 +323,22 @@ async def _call_tool_async(tool: str, args: dict[str, Any], timeout: float) -> s
     # The NoemaLoom MCP adapter returns the envelope as a JSON text block. Validate but keep the
     # exact envelope shape for Hermes.
     parsed = json.loads(text)
+    provenance_warnings = _provenance_warnings(repo)
+    if provenance_warnings:
+        parsed.setdefault("warnings", [])
+        if isinstance(parsed["warnings"], list):
+            parsed["warnings"].extend(provenance_warnings)
     return _json(parsed)
 
 
 def call_noemaloom_tool(tool: str, args: dict[str, Any] | None) -> str:
     payload = dict(args or {})
     project_root = _project_cwd(payload)
+    timeout = float(os.environ.get("NOEMALOOM_TOOL_TIMEOUT", "120"))
     try:
-        timeout = float(os.environ.get("NOEMALOOM_TOOL_TIMEOUT", "120"))
         return _run_async(_call_tool_async(tool, payload, timeout))
+    except TimeoutError:
+        return _timeout_envelope(tool, timeout, project_root=project_root)
     except Exception as exc:
         return _error_envelope(tool, _format_exception(exc), project_root=project_root)
 

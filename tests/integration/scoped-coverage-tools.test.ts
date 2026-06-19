@@ -27,11 +27,13 @@ describe('scoped coverage tool semantics', () => {
     const result = await callRegisteredTool('nl_prepare_context', {
       projectPath: projectRoot,
       goal: 'update docs/api/client.md createClient documentation',
+      budget: 777,
       readTopSpans: true
     });
 
     expect(result.ok).toBe(true);
     expect(result.nextActions).toEqual(expect.arrayContaining(['call nl_refresh with target="paths" for unindexedCandidates']));
+    expect(result.tokenBudget.requested).toBe(777);
     expect(result.data).toMatchObject({ coverage: { inventory: 'full', deepSpans: 'scoped' } });
     expect((result.data as { unindexedCandidates: Array<{ path: string }> }).unindexedCandidates.map(candidate => candidate.path)).toContain('docs/api/client.md');
     expect((result.data as { readSpans: unknown[] }).readSpans).toEqual([]);
@@ -53,6 +55,33 @@ describe('scoped coverage tool semantics', () => {
     expect(impact.impactCoverage).toBe('scoped');
     expect(impact.missingUnindexedPaths).toEqual(expect.arrayContaining(['docs/api/client.md', 'tests/client.test.ts']));
     expect(impact.requiredActions).toEqual(expect.arrayContaining(['promote missingUnindexedPaths with nl_refresh target="paths" before final impact claims']));
+  });
+
+  it('nl_plan_change uses exact file target with Unicode paths without trace payload', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-plan-file-fast-path-'));
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({ name: 'plan-file-fast-path' }));
+    await writeProjectFile(
+      projectRoot,
+      'DeepScientist/quests/001/STAGE10_推进规划.md',
+      '# STAGE10 推进规划\n\nUse CURRENT_STATUS and bash_exec evidence.\n'
+    );
+    await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'paths',
+      paths: ['DeepScientist/quests/001/STAGE10_推进规划.md']
+    });
+
+    const result = await callRegisteredTool('nl_plan_change', {
+      projectPath: projectRoot,
+      target: 'DeepScientist/quests/001/STAGE10_推进规划.md',
+      targetType: 'file',
+      includeTrace: false
+    });
+
+    const data = result.data as { trace: unknown; impact: { docImpact: Array<{ path: string }> } };
+    expect(result.ok).toBe(true);
+    expect(data.trace).toBeNull();
+    expect(data.impact.docImpact.map(node => node.path)).toContain('DeepScientist/quests/001/STAGE10_推进规划.md');
   });
 
   it('nl_verify_task scans cold docs from inventory and fails on remaining old terms', async () => {

@@ -47,15 +47,20 @@ Hermes plugin 和 MCP server 都只暴露以下 5 个面向智能体的工具：
 ```bash
 cd <NOEMALOOM_REPO>
 npm ci --include=dev
-ln -sfn "$PWD/hermes-plugin/noemaloom" "${HERMES_HOME:-$HOME/.hermes}/plugins/noemaloom"
+python3 scripts/sync-hermes-plugin.py --mode symlink --replace
 hermes plugins enable noemaloom
 ```
 
-如果不是 symlink，而是复制 `hermes-plugin/noemaloom`，请在启动 Hermes 前设置 `NOEMALOOM_REPO`，这样插件才能找到 TypeScript runtime 和 Python feature worker package：
+带 provenance 元数据的复制安装：
 
 ```bash
-export NOEMALOOM_REPO=/path/to/NoemaLoom
+cd <NOEMALOOM_REPO>
+npm ci --include=dev
+python3 scripts/sync-hermes-plugin.py --mode copy --backup
+hermes plugins enable noemaloom
 ```
+
+同步脚本会写入 `INSTALL_METADATA.json`，记录 source path、Git HEAD、dirty-file count、build/schema hash。fresh plugin 调用发现该元数据与源码 checkout 不一致时会给出 warning；源码提交或本地修改需要反映到 Hermes 时，请重新运行同步脚本。
 
 启用插件后，启动新的 Hermes session 或重启 gateway。任务需要 NoemaLoom 工作流时，显式加载 bundled skill：
 
@@ -118,8 +123,7 @@ args = ["serve", "--mcp"]
 用户级安装：
 - 当这个用户账号下的 Hermes sessions 需要在多个项目中使用 NoemaLoom 时，使用用户级安装。
 - 验证或安装 Node.js 20+、Python 3.11+，并在 <NOEMALOOM_REPO> 中运行 `npm ci --include=dev` 安装 npm 依赖。
-- 通过 symlink 或 clean-copy，把 <NOEMALOOM_REPO>/hermes-plugin/noemaloom 安装到 `${HERMES_HOME:-$HOME/.hermes}/plugins/noemaloom`。
-- 如果使用复制而不是 symlink，在启动 Hermes 前设置 `NOEMALOOM_REPO=<NOEMALOOM_REPO>`。
+- 使用 `python3 scripts/sync-hermes-plugin.py --mode symlink --replace` 或 `python3 scripts/sync-hermes-plugin.py --mode copy --backup` 安装插件；脚本会写入 `INSTALL_METADATA.json`，fresh plugin 调用可在安装 provenance 与 source HEAD 不一致时给出 warning。
 - 使用 `hermes plugins enable noemaloom` 启用插件，启动新 session 或重启 gateway；需要工作流指导时加载 `skill_view(name="noemaloom:usage")`。
 
 项目级安装：

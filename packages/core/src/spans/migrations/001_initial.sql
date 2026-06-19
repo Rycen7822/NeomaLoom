@@ -89,3 +89,10 @@ CREATE VIRTUAL TABLE repo_spans_fts USING fts5(
   indexed_text,
   summary
 );
+
+CREATE INDEX repo_spans_path_idx ON repo_spans(path);
+CREATE INDEX repo_spans_role_idx ON repo_spans(role);
+CREATE INDEX repo_spans_kind_idx ON repo_spans(kind);
+CREATE INDEX repo_edges_source_idx ON repo_edges(source_span_id);
+CREATE INDEX repo_edges_target_idx ON repo_edges(target_span_id);
+CREATE INDEX repo_files_role_idx ON repo_files(role);

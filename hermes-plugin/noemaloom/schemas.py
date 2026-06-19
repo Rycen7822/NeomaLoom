@@ -99,7 +99,7 @@ NL_PREPARE_CONTEXT_SCHEMA = {
             "scope": {"type": "string", "description": "Optional scope hint appended to the goal."},
             "targetRoles": TARGET_ROLES,
             "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
-            "budget": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 2048},
+            "budget": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 2400},
             "includeSnippets": {"type": "boolean", "default": False},
             "includeQueryPreview": {"type": "boolean", "default": True},
             "readTopSpans": {"type": "boolean", "default": False},

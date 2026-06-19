@@ -54,6 +54,7 @@ export async function handleNlPlanChange(input: unknown): Promise<NoemaLoomEnvel
     ? await handleNlTrace({
         projectPath: parsed.projectPath,
         target: parsed.target,
+        targetType: parsed.targetType,
         direction: parsed.direction,
         depth: parsed.depth,
         relationTypes: parsed.relationTypes

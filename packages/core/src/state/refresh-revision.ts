@@ -52,6 +52,53 @@ function sha1(value: string): string {
   return createHash('sha1').update(value).digest('hex');
 }
 
+const MAX_REPO_SPAN_INDEXED_TEXT_BYTES = 8192;
+const MAX_REPO_SPAN_LABEL_BYTES = 1024;
+const MAX_REPO_SPAN_SUMMARY_BYTES = 2048;
+
+function byteLength(value: string): number {
+  return Buffer.byteLength(value, 'utf8');
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  if (byteLength(value) <= maxBytes) {
+    return value;
+  }
+  const suffix = '\n…[truncated]';
+  const suffixBytes = byteLength(suffix);
+  let output = '';
+  let used = 0;
+  for (const char of value) {
+    const charBytes = byteLength(char);
+    if (used + charBytes + suffixBytes > maxBytes) {
+      break;
+    }
+    output += char;
+    used += charBytes;
+  }
+  return `${output}${suffix}`;
+}
+
+function boundedIndexedText(span: RepoSpan): { indexedText: string; metadata: Record<string, unknown> } {
+  const originalBytes = byteLength(span.indexedText);
+  if (originalBytes <= MAX_REPO_SPAN_INDEXED_TEXT_BYTES) {
+    return { indexedText: span.indexedText, metadata: span.metadata };
+  }
+  return {
+    indexedText: truncateUtf8(span.indexedText, MAX_REPO_SPAN_INDEXED_TEXT_BYTES),
+    metadata: {
+      ...span.metadata,
+      indexedTextTruncatedAtWrite: true,
+      originalIndexedTextBytes: originalBytes,
+      originalIndexedTextHash: sha1(span.indexedText)
+    }
+  };
+}
+
+function boundedField(value: string, maxBytes: number): string {
+  return byteLength(value) <= maxBytes ? value : truncateUtf8(value, maxBytes);
+}
+
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && 'code' in error;
 }
@@ -281,12 +328,15 @@ export async function writeRefreshRevision(input: {
       );
     }
     for (const span of input.spans) {
+      const bounded = boundedIndexedText(span);
+      const boundedLabel = boundedField(span.label, MAX_REPO_SPAN_LABEL_BYTES);
+      const boundedSummary = boundedField(span.summary, MAX_REPO_SPAN_SUMMARY_BYTES);
       insertSpan.run(
         span.spanId,
         span.path,
         span.kind,
         span.role,
-        span.label,
+        boundedLabel,
         span.startLine,
         span.endLine,
         span.startColumn ?? null,
@@ -298,9 +348,9 @@ export async function writeRefreshRevision(input: {
         span.anchor ?? null,
         JSON.stringify(span.stableLocator),
         span.textHash,
-        span.indexedText,
-        span.summary,
-        JSON.stringify(span.metadata),
+        bounded.indexedText,
+        boundedSummary,
+        JSON.stringify(bounded.metadata),
         span.source,
         span.updatedAt
       );
@@ -309,11 +359,11 @@ export async function writeRefreshRevision(input: {
         span.path,
         span.kind,
         span.role,
-        span.label,
+        boundedLabel,
         JSON.stringify(span.headingPath),
         JSON.stringify(span.symbolPath),
-        span.indexedText,
-        span.summary
+        bounded.indexedText,
+        boundedSummary
       );
     }
     for (const edge of input.edges) {

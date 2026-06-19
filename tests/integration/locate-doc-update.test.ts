@@ -73,7 +73,7 @@ describe('nl_prepare_context for a documentation update', () => {
       goal: 'Update createClient timeout documentation across API docs, README, examples, source, and tests',
       targetRoles: ['canonical_api_doc', 'readme_doc', 'example_doc', 'source_file', 'test_file'],
       limit: 20,
-      budget: 900,
+      budget: 2400,
       includeSnippets: true
     });
 

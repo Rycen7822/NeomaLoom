@@ -127,6 +127,40 @@ describe('ArtifactSpanIndexer', () => {
     expect(result.warnings).toEqual(expect.arrayContaining([expect.stringContaining('Artifact span limit reached (50)')]));
   });
 
+  it('does not duplicate full minified JSON text into every config span', () => {
+    const vocabulary = Object.fromEntries(
+      Array.from({ length: 1500 }, (_, index) => [`token_${index}`, `value-${index}-${'x'.repeat(120)}`])
+    );
+    const text = JSON.stringify(vocabulary);
+
+    const result = indexArtifactSpans({
+      path: 'resources/models/vocab.json',
+      text
+    });
+
+    const textLengths = result.spans.map(span => span.text.length);
+    expect(Math.max(...textLengths)).toBeLessThanOrEqual(8192);
+    expect(textLengths.reduce((sum, length) => sum + length, 0)).toBeLessThan(text.length * 3);
+    expect(result.spans[0]).toMatchObject({
+      kind: 'config.file',
+      metadata: expect.objectContaining({ truncatedIndexedText: true })
+    });
+    expect(result.warnings).toEqual(expect.arrayContaining([expect.stringContaining('Artifact indexed text truncated')]));
+  });
+
+  it('bounds JSON array item labels as well as text', () => {
+    const text = JSON.stringify({ values: ['y'.repeat(20000)] });
+
+    const result = indexArtifactSpans({ path: 'config/large-array.json', text });
+    const item = result.spans.find(span => span.kind === 'config.array_item');
+
+    expect(item).toBeDefined();
+    expect(item?.label.length).toBeLessThan(20000);
+    expect(Buffer.byteLength(item?.label ?? '', 'utf8')).toBeLessThanOrEqual(1024);
+    expect(Buffer.byteLength(item?.text ?? '', 'utf8')).toBeLessThanOrEqual(8192);
+    expect(item?.metadata).toMatchObject({ labelTruncated: true, truncatedIndexedText: true });
+  });
+
   it('extracts package scripts, entrypoints, and workspace package names', () => {
     const result = indexArtifactSpans({
       path: 'package.json',

@@ -2,23 +2,27 @@ import { z } from 'zod';
 
 import { createEnvelope, resolveProjectRootFromInput, type NoemaLoomEnvelope } from '../envelope.js';
 import {
-  aggregateOk,
   combineEvidence,
-  combineGraphRevision,
-  combineGraphState,
-  combineTokenBudget,
-  combineWarnings,
-  summarizeSteps
+  combineWarnings
 } from './aggregate-utils.js';
-import { handleNlContext } from './nl-context.js';
-import { handleNlLocate } from './nl-locate.js';
-import { handleNlQuery } from './nl-query.js';
+import { buildContextDataFromLocated } from './nl-context.js';
+import { runLocator } from './nl-locate.js';
 import { handleNlReadSpan } from './nl-read-span.js';
 
 type LocateData = {
   targets: Array<{
     spanId: string;
     path: string;
+    kind: string;
+    role: string;
+    label: string;
+    startLine: number;
+    endLine: number;
+    headingPath: string[];
+    score: number;
+    scoreBreakdown: unknown;
+    evidence: Array<Record<string, unknown>>;
+    linkedSpans: Array<Record<string, unknown>>;
     decision: string;
     indexed?: boolean;
     promotionAction?: { target: 'paths'; paths: string[]; reason: string };
@@ -29,10 +33,6 @@ type LocateData = {
   normalizedQuery: unknown;
 };
 
-type QueryData = {
-  results: unknown[];
-};
-
 export const nlPrepareContextInputSchema = z
   .object({
     projectPath: z.string().optional(),
@@ -40,7 +40,7 @@ export const nlPrepareContextInputSchema = z
     scope: z.string().optional(),
     targetRoles: z.array(z.string()).default([]),
     limit: z.number().int().positive().max(100).default(20),
-    budget: z.number().int().positive().max(10000).default(2048),
+    budget: z.number().int().positive().max(10000).default(2400),
     includeSnippets: z.boolean().default(false),
     includeQueryPreview: z.boolean().default(true),
     readTopSpans: z.boolean().default(false),
@@ -54,27 +54,25 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
   const projectRoot = resolveProjectRootFromInput(parsed);
   const goal = parsed.scope ? `${parsed.scope} ${parsed.goal}` : parsed.goal;
 
-  const query = parsed.includeQueryPreview
-    ? await handleNlQuery({
-        projectPath: parsed.projectPath,
-        query: parsed.goal,
-        scope: parsed.scope,
-        limit: Math.min(parsed.limit, 5)
-      })
-    : null;
-  const locate = await handleNlLocate({
-    projectPath: parsed.projectPath,
+  const located = await runLocator({
+    projectRoot,
     goal,
     targetRoles: parsed.targetRoles,
-    limit: parsed.limit
+    limit: parsed.limit,
+    budget: parsed.budget
   });
-  const context = await handleNlContext({
-    projectPath: parsed.projectPath,
-    goal,
-    budget: parsed.budget,
+  const locateData: LocateData = {
+    targets: located.targets,
+    unindexedCandidates: located.targets.filter(target => target.indexed === false),
+    coverage: located.coverage,
+    coveragePlan: located.coveragePlan,
+    normalizedQuery: located.normalizedQuery
+  };
+  const contextData = await buildContextDataFromLocated({
+    projectRoot,
+    located,
     includeSnippets: parsed.includeSnippets
   });
-  const locateData = locate.data as LocateData;
   const readTargets = parsed.readTopSpans
     ? locateData.targets
       .filter(target => target.indexed !== false && ['must_edit', 'maybe_edit'].includes(target.decision))
@@ -89,37 +87,54 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
       })
     )
   );
-  const envelopes = [query, locate, context, ...readResults];
-  const queryData = query?.data as QueryData | undefined;
-  const ok = aggregateOk(envelopes);
-  const graphState = combineGraphState(envelopes);
+  const readWarnings = combineWarnings(readResults);
   const unindexedCandidates = locateData.unindexedCandidates ?? locateData.targets.filter(target => target.indexed === false);
+  const ok = readResults.every(result => result.ok !== false);
+  const graphState = readResults.some(result => result.graphState === 'stale') ? 'stale' : located.graphState;
   const nextActions = unindexedCandidates.length > 0
     ? ['call nl_refresh with target="paths" for unindexedCandidates', 'rerun nl_prepare_context after promotion']
     : ok && graphState === 'ready' && locateData.targets.length > 0
       ? ['edit with native agent tools', 'call nl_verify_task after edits']
       : ['call nl_refresh before editing', 'inspect nl_status warnings'];
+  const queryPreview = parsed.includeQueryPreview
+    ? locateData.targets.slice(0, Math.min(parsed.limit, 5)).map(target => ({
+        spanId: target.spanId,
+        path: target.path,
+        kind: target.kind,
+        role: target.role,
+        label: target.label,
+        startLine: target.startLine,
+        endLine: target.endLine,
+        headingPath: target.headingPath,
+        score: target.score,
+        scoreBreakdown: target.scoreBreakdown,
+        evidence: target.evidence,
+        linkedSpans: target.linkedSpans,
+        indexed: target.indexed ?? true,
+        promotionAction: target.promotionAction
+      }))
+    : [];
 
   return createEnvelope({
     ok,
     tool: 'nl_prepare_context',
     projectRoot,
-    graphRevision: combineGraphRevision(envelopes),
+    graphRevision: located.graphRevision,
     graphState,
-    tokenBudget: combineTokenBudget(envelopes),
-    warnings: combineWarnings(envelopes),
+    tokenBudget: located.tokenBudget,
+    warnings: [...located.warnings, ...readWarnings],
     data: {
-      queryPreview: queryData?.results ?? [],
+      queryPreview,
       targets: locateData.targets,
       unindexedCandidates,
       coverage: locateData.coverage,
       coveragePlan: locateData.coveragePlan,
       normalizedQuery: locateData.normalizedQuery,
-      context: context.data,
+      context: contextData,
       readSpans: readResults.map(result => result.data),
-      steps: summarizeSteps(envelopes)
+      steps: ['nl_locate', 'nl_context_from_located', ...readResults.map(result => result.tool)]
     },
-    evidence: combineEvidence(envelopes),
+    evidence: [...located.targets.flatMap(target => target.evidence), ...combineEvidence(readResults)],
     nextActions
   });
 }

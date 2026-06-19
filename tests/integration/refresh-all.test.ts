@@ -127,6 +127,30 @@ describe('nl_refresh target all', () => {
     expect(scalar(dbPath, "SELECT COUNT(*) AS value FROM repo_spans WHERE kind = 'config.entry' AND label = 'HEAD'")).toBe(2);
   });
 
+  it('bounds indexed text for large minified JSON artifacts during full refresh', async () => {
+    const projectRoot = await createProject();
+    const vocabulary = Object.fromEntries(
+      Array.from({ length: 1500 }, (_, index) => [`token_${index}`, `value-${index}-${'x'.repeat(120)}`])
+    );
+    const text = JSON.stringify(vocabulary);
+    await writeProjectFile(projectRoot, 'resources/models/vocab.json', text);
+
+    const result = await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'all',
+      mode: 'safe'
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.graphState).toBe('ready');
+    const dbPath = path.join(projectRoot, '.noemaloom', 'spans', 'spans.db');
+    expect(scalar(dbPath, 'SELECT MAX(length(indexed_text)) AS value FROM repo_spans')).toBeLessThanOrEqual(8192);
+    expect(scalar(dbPath, 'SELECT MAX(length(label)) AS value FROM repo_spans')).toBeLessThanOrEqual(1024);
+    expect(scalar(dbPath, 'SELECT MAX(length(summary)) AS value FROM repo_spans')).toBeLessThanOrEqual(2048);
+    expect(scalar(dbPath, "SELECT SUM(length(indexed_text)) AS value FROM repo_spans WHERE path = 'resources/models/vocab.json'"))
+      .toBeLessThan(text.length * 3);
+  });
+
   it('refreshes only file inventory for target files without touching code/span DBs', async () => {
     const projectRoot = await createProject();
     await writeProjectFile(

@@ -46,15 +46,20 @@ Development/source-linked install:
 ```bash
 cd <NOEMALOOM_REPO>
 npm ci --include=dev
-ln -sfn "$PWD/hermes-plugin/noemaloom" "${HERMES_HOME:-$HOME/.hermes}/plugins/noemaloom"
+python3 scripts/sync-hermes-plugin.py --mode symlink --replace
 hermes plugins enable noemaloom
 ```
 
-If you copy `hermes-plugin/noemaloom` instead of symlinking it from this repository, set `NOEMALOOM_REPO` before starting Hermes so the plugin can find the TypeScript runtime and Python feature worker package:
+Copy install with provenance metadata:
 
 ```bash
-export NOEMALOOM_REPO=/path/to/NoemaLoom
+cd <NOEMALOOM_REPO>
+npm ci --include=dev
+python3 scripts/sync-hermes-plugin.py --mode copy --backup
+hermes plugins enable noemaloom
 ```
+
+The sync script writes `INSTALL_METADATA.json` with the source path, Git HEAD, dirty-file count, and build/schema hashes. Fresh plugin calls warn when that metadata no longer matches the source checkout, so rerun the script after source commits or local edits that should be reflected in Hermes.
 
 Start a new Hermes session or restart the gateway after enabling the plugin. When a task needs NoemaLoom workflow guidance, load the bundled skill explicitly:
 
@@ -117,8 +122,7 @@ First choose the installation scope and keep the two scopes separate.
 User-level installation:
 - Use this when this user account's Hermes sessions should be able to use NoemaLoom across multiple projects.
 - Verify or install Node.js 20+, Python 3.11+, and npm dependencies in <NOEMALOOM_REPO> with `npm ci --include=dev`.
-- Install the plugin by symlinking or clean-copying <NOEMALOOM_REPO>/hermes-plugin/noemaloom to `${HERMES_HOME:-$HOME/.hermes}/plugins/noemaloom`.
-- If copied instead of symlinked, set `NOEMALOOM_REPO=<NOEMALOOM_REPO>` before starting Hermes.
+- Install the plugin with `python3 scripts/sync-hermes-plugin.py --mode symlink --replace` or `python3 scripts/sync-hermes-plugin.py --mode copy --backup`; the script writes `INSTALL_METADATA.json` so fresh plugin calls can warn if installed provenance no longer matches source HEAD.
 - Enable the plugin with `hermes plugins enable noemaloom`, start a new session or restart the gateway, and load `skill_view(name="noemaloom:usage")` when workflow guidance is needed.
 
 Project-level installation:
