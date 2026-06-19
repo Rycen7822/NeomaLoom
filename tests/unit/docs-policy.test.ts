@@ -2,7 +2,6 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const requiredDocs = [
-  'docs/README.md',
   'docs/architecture.md',
   'docs/mcp-tools.md',
   'docs/data-model.md',
@@ -85,14 +84,14 @@ describe('documentation policy', () => {
     }
   });
 
-  it('README contains exact manual MCP snippets and runtime safety statements', async () => {
-    const readme = await readFile('docs/README.md', 'utf8');
+  it('root README contains exact manual MCP snippets and runtime safety statements', async () => {
+    const readme = await readFile('README.md', 'utf8');
 
     expect(readme).toContain('noemaloom serve --mcp');
     expect(readme).toContain('mcp_servers:');
     expect(readme).toContain('[mcp_servers.noemaloom]');
     expect(readme).toContain('args = ["serve", "--mcp"]');
-    expect(readme).toContain('## NoemaLoom');
+    expect(readme).toContain('# NoemaLoom');
     expect(readme).toContain('.noemaloom/');
     expect(readme).toContain('does not write global config');
     expect(readme).toContain('does not install Git hooks');

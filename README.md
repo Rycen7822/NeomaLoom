@@ -67,12 +67,12 @@ args = ["serve", "--mcp"]
 
 1. Read `skill/noemaloom/SKILL.md` and the relevant `skill/noemaloom/references/*.md` workflow.
 2. Call `nl_status` to inspect index state and safety flags.
-3. Call `nl_refresh` with `target="all"` when indexes are missing or stale.
+3. Call `nl_refresh` with `target="all"` and `mode="safe"` when indexes are missing or stale.
 4. Call `nl_prepare_context` for the task goal.
 5. Call `nl_plan_change` before code or API changes.
 6. Edit files using the agent's native file-editing tools.
 7. Call `nl_verify_task` to catch remaining old terms, broken links, stale anchors, unsynced docs, and mismatches.
-8. Call `nl_refresh` with `target="changed"` after coverage passes.
+8. Call `nl_refresh` with `target="changed"` and `mode="safe"` after coverage passes.
 
 ## Development
 
@@ -95,7 +95,6 @@ The Python test configuration is restricted to this repository's `tests/` direct
 
 ## Documentation
 
-- [Documentation index](docs/README.md)
 - [Architecture](docs/architecture.md)
 - [MCP tools](docs/mcp-tools.md)
 - [Data model](docs/data-model.md)

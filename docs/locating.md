@@ -4,4 +4,4 @@ The context-preparation path normalizes goals into exact terms, symbols, paths, 
 
 Candidate sources are lexical spans, code symbols, Markdown headings and anchors, config keys, tests and examples, feature projection, cross-reference edges, path-role expansion, and old-term sweeps.
 
-Targets include decisions, score breakdowns, read ranges, linked spans, evidence, confidence, and edit risk. The public MCP surface returns these through aggregated workflow tools.
+Targets include decisions, score breakdowns, read ranges, linked spans, evidence, confidence, and edit risk. The public MCP surface returns these through `nl_prepare_context` for task context and `nl_plan_change` for code or API impact planning.

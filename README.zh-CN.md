@@ -68,12 +68,12 @@ args = ["serve", "--mcp"]
 
 1. 阅读 `skill/noemaloom/SKILL.md` 和对应的 `skill/noemaloom/references/*.md` 工作流。
 2. 调用 `nl_status` 检查索引状态和安全标志。
-3. 当索引缺失或过期时，调用 `nl_refresh`，使用 `target="all"`。
+3. 当索引缺失或过期时，调用 `nl_refresh`，使用 `target="all"` 和 `mode="safe"`。
 4. 针对任务目标调用 `nl_prepare_context`。
 5. 代码或 API 变更前调用 `nl_plan_change`。
 6. 由智能体使用原生文件编辑工具修改文件。
 7. 调用 `nl_verify_task` 检查旧术语残留、断链、过期 anchor、未同步文档和 mismatch。
-8. 覆盖验证通过后，调用 `nl_refresh`，使用 `target="changed"`。
+8. 覆盖验证通过后，调用 `nl_refresh`，使用 `target="changed"` 和 `mode="safe"`。
 
 ## 开发
 
@@ -96,7 +96,6 @@ Python 测试配置限定在本仓库的 `tests/` 目录内，最终 Python gate
 
 ## 文档入口
 
-- [文档索引](docs/README.md)
 - [架构](docs/architecture.md)
 - [MCP 工具](docs/mcp-tools.md)
 - [数据模型](docs/data-model.md)

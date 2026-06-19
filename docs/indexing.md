@@ -13,4 +13,4 @@
 9. Derived repository map.
 10. Refresh revision.
 
-`target="changed"` uses the previous inventory snapshot to report changed and deleted paths, then writes a current graph.
+`target="changed"` with `mode="safe"` uses the previous inventory snapshot to report changed and deleted paths, then writes a current graph after verification passes.
