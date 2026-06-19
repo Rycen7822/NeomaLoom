@@ -36,6 +36,9 @@ export type LocatorTarget = {
   editRisk: 'low' | 'medium' | 'high';
   sourcePlanSources: string[];
   estimatedTokens: number;
+  indexed?: boolean;
+  promotionAction?: { target: 'paths'; paths: string[]; reason: string };
+  editBoundary?: unknown;
 };
 
 export type LocatorRunResult = {
@@ -44,6 +47,7 @@ export type LocatorRunResult = {
   graphState: GraphState;
   targets: LocatorTarget[];
   coveragePlan: CoveragePlan;
+  coverage: unknown;
   normalizedQuery: unknown;
   warnings: EnvelopeWarning[];
   tokenBudget: TokenBudget;
@@ -73,6 +77,9 @@ function targetFromRanked(candidate: RankedCandidate): LocatorTarget {
     evidence: candidate.evidence,
     editRisk: decision.editRisk,
     sourcePlanSources: candidate.sourcePlanSources,
+    indexed: candidate.indexed ?? true,
+    promotionAction: candidate.promotionAction,
+    editBoundary: candidate.metadata?.editBoundary,
     estimatedTokens: 30 + candidate.evidence.length * 8 + candidate.linkedSpans.length * 4
   };
   return target;
@@ -112,6 +119,7 @@ export async function runLocator(input: {
     graphState: generated.graphState,
     targets: budgeted.targets,
     coveragePlan,
+    coverage: generated.coverage,
     normalizedQuery: generated.normalizedQuery,
     warnings: budgeted.warnings,
     tokenBudget: budgeted.tokenBudget
@@ -139,10 +147,14 @@ export async function handleNlLocate(input: unknown): Promise<NoemaLoomEnvelope>
     warnings: located.warnings,
     data: {
       targets: located.targets,
+      unindexedCandidates: located.targets.filter(target => target.indexed === false),
+      coverage: located.coverage,
       coveragePlan: located.coveragePlan,
       normalizedQuery: located.normalizedQuery
     },
     evidence: located.targets.flatMap(target => target.evidence),
-    nextActions: ['read must_edit targets with nl_read_span before editing']
+    nextActions: located.targets.some(target => target.indexed === false)
+      ? ['call nl_refresh with target="paths" for unindexedCandidates before span reads', 'rerun nl_prepare_context after promotion']
+      : ['read must_edit targets with nl_read_span before editing']
   });
 }

@@ -17,6 +17,7 @@ function span(input: {
   label: string;
   indexedText?: string;
   metadata?: Record<string, unknown>;
+  anchor?: string;
 }): RepoSpan {
   return {
     spanId: input.spanId,
@@ -29,6 +30,7 @@ function span(input: {
     language: 'text',
     headingPath: input.kind.startsWith('doc.') ? [input.label] : [],
     symbolPath: input.kind.startsWith('code.') ? [input.label] : [],
+    anchor: input.anchor,
     stableLocator: {
       path: input.path,
       kind: input.kind,
@@ -177,5 +179,25 @@ describe('linker confidence', () => {
       ])
     );
     expect(buildCrossReferenceEdges(candidates).every(edge => edge.confidence >= 0.6)).toBe(true);
+  });
+
+  it('links markdown file references to the target file span instead of every span in that file', () => {
+    const candidates = extractLinkCandidatesFromSpans([
+      span({
+        spanId: 'doc:link',
+        path: 'docs/api/client.md',
+        kind: 'doc.link',
+        role: 'canonical_api_doc',
+        label: 'README',
+        metadata: { targetType: 'relative', path: '../../README.md' }
+      }),
+      span({ spanId: 'file:readme', path: 'README.md', kind: 'file', role: 'readme_doc', label: 'README.md' }),
+      span({ spanId: 'doc:readme-heading', path: 'README.md', kind: 'doc.heading', role: 'readme_doc', label: 'Readme', anchor: 'readme' }),
+      span({ spanId: 'doc:readme-paragraph', path: 'README.md', kind: 'doc.paragraph', role: 'readme_doc', label: 'Paragraph' })
+    ]);
+
+    expect(candidates.filter(candidate => candidate.evidenceKind === 'explicit_markdown_link')).toEqual([
+      expect.objectContaining({ sourceSpanId: 'doc:link', targetSpanId: 'file:readme' })
+    ]);
   });
 });

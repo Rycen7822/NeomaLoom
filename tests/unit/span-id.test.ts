@@ -65,6 +65,17 @@ describe('stable span ids', () => {
         sourceId: 'feature-1'
       })
     ).toBe(`feature:${sha1(`${projectRoot}features/client.mdClient setupfeature-1`)}`);
+
+    expect(
+      createTestExampleSpanId({
+        projectRoot,
+        path: 'tests/client.test.ts',
+        kind: 'test.case',
+        testOrExampleName: 'creates client',
+        normalizedTextHash: 'test-a',
+        startLine: 42
+      })
+    ).toBe(`tx:${sha1(`${projectRoot}tests/client.test.tstest.casecreates clienttest-a42`)}`);
   });
 
   it('changes only when formula inputs change', () => {

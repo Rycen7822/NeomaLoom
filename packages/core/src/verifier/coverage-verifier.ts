@@ -6,6 +6,7 @@ import { sweepOldTerms, type OldTermHit } from './old-term-sweep.js';
 import { checkAnchorsAndLinks } from './anchor-checker.js';
 import { checkCodeDocMismatch, type CodeDocMismatch } from './code-doc-mismatch.js';
 import type { BrokenLink, StaleAnchor } from './link-checker.js';
+import { classifyFileRole } from '../files/role-classifier.js';
 
 type Statement = {
   all: (...params: unknown[]) => unknown[];
@@ -33,6 +34,7 @@ export type UnsyncedDocRole = {
   path: string;
   role: string;
   term: string;
+  indexed?: boolean;
 };
 
 export type CoverageVerificationResult = {
@@ -47,13 +49,15 @@ export type CoverageVerificationResult = {
 };
 
 function statusFor(result: Omit<CoverageVerificationResult, 'status'>): CoverageVerificationResult['status'] {
+  const coldUnsyncedDocs = result.unsyncedDocRoles.filter(doc => doc.indexed === false).length;
   const hardFailures =
     result.remainingOldTermHits.length +
     result.staleAnchors.length +
     result.brokenLinks.length +
+    coldUnsyncedDocs +
     result.codeDocMismatches.length;
   const attention =
-    result.unsyncedDocRoles.length +
+    result.unsyncedDocRoles.length - coldUnsyncedDocs +
     result.unverifiedLinkedTests.length +
     result.unreadMustEditTargets.length;
   if (hardFailures > 0) return 'fail';
@@ -65,25 +69,51 @@ function placeholders(values: string[]): string {
   return values.map(() => '?').join(', ');
 }
 
-function readIndexedDocRoles(input: {
+function inventoryDocRolesFromSnapshot(input: {
   projectRoot: string;
   changedPaths: string[];
-}): Array<{ path: string; role: string }> {
+}): Array<{ path: string; role: string; indexed: boolean }> {
+  try {
+    const parsed = JSON.parse(readFileSync(path.join(input.projectRoot, '.noemaloom', 'files', 'inventory.json'), 'utf8')) as {
+      files?: Array<{ path: string }>;
+    };
+    const changed = new Set(input.changedPaths);
+    return Array.isArray(parsed.files)
+      ? parsed.files
+          .filter(file => typeof file.path === 'string' && !changed.has(file.path))
+          .map(file => ({ path: file.path, role: classifyFileRole(file.path), indexed: false }))
+          .filter(file => file.role.endsWith('_doc'))
+          .sort((left, right) => left.role.localeCompare(right.role) || left.path.localeCompare(right.path))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function readInventoryDocRoles(input: {
+  projectRoot: string;
+  changedPaths: string[];
+}): Array<{ path: string; role: string; indexed: boolean }> {
   let db: Database | undefined;
   try {
     db = openDatabase(path.join(input.projectRoot, '.noemaloom', 'spans', 'spans.db'));
     const changed = placeholders(input.changedPaths.length > 0 ? input.changedPaths : ['']);
     return db
       .prepare(
-        `SELECT DISTINCT path, role
-         FROM repo_spans
-         WHERE role LIKE '%_doc'
-           AND path NOT IN (${changed})
-         ORDER BY role ASC, path ASC`
+        `SELECT DISTINCT f.path AS path, f.role AS role,
+                CASE WHEN EXISTS (SELECT 1 FROM repo_spans s WHERE s.path = f.path) THEN 1 ELSE 0 END AS indexed
+         FROM repo_files f
+         WHERE f.role LIKE '%_doc'
+           AND f.path NOT IN (${changed})
+         ORDER BY f.role ASC, f.path ASC`
       )
-      .all(...(input.changedPaths.length > 0 ? input.changedPaths : [''])) as Array<{ path: string; role: string }>;
+      .all(...(input.changedPaths.length > 0 ? input.changedPaths : ['']))
+      .map(row => {
+        const typed = row as { path: string; role: string; indexed: number };
+        return { path: typed.path, role: typed.role, indexed: Boolean(typed.indexed) };
+      });
   } catch {
-    return [];
+    return inventoryDocRolesFromSnapshot(input);
   } finally {
     db?.close();
   }
@@ -98,7 +128,7 @@ function findUnsyncedDocRoles(input: {
     return [];
   }
   const hits: UnsyncedDocRole[] = [];
-  for (const doc of readIndexedDocRoles(input)) {
+  for (const doc of readInventoryDocRoles(input)) {
     let text = '';
     try {
       text = readFileSync(path.join(input.projectRoot, doc.path), 'utf8');
@@ -107,7 +137,7 @@ function findUnsyncedDocRoles(input: {
     }
     for (const term of input.oldTerms) {
       if (term && text.includes(term)) {
-        hits.push({ path: doc.path, role: doc.role, term });
+        hits.push({ path: doc.path, role: doc.role, term, indexed: doc.indexed });
       }
     }
   }

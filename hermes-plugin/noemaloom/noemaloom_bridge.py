@@ -35,6 +35,26 @@ def _json(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False)
 
 
+def _format_exception(exc: BaseException, *, depth: int = 0) -> str:
+    if depth > 4:
+        return "nested exception omitted"
+    parts = [f"{type(exc).__name__}: {exc}"]
+    nested = getattr(exc, "exceptions", None)
+    if nested:
+        for index, inner in enumerate(nested):
+            if isinstance(inner, BaseException):
+                parts.append(f"[{index}] {_format_exception(inner, depth=depth + 1)}")
+            else:
+                parts.append(f"[{index}] {inner}")
+    cause = getattr(exc, "__cause__", None)
+    if isinstance(cause, BaseException):
+        parts.append(f"caused by {_format_exception(cause, depth=depth + 1)}")
+    context = getattr(exc, "__context__", None)
+    if isinstance(context, BaseException) and context is not cause:
+        parts.append(f"context {_format_exception(context, depth=depth + 1)}")
+    return "; ".join(parts)
+
+
 def _error_envelope(tool: str, message: str, *, project_root: str | None = None, code: str = "noemaloom_plugin_error") -> str:
     root = str(Path(project_root or os.getcwd()).resolve())
     return _json(
@@ -228,7 +248,7 @@ def call_noemaloom_tool(tool: str, args: dict[str, Any] | None) -> str:
         timeout = float(os.environ.get("NOEMALOOM_TOOL_TIMEOUT", "120"))
         return _run_async(_call_tool_async(tool, payload, timeout))
     except Exception as exc:
-        return _error_envelope(tool, f"{type(exc).__name__}: {exc}", project_root=project_root)
+        return _error_envelope(tool, _format_exception(exc), project_root=project_root)
 
 
 def make_handler(tool: str):

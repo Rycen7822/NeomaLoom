@@ -163,7 +163,7 @@ describe('derived repository map', () => {
       createConfigSpanId({
         projectRoot: '/repo',
         path: 'package.json',
-        jsonPointerOrTomlPath: '/scripts/test',
+        jsonPointerOrTomlPath: '/scripts/test#label:scripts.test#line:4',
         normalizedValueHash: sha1('"test": "vitest"')
       })
     );

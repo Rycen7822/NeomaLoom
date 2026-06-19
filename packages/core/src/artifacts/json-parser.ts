@@ -22,7 +22,10 @@ export type ArtifactParseResult = {
 export type ArtifactParseInput = {
   path: string;
   text: string;
+  maxSpans?: number;
 };
+
+const DEFAULT_MAX_ARTIFACT_SPANS = 1000;
 
 function sha1(value: string): string {
   return createHash('sha1').update(value).digest('hex');
@@ -95,14 +98,21 @@ function traverseJson(input: {
   pointer: string;
   key?: string;
   arrayItem?: boolean;
+  maxSpans: number;
+  truncated: { value: boolean };
 }): void {
+  if (input.spans.length >= input.maxSpans) {
+    input.truncated.value = true;
+    return;
+  }
   const line = input.arrayItem
     ? lineForNeedle(input.lines, JSON.stringify(input.value))
     : input.key
       ? lineForNeedle(input.lines, JSON.stringify(input.key))
       : 1;
   if (input.arrayItem) {
-    input.spans.push(
+    if (input.spans.length < input.maxSpans) {
+      input.spans.push(
       createArtifactSpan({
         kind: 'config.array_item',
         path: input.path,
@@ -115,10 +125,14 @@ function traverseJson(input: {
           ...primitiveMentions(input.value)
         }
       })
-    );
+      );
+    } else {
+      input.truncated.value = true;
+    }
   } else if (input.key) {
     const schemaFieldName = input.pointer.match(/^\/properties\/([^/]+)$/)?.[1];
-    input.spans.push(
+    if (input.spans.length < input.maxSpans) {
+      input.spans.push(
       createArtifactSpan({
         kind: 'config.entry',
         path: input.path,
@@ -132,11 +146,19 @@ function traverseJson(input: {
           ...(schemaFieldName ? { schemaFieldName } : {})
         }
       })
-    );
+      );
+    } else {
+      input.truncated.value = true;
+    }
+  }
+
+  if (input.spans.length >= input.maxSpans) {
+    input.truncated.value = true;
+    return;
   }
 
   if (Array.isArray(input.value)) {
-    input.value.forEach((child, index) => {
+    for (const [index, child] of input.value.entries()) {
       traverseJson({
         ...input,
         value: child,
@@ -144,7 +166,8 @@ function traverseJson(input: {
         key: String(index),
         arrayItem: true
       });
-    });
+      if (input.truncated.value) break;
+    }
     return;
   }
 
@@ -157,13 +180,15 @@ function traverseJson(input: {
         key,
         arrayItem: false
       });
+      if (input.truncated.value) break;
     }
     return;
   }
 
   const mentions = primitiveMentions(input.value);
   if (!input.arrayItem && Object.keys(mentions).length > 0) {
-    input.spans.push(
+    if (input.spans.length < input.maxSpans) {
+      input.spans.push(
       createArtifactSpan({
         kind: 'config.entry',
         path: input.path,
@@ -175,12 +200,17 @@ function traverseJson(input: {
           ...mentions
         }
       })
-    );
+      );
+    } else {
+      input.truncated.value = true;
+    }
   }
 }
 
 export function parseJsonArtifact(input: ArtifactParseInput): ArtifactParseResult {
   const lines = input.text.split(/\r?\n/);
+  const maxSpans = input.maxSpans ?? DEFAULT_MAX_ARTIFACT_SPANS;
+  const truncated = { value: false };
   const spans: ArtifactSpan[] = [
     createArtifactSpan({
       kind: 'config.file',
@@ -199,12 +229,14 @@ export function parseJsonArtifact(input: ArtifactParseInput): ArtifactParseResul
       lines,
       spans,
       value,
-      pointer: ''
+      pointer: '',
+      maxSpans,
+      truncated
     });
     return {
       path: input.path,
       spans,
-      warnings: []
+      warnings: truncated.value ? [`Artifact span limit reached (${maxSpans}); remaining JSON entries omitted.`] : []
     };
   } catch (error) {
     return {

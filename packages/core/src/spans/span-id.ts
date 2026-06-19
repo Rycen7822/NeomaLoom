@@ -49,9 +49,10 @@ export function createTestExampleSpanId(input: {
   kind: Extract<SpanKind, `test.${string}` | `example.${string}`>;
   testOrExampleName: string;
   normalizedTextHash: string;
+  startLine?: number;
 }): string {
   return `tx:${sha1(
-    `${root(input.projectRoot)}${input.path}${input.kind}${input.testOrExampleName}${input.normalizedTextHash}`
+    `${root(input.projectRoot)}${input.path}${input.kind}${input.testOrExampleName}${input.normalizedTextHash}${input.startLine ?? ''}`
   )}`;
 }
 

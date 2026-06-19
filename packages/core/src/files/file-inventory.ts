@@ -36,6 +36,7 @@ export type BuildFileInventoryOptions = {
   projectRoot: string;
   config?: NoemaLoomConfig;
   includeVendor?: boolean;
+  loadIndexedText?: boolean;
 };
 
 function toRepoPath(repoPath: string): string {
@@ -58,7 +59,8 @@ async function createInventoryFile(
   projectRoot: string,
   repoPath: string,
   maxFileBytes: number,
-  indexedAt: number
+  indexedAt: number,
+  loadIndexedText: boolean
 ): Promise<InventoryFile> {
   const absolutePath = path.join(projectRoot, repoPath);
   const fileStat = await stat(absolutePath);
@@ -70,7 +72,7 @@ async function createInventoryFile(
   if (!oversized) {
     const content = await readFile(absolutePath);
     contentHash = sha1(content);
-    indexedText = content.toString('utf8');
+    indexedText = loadIndexedText ? content.toString('utf8') : '';
   }
 
   return {
@@ -105,6 +107,7 @@ export async function buildFileInventory(options: BuildFileInventoryOptions): Pr
   const ignoredPaths: string[] = [];
   const files: InventoryFile[] = [];
   const indexedAt = Date.now();
+  const loadIndexedText = options.loadIndexedText ?? true;
 
   for (const repoPath of candidates) {
     if (ignoreMatcher.ignores(repoPath)) {
@@ -117,7 +120,7 @@ export async function buildFileInventory(options: BuildFileInventoryOptions): Pr
       continue;
     }
 
-    files.push(await createInventoryFile(projectRoot, repoPath, config.indexing.maxFileBytes, indexedAt));
+    files.push(await createInventoryFile(projectRoot, repoPath, config.indexing.maxFileBytes, indexedAt, loadIndexedText));
   }
 
   return {

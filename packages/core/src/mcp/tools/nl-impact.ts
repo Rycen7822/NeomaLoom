@@ -29,13 +29,15 @@ export async function handleNlImpact(input: unknown): Promise<NoemaLoomEnvelope>
     tool: 'nl_impact',
     projectRoot,
     graphRevision,
-    graphState: 'ready',
+    graphState: impact.impactCoverage === 'full' ? 'ready' : 'partial',
     tokenBudget: {
       requested: 2500,
       used: Math.ceil(JSON.stringify(impact).length / 4),
       truncated: false
     },
     data: impact,
-    nextActions: ['read impacted source, docs, config, tests, examples before editing']
+    nextActions: impact.requiredActions.length > 0
+      ? [...impact.requiredActions, 'read impacted source, docs, config, tests, examples before editing']
+      : ['read impacted source, docs, config, tests, examples before editing']
   });
 }

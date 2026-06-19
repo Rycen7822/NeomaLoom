@@ -106,6 +106,27 @@ describe('nl_refresh target all', () => {
     expect(scalar(dbPath, "SELECT COUNT(*) AS value FROM repo_spans WHERE kind = 'code.callsite' AND label = 'foo'")).toBe(2);
   });
 
+  it('keeps JSON config key and env-var mention spans distinct during full refresh', async () => {
+    const projectRoot = await createProject();
+    await writeProjectFile(
+      projectRoot,
+      'scratch/spatialclaw/report.json',
+      JSON.stringify({ direct_source_links: [{ chosen: 'HEAD' }, { chosen: 'HEAD' }] }, null, 2)
+    );
+
+    const result = await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'all',
+      mode: 'safe'
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.graphState).toBe('ready');
+    const dbPath = path.join(projectRoot, '.noemaloom', 'spans', 'spans.db');
+    expect(scalar(dbPath, "SELECT COUNT(*) AS value FROM repo_spans WHERE kind = 'config.entry' AND label = 'chosen'")).toBe(2);
+    expect(scalar(dbPath, "SELECT COUNT(*) AS value FROM repo_spans WHERE kind = 'config.entry' AND label = 'HEAD'")).toBe(2);
+  });
+
   it('refreshes only file inventory for target files without touching code/span DBs', async () => {
     const projectRoot = await createProject();
     await writeProjectFile(
@@ -131,6 +152,25 @@ describe('nl_refresh target all', () => {
     await expect(access(path.join(projectRoot, '.noemaloom', 'files', 'inventory.sqlite'))).resolves.toBeUndefined();
     await expect(access(path.join(projectRoot, '.noemaloom', 'fact', 'codegraph.db'))).rejects.toThrow();
     await expect(access(path.join(projectRoot, '.noemaloom', 'spans', 'spans.db'))).rejects.toThrow();
+  });
+
+  it('invalidates stale deep indexes when target files is run after a full refresh', async () => {
+    const projectRoot = await createProject();
+    await callRegisteredTool('nl_refresh', { projectPath: projectRoot, target: 'all', mode: 'safe' });
+    await expect(access(path.join(projectRoot, '.noemaloom', 'spans', 'spans.db'))).resolves.toBeUndefined();
+
+    const result = await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'files',
+      mode: 'safe'
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({ coverage: { inventory: 'full', deepSpans: 'none' } });
+    await expect(access(path.join(projectRoot, '.noemaloom', 'spans', 'spans.db'))).rejects.toThrow();
+    await expect(access(path.join(projectRoot, '.noemaloom', 'fact', 'codegraph.db'))).rejects.toThrow();
+    const status = await callRegisteredTool('nl_status', { projectPath: projectRoot });
+    expect(status.data).toMatchObject({ coverage: { inventory: 'full', deepSpans: 'none' } });
   });
 
   it('can refresh the same graph twice without colliding revision ids', async () => {

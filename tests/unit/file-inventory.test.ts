@@ -71,6 +71,9 @@ describe('file inventory', () => {
     expect(byPath.get('examples/basic.ts')?.role).toBe('example_doc');
     expect(byPath.get('paper/notes.md')?.role).toBe('paper_doc');
     expect(byPath.get('notes/run.md')?.role).toBe('experiment_note_doc');
+    expect(classifyFileRole('DeepScientist/quests/001/experiments/stage10/run.json')).toBe('experiment_note_doc');
+    expect(classifyFileRole('DeepScientist/quests/001/.ds/bash_exec/terminal.log')).toBe('experiment_note_doc');
+    expect(classifyFileRole('DeepScientist/quests/001/resources/code/github/huggingface__transformers/src/transformers/modeling_utils.py')).toBe('vendor_file');
     expect(byPath.get('design/arch.md')?.role).toBe('design_doc');
     expect(byPath.get('src/app.ts')?.role).toBe('source_file');
     expect(byPath.get('tests/app.test.ts')?.role).toBe('test_file');
@@ -102,6 +105,22 @@ describe('file inventory', () => {
       indexedText: ''
     });
     expect(inventory.files[0].contentHash).toMatch(/^oversized:/);
+  });
+
+  it('can build metadata-only inventory without retaining indexed file text', async () => {
+    const projectRoot = await createTempProject('noemaloom-metadata-inventory-');
+    await writeProjectFile(projectRoot, 'src/app.ts', 'export const app = 1;\n');
+
+    const full = await buildFileInventory({ projectRoot });
+    const metadataOnly = await buildFileInventory({ projectRoot, loadIndexedText: false });
+
+    expect(full.files[0].indexedText).toBe('export const app = 1;\n');
+    expect(metadataOnly.files[0]).toMatchObject({
+      path: 'src/app.ts',
+      oversized: false,
+      indexedText: ''
+    });
+    expect(metadataOnly.files[0].contentHash).toBe(full.files[0].contentHash);
   });
 
   it('applies ignore globs and excludes vendor unless explicitly requested', async () => {

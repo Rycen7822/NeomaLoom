@@ -22,6 +22,7 @@ type LocateData = {
 
 type ImpactData = {
   requiredVerification?: string[];
+  requiredActions?: string[];
 };
 
 export const nlPlanChangeInputSchema = z
@@ -83,9 +84,12 @@ export async function handleNlPlanChange(input: unknown): Promise<NoemaLoomEnvel
       trace: trace?.data ?? null,
       impact: impact.data,
       requiredVerification: impactData.requiredVerification ?? [],
+      requiredActions: impactData.requiredActions ?? [],
       steps: summarizeSteps(envelopes)
     },
     evidence: combineEvidence(envelopes),
-    nextActions: ['read impacted files with native tools', 'call nl_prepare_context when edit targets need ordering']
+    nextActions: (impactData.requiredActions?.length ?? 0) > 0
+      ? [...(impactData.requiredActions ?? []), 'call nl_prepare_context when edit targets need ordering']
+      : ['read impacted files with native tools', 'call nl_prepare_context when edit targets need ordering']
   });
 }

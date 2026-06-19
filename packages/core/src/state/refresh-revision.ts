@@ -8,6 +8,7 @@ import { assertWritableStatePath, appendFileInsideStateDir, writeFileInsideState
 import { applySpanMigrations } from '../spans/db.js';
 import type { RepoEdge, RepoSpan } from '../spans/types.js';
 import { ensureStateDir } from './state-dir.js';
+import { resolveNoemaLoomPaths } from './paths.js';
 
 type Statement = {
   run: (...params: unknown[]) => unknown;
@@ -22,6 +23,25 @@ type Database = {
 };
 
 const require = createRequire(import.meta.url);
+
+export type IndexCoverage = {
+  inventory: 'missing' | 'full';
+  deepSpans: 'none' | 'scoped' | 'full';
+  hotsetRevision: string | null;
+  hotFiles: number;
+  coldFiles: number;
+  unindexedCandidateCount?: number;
+  updatedAt?: number;
+};
+
+export const EMPTY_INDEX_COVERAGE: IndexCoverage = {
+  inventory: 'missing',
+  deepSpans: 'none',
+  hotsetRevision: null,
+  hotFiles: 0,
+  coldFiles: 0,
+  unindexedCandidateCount: 0
+};
 
 function openDatabase(filename: string): Database {
   const sqlite = require('node:sqlite') as { DatabaseSync: new (filename: string) => Database };
@@ -54,6 +74,12 @@ async function unlinkIfExists(targetPath: string): Promise<void> {
   }
 }
 
+async function unlinkSqliteTempIfExists(targetPath: string): Promise<void> {
+  for (const candidate of [targetPath, `${targetPath}-journal`, `${targetPath}-wal`, `${targetPath}-shm`]) {
+    await unlinkIfExists(candidate);
+  }
+}
+
 function resetSchema(db: Database): void {
   db.exec(`
     DROP TABLE IF EXISTS repo_files;
@@ -61,6 +87,7 @@ function resetSchema(db: Database): void {
     DROP TABLE IF EXISTS repo_edges;
     DROP TABLE IF EXISTS repo_evidence;
     DROP TABLE IF EXISTS refresh_revisions;
+    DROP TABLE IF EXISTS index_metadata;
     DROP TABLE IF EXISTS repo_spans_fts;
   `);
   applySpanMigrations(db);
@@ -111,14 +138,57 @@ export function createGraphRevision(input: {
 }
 
 export async function readLatestRevision(projectRoot: string): Promise<string | undefined> {
-  const paths = await ensureStateDir(projectRoot);
+  const paths = resolveNoemaLoomPaths(projectRoot);
+  const dbPath = path.join(paths.spansDir, 'spans.db');
+  if (!(await fileExists(dbPath))) {
+    return undefined;
+  }
   try {
-    const db = openDatabase(path.join(paths.spansDir, 'spans.db'));
+    const db = openDatabase(dbPath);
     try {
       const row = db
         .prepare('SELECT graph_revision AS graphRevision FROM refresh_revisions ORDER BY finished_at DESC LIMIT 1')
         .get() as { graphRevision?: string } | undefined;
       return row?.graphRevision;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+export async function readIndexCoverage(projectRoot: string): Promise<IndexCoverage | undefined> {
+  const paths = resolveNoemaLoomPaths(projectRoot);
+  const dbPath = path.join(paths.spansDir, 'spans.db');
+  if (!(await fileExists(dbPath))) {
+    return undefined;
+  }
+  try {
+    const db = openDatabase(dbPath);
+    try {
+      const row = db.prepare("SELECT value_json AS valueJson FROM index_metadata WHERE key = 'coverage'").get() as
+        | { valueJson?: string }
+        | undefined;
+      if (!row?.valueJson) {
+        return undefined;
+      }
+      const parsed = JSON.parse(row.valueJson) as Partial<IndexCoverage>;
+      if (parsed.inventory !== 'full' && parsed.inventory !== 'missing') {
+        return undefined;
+      }
+      if (!['none', 'scoped', 'full'].includes(String(parsed.deepSpans))) {
+        return undefined;
+      }
+      return {
+        inventory: parsed.inventory,
+        deepSpans: parsed.deepSpans as IndexCoverage['deepSpans'],
+        hotsetRevision: typeof parsed.hotsetRevision === 'string' ? parsed.hotsetRevision : null,
+        hotFiles: Number(parsed.hotFiles ?? 0),
+        coldFiles: Number(parsed.coldFiles ?? 0),
+        unindexedCandidateCount: Number(parsed.unindexedCandidateCount ?? 0),
+        updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : undefined
+      };
     } finally {
       db.close();
     }
@@ -137,6 +207,7 @@ export async function writeRefreshRevision(input: {
   spans: RepoSpan[];
   edges: RepoEdge[];
   warnings: string[];
+  coverage?: IndexCoverage;
 }): Promise<string> {
   const paths = await ensureStateDir(input.projectRoot);
   const dbPath = assertWritableStatePath(paths.projectRoot, path.join(paths.spansDir, 'spans.db'));
@@ -153,12 +224,15 @@ export async function writeRefreshRevision(input: {
       existingDb.close();
     }
   }
-  await unlinkIfExists(tempDbPath);
+  await unlinkSqliteTempIfExists(tempDbPath);
   const db = openDatabase(tempDbPath);
   let wroteSuccessfully = false;
+  let transactionActive = false;
 
   try {
     resetSchema(db);
+    db.exec('PRAGMA synchronous = OFF; PRAGMA journal_mode = MEMORY; PRAGMA temp_store = MEMORY; BEGIN IMMEDIATE;');
+    transactionActive = true;
     const insertFile = db.prepare(
       `INSERT INTO repo_files
         (path, absolute_path, role, language, content_hash, size_bytes, modified_at, indexed_at, generated, ignored, metadata_json)
@@ -184,6 +258,11 @@ export async function writeRefreshRevision(input: {
       `INSERT INTO refresh_revisions
         (graph_revision, project_root, target, started_at, finished_at, file_count, span_count, edge_count, warnings_json)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    const upsertMetadata = db.prepare(
+      `INSERT INTO index_metadata (key, value_json, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`
     );
 
     for (const file of input.files) {
@@ -273,11 +352,24 @@ export async function writeRefreshRevision(input: {
       input.edges.length,
       JSON.stringify(input.warnings)
     );
+    if (input.coverage) {
+      const updatedAt = input.coverage.updatedAt ?? input.finishedAt;
+      upsertMetadata.run('coverage', JSON.stringify({ ...input.coverage, updatedAt }), updatedAt);
+    }
+    db.exec('COMMIT');
+    transactionActive = false;
     wroteSuccessfully = true;
   } finally {
+    if (transactionActive) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        // Best effort: failed temp databases are removed below.
+      }
+    }
     db.close();
     if (!wroteSuccessfully) {
-      await unlinkIfExists(tempDbPath);
+      await unlinkSqliteTempIfExists(tempDbPath);
     }
   }
 
@@ -286,7 +378,7 @@ export async function writeRefreshRevision(input: {
   await writeFileInsideStateDir(
     paths.projectRoot,
     path.join(paths.logsDir, 'latest-revision.json'),
-    `${JSON.stringify({ graphRevision: input.graphRevision, target: input.target }, null, 2)}\n`
+    `${JSON.stringify({ graphRevision: input.graphRevision, target: input.target, coverage: input.coverage ?? null }, null, 2)}\n`
   );
   await appendFileInsideStateDir(
     paths.projectRoot,
@@ -297,6 +389,7 @@ export async function writeRefreshRevision(input: {
       fileCount: input.files.length,
       spanCount: input.spans.length,
       edgeCount: input.edges.length,
+      coverage: input.coverage ?? null,
       warnings: input.warnings
     })}\n`
   );

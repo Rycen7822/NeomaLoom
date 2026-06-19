@@ -46,6 +46,9 @@ export type TraceGraph = {
   nodes: TraceNode[];
   edges: TraceEdge[];
   seedSpanIds: string[];
+  impactCoverage: 'full' | 'scoped' | 'none';
+  missingUnindexedPaths: string[];
+  requiredActions: string[];
 };
 
 type SpanRow = {
@@ -63,6 +66,11 @@ type SpanRow = {
   metadata_json: string;
 };
 
+type FileRow = {
+  path: string;
+  role: string;
+};
+
 type EdgeRow = {
   edge_id: string;
   source_span_id: string;
@@ -71,6 +79,10 @@ type EdgeRow = {
   confidence: number;
   source: string;
   evidence_json: string;
+};
+
+type CoverageRow = {
+  value_json: string;
 };
 
 function parseJson<T>(value: string, fallback: T): T {
@@ -106,7 +118,22 @@ function rowToEdge(row: EdgeRow): TraceEdge {
   };
 }
 
-function readGraphRows(projectRoot: string): { spans: SpanRow[]; edges: EdgeRow[] } {
+function readCoverage(db: Database, spans: SpanRow[], files: FileRow[]): 'full' | 'scoped' | 'none' {
+  try {
+    const rows = db.prepare("SELECT value_json FROM index_metadata WHERE key = 'coverage'").all() as CoverageRow[];
+    const parsed = rows[0]?.value_json ? parseJson<{ deepSpans?: string }>(rows[0].value_json, {}) : {};
+    if (parsed.deepSpans === 'full' || parsed.deepSpans === 'scoped' || parsed.deepSpans === 'none') {
+      return parsed.deepSpans;
+    }
+  } catch {
+    // Old databases predate coverage metadata.
+  }
+  if (spans.length === 0) return 'none';
+  const indexedPaths = new Set(spans.map(span => span.path));
+  return files.some(file => !indexedPaths.has(file.path)) ? 'scoped' : 'full';
+}
+
+function readGraphRows(projectRoot: string): { spans: SpanRow[]; edges: EdgeRow[]; files: FileRow[]; coverage: 'full' | 'scoped' | 'none' } {
   const db = openDatabase(path.join(projectRoot, '.noemaloom', 'spans', 'spans.db'));
   try {
     const spans = db
@@ -124,7 +151,14 @@ function readGraphRows(projectRoot: string): { spans: SpanRow[]; edges: EdgeRow[
          ORDER BY confidence DESC, source_span_id ASC, target_span_id ASC`
       )
       .all() as EdgeRow[];
-    return { spans, edges };
+    const files = db
+      .prepare(
+        `SELECT path, role
+         FROM repo_files
+         ORDER BY path ASC`
+      )
+      .all() as FileRow[];
+    return { spans, edges, files, coverage: readCoverage(db, spans, files) };
   } finally {
     db.close();
   }
@@ -163,6 +197,19 @@ function relationAllowed(edge: EdgeRow, relationTypes: string[]): boolean {
   return relationTypes.length === 0 || relationTypes.includes('all') || relationTypes.includes(edge.relation);
 }
 
+function missingUnindexedPaths(files: FileRow[], spans: SpanRow[], coverage: 'full' | 'scoped' | 'none'): string[] {
+  if (coverage === 'full') {
+    return [];
+  }
+  const indexedPaths = new Set(spans.map(span => span.path));
+  return files
+    .filter(file => !indexedPaths.has(file.path))
+    .filter(file => String(file.role).endsWith('_doc') || ['test_file', 'config_file', 'schema_file', 'example_doc'].includes(file.role))
+    .map(file => file.path)
+    .sort()
+    .slice(0, 30);
+}
+
 export function traceGraph(input: {
   projectRoot: string;
   target: string;
@@ -171,7 +218,7 @@ export function traceGraph(input: {
   depth?: number;
   relationTypes?: string[];
 }): TraceGraph {
-  const { spans, edges } = readGraphRows(input.projectRoot);
+  const { spans, edges, files, coverage } = readGraphRows(input.projectRoot);
   const spansById = new Map(spans.map(span => [span.span_id, span]));
   const relationTypes = input.relationTypes ?? ['all'];
   const allowedEdges = edges.filter(edge => relationAllowed(edge, relationTypes));
@@ -202,6 +249,7 @@ export function traceGraph(input: {
     }
   }
 
+  const missingPaths = missingUnindexedPaths(files, spans, coverage);
   return {
     nodes: [...includedNodeIds]
       .map(spanId => spansById.get(spanId))
@@ -212,6 +260,9 @@ export function traceGraph(input: {
       .filter(edge => includedEdgeIds.has(edge.edge_id))
       .map(rowToEdge)
       .sort((left, right) => right.confidence - left.confidence || left.sourceSpanId.localeCompare(right.sourceSpanId)),
-    seedSpanIds
+    seedSpanIds,
+    impactCoverage: coverage,
+    missingUnindexedPaths: missingPaths,
+    requiredActions: missingPaths.length > 0 ? ['promote missingUnindexedPaths with nl_refresh target="paths" before final impact claims'] : []
   };
 }

@@ -61,9 +61,19 @@ NL_REFRESH_SCHEMA = {
             "projectPath": PROJECT_PATH,
             "target": {
                 "type": "string",
-                "enum": ["all", "changed", "files", "code", "docs", "artifacts", "tests", "features", "links", "map"],
+                "enum": ["all", "changed", "files", "paths", "hotset", "code", "docs", "artifacts", "tests", "features", "links", "map"],
                 "default": "all",
-                "description": "Index family to refresh. Use changed after verification passes; use all when indexes are missing.",
+                "description": "Index family to refresh. Use files for inventory-only, paths to promote exact files into the scoped hotset, hotset to refresh the current hotset, changed after verification passes, and all when a full index is needed.",
+            },
+            "paths": {
+                "type": "array",
+                "items": {"type": "string"},
+                "default": [],
+                "description": "Repository-relative paths to promote when target is paths.",
+            },
+            "promotionReason": {
+                "type": "string",
+                "description": "Optional reason recorded in the hotset manifest when target is paths.",
             },
             "mode": {
                 "type": "string",

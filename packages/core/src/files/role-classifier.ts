@@ -16,9 +16,10 @@ export function classifyFileRole(repoPath: string): FileRole {
     return 'canonical_api_doc';
   }
   if (/^docs\/tutorial[^/]*\//.test(normalized)) return 'tutorial_doc';
+  if (normalized.includes('/resources/code/') || normalized.startsWith('resources/code/')) return 'vendor_file';
   if (normalized.startsWith('examples/')) return 'example_doc';
   if (normalized.startsWith('paper/')) return 'paper_doc';
-  if (normalized.startsWith('notes/') || normalized.startsWith('experiments/')) return 'experiment_note_doc';
+  if (normalized.startsWith('notes/') || normalized.startsWith('experiments/') || normalized.includes('/experiments/') || normalized.includes('/.ds/')) return 'experiment_note_doc';
   if (normalized.startsWith('design/') || normalized.startsWith('docs/design/')) return 'design_doc';
   if (normalized.startsWith('src/') || normalized.startsWith('lib/') || /^packages\/[^/]+\/src\//.test(normalized)) {
     return 'source_file';

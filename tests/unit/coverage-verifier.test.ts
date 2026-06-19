@@ -1,13 +1,47 @@
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+import { applySpanMigrations } from '../../packages/core/src/spans/db.js';
 import { verifyCoverage } from '../../packages/core/src/verifier/coverage-verifier.js';
+
+const require = createRequire(import.meta.url);
+const { DatabaseSync } = require('node:sqlite') as {
+  DatabaseSync: new (filename: string) => {
+    exec: (sql: string) => void;
+    prepare: (sql: string) => { run: (...params: unknown[]) => void };
+    close: () => void;
+  };
+};
 
 async function writeProjectFile(projectRoot: string, repoPath: string, text: string): Promise<void> {
   const absolutePath = path.join(projectRoot, repoPath);
   await mkdir(path.dirname(absolutePath), { recursive: true });
   await writeFile(absolutePath, text, 'utf8');
+}
+
+async function createInventoryOnlySpanDb(projectRoot: string): Promise<void> {
+  const spansDir = path.join(projectRoot, '.noemaloom', 'spans');
+  await mkdir(spansDir, { recursive: true });
+  const db = new DatabaseSync(path.join(spansDir, 'spans.db'));
+  try {
+    applySpanMigrations(db);
+    const insertFile = db.prepare(
+      `INSERT INTO repo_files
+        (path, absolute_path, role, language, content_hash, size_bytes, modified_at, indexed_at, generated, ignored, metadata_json)
+       VALUES (?, ?, ?, 'markdown', ?, 64, 0, 0, 0, 0, '{}')`
+    );
+    db.exec('BEGIN');
+    insertFile.run('docs/api/client.md', path.join(projectRoot, 'docs/api/client.md'), 'canonical_api_doc', 'changed-hash');
+    insertFile.run('README.md', path.join(projectRoot, 'README.md'), 'readme_doc', 'cold-hash');
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  } finally {
+    db.close();
+  }
 }
 
 describe('coverage verifier', () => {
@@ -66,5 +100,25 @@ describe('coverage verifier', () => {
       unreadMustEditTargets: [],
       status: 'pass'
     });
+  });
+
+  it('fails when a cold inventory doc still contains an old term outside the scoped span set', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-coverage-scoped-'));
+    await writeProjectFile(projectRoot, 'docs/api/client.md', '# Client API\n\nThe `timeoutMs` option is documented here.\n');
+    await writeProjectFile(projectRoot, 'README.md', '# Demo\n\nStill references `legacyTimeout`.\n');
+    await createInventoryOnlySpanDb(projectRoot);
+
+    const result = await verifyCoverage({
+      projectRoot,
+      goal: 'Rename legacyTimeout to timeoutMs in docs',
+      changedPaths: ['docs/api/client.md'],
+      oldTerms: ['legacyTimeout'],
+      newTerms: ['timeoutMs']
+    });
+
+    expect(result.status).toBe('fail');
+    expect(result.unsyncedDocRoles).toEqual([
+      expect.objectContaining({ path: 'README.md', role: 'readme_doc', term: 'legacyTimeout' })
+    ]);
   });
 });

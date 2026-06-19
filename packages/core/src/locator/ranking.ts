@@ -28,6 +28,8 @@ export type LocatorCandidate = {
   anchor?: string;
   stableLocator?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+  indexed?: boolean;
+  promotionAction?: { target: 'paths'; paths: string[]; reason: string };
 };
 
 export type ScoreBreakdown = {

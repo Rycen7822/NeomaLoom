@@ -187,4 +187,36 @@ describe('safe tool surface', () => {
       expect.arrayContaining([expect.objectContaining({ code: 'span_index_unreadable', severity: 'error' })])
     );
   });
+
+  it('reports stale refresh locks and the last refresh failure from nl_status', async () => {
+    const projectRoot = await createTempProject();
+    await mkdir(path.join(projectRoot, '.noemaloom', 'locks'), { recursive: true });
+    await mkdir(path.join(projectRoot, '.noemaloom', 'logs'), { recursive: true });
+    await writeFile(
+      path.join(projectRoot, '.noemaloom', 'locks', 'refresh.lock'),
+      `${JSON.stringify({ pid: 99999999, createdAt: new Date(0).toISOString() })}\n`
+    );
+    await writeFile(
+      path.join(projectRoot, '.noemaloom', 'logs', 'latest-failure.json'),
+      `${JSON.stringify({ tool: 'nl_refresh', target: 'all', message: 'boom', failedAt: new Date(0).toISOString() })}\n`
+    );
+
+    const result = await callRegisteredTool('nl_status', {
+      projectPath: projectRoot,
+      includeRepositoryMap: false
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.graphState).toBe('error');
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'refresh_lock_stale', severity: 'error' }),
+        expect.objectContaining({ code: 'refresh_last_failure', severity: 'error' })
+      ])
+    );
+    expect(result.data).toMatchObject({
+      refreshLock: { state: 'stale', pid: 99999999 },
+      lastRefreshFailure: { tool: 'nl_refresh', target: 'all', message: 'boom' }
+    });
+  });
 });

@@ -1,4 +1,6 @@
-import { buildFileInventory } from '../files/file-inventory.js';
+import { readFile } from 'node:fs/promises';
+
+import { buildFileInventory, type FileInventory, type InventoryFile } from '../files/file-inventory.js';
 import { detectCodeLanguage, isCodeFactLanguage } from './language-detect.js';
 import { writeCodeGraphDb, searchCodeGraphDb, type CodeFactSearchResult } from './codegraph-db.js';
 import { extractCodeFacts, type CodeFactEdge, type CodeFactSpan } from './extractor.js';
@@ -7,6 +9,9 @@ import { resolveCodeFactEdges } from './reference-resolver.js';
 
 export type IndexCodeFactsInput = {
   projectRoot: string;
+  inventory?: FileInventory;
+  includeExperimentNotes?: boolean;
+  includeVendor?: boolean;
 };
 
 export type IndexCodeFactsResult = {
@@ -15,22 +20,39 @@ export type IndexCodeFactsResult = {
   edges: CodeFactEdge[];
 };
 
+async function indexedTextForFile(file: InventoryFile): Promise<string> {
+  if (file.oversized) {
+    return '';
+  }
+  return file.indexedText || readFile(file.absolutePath, 'utf8');
+}
+
 export async function indexCodeFacts(input: IndexCodeFactsInput): Promise<IndexCodeFactsResult> {
-  const inventory = await buildFileInventory({ projectRoot: input.projectRoot });
+  const inventory = input.inventory ?? (await buildFileInventory({ projectRoot: input.projectRoot, loadIndexedText: false }));
   const codeFiles = inventory.files
     .map(file => ({
       ...file,
       language: detectCodeLanguage(file.path)
     }))
-    .filter(file => !file.oversized && isCodeFactLanguage(file.language));
-  const spans = codeFiles.flatMap(file =>
-    extractCodeFacts({
-      projectRoot: input.projectRoot,
-      path: file.path,
-      language: file.language,
-      text: file.indexedText
-    }).spans
+    .filter(
+      file =>
+        !file.oversized &&
+        (input.includeExperimentNotes || file.role !== 'experiment_note_doc') &&
+        file.role !== 'generated_file' &&
+        (input.includeVendor || file.role !== 'vendor_file') &&
+        isCodeFactLanguage(file.language)
+    );
+  const spanGroups = await Promise.all(
+    codeFiles.map(async file =>
+      extractCodeFacts({
+        projectRoot: input.projectRoot,
+        path: file.path,
+        language: file.language,
+        text: await indexedTextForFile(file)
+      }).spans
+    )
   );
+  const spans = spanGroups.flat();
   const edges = resolveCodeFactEdges(spans);
   const projected = projectCodeFacts({ spans, edges });
   const dbPath = await writeCodeGraphDb({

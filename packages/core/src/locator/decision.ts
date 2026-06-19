@@ -11,6 +11,15 @@ export function decideCandidate(candidate: RankedCandidate): CandidateDecision {
   const confidence = Math.max(0, Math.min(1, candidate.score / 100));
   const editRisk = candidate.boundary.risk;
 
+  if (candidate.indexed === false) {
+    return {
+      decision: 'inspect_only',
+      confidence,
+      reason: 'candidate exists only in inventory; promote with nl_refresh target="paths" before span reads or final edit decisions',
+      editRisk: 'medium'
+    };
+  }
+
   if (candidate.boundary.risk === 'high' || candidate.boundary.stale) {
     return {
       decision: 'inspect_only',

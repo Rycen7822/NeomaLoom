@@ -4,6 +4,9 @@ import path from 'node:path';
 import { z } from 'zod';
 
 import { loadOrCreateConfig } from '../../config/config-loader.js';
+import { readRefreshFailure } from '../../state/refresh-failure.js';
+import { inspectRefreshLock } from '../../state/refresh-lock.js';
+import { readIndexCoverage, type IndexCoverage } from '../../state/refresh-revision.js';
 import { resolveNoemaLoomPaths } from '../../state/paths.js';
 import { createEnvelope, resolveProjectRootFromInput, type EnvelopeWarning, type NoemaLoomEnvelope } from '../envelope.js';
 
@@ -167,6 +170,49 @@ function collectWarnings(...items: Array<{ warning?: EnvelopeWarning }>): Envelo
   return items.flatMap(item => (item.warning ? [item.warning] : []));
 }
 
+function statusCoverage(input: {
+  fileInventory: { state: IndexState; files: number };
+  spanIndex: { state: IndexState; counts: Record<string, number> };
+  metadata?: IndexCoverage;
+}): IndexCoverage {
+  if (input.metadata) {
+    return {
+      ...input.metadata,
+      inventory: input.fileInventory.state === 'ready' ? 'full' : input.metadata.inventory,
+      coldFiles: input.fileInventory.state === 'ready' && input.metadata.deepSpans === 'full' ? 0 : input.metadata.coldFiles
+    };
+  }
+  if (input.fileInventory.state === 'ready' && input.spanIndex.state === 'missing') {
+    return {
+      inventory: 'full',
+      deepSpans: 'none',
+      hotsetRevision: null,
+      hotFiles: 0,
+      coldFiles: input.fileInventory.files,
+      unindexedCandidateCount: input.fileInventory.files
+    };
+  }
+  if (input.fileInventory.state === 'ready' && input.spanIndex.state === 'ready') {
+    const deepSpans = input.spanIndex.counts.spans > 0 ? 'full' : 'none';
+    return {
+      inventory: 'full',
+      deepSpans,
+      hotsetRevision: null,
+      hotFiles: deepSpans === 'full' ? input.fileInventory.files : 0,
+      coldFiles: deepSpans === 'full' ? 0 : input.fileInventory.files,
+      unindexedCandidateCount: deepSpans === 'full' ? 0 : input.fileInventory.files
+    };
+  }
+  return {
+    inventory: 'missing',
+    deepSpans: 'none',
+    hotsetRevision: null,
+    hotFiles: 0,
+    coldFiles: 0,
+    unindexedCandidateCount: 0
+  };
+}
+
 export async function handleNlStatus(input: unknown): Promise<NoemaLoomEnvelope> {
   const parsed = nlStatusInputSchema.parse(input ?? {});
   const projectRoot = resolveProjectRootFromInput(parsed);
@@ -191,7 +237,7 @@ export async function handleNlStatus(input: unknown): Promise<NoemaLoomEnvelope>
   }
 
   const paths = resolveNoemaLoomPaths(projectRoot);
-  const [fileInventory, spanIndex, factIndex, documentIndex, featureProjection, derivedMap] = await Promise.all([
+  const [fileInventory, spanIndex, factIndex, documentIndex, featureProjection, derivedMap, refreshLock, lastRefreshFailure, coverageMetadata] = await Promise.all([
     countInventoryFiles(path.join(paths.filesDir, 'inventory.sqlite')),
     readSqliteCounts({
       targetPath: path.join(paths.spansDir, 'spans.db'),
@@ -212,18 +258,48 @@ export async function handleNlStatus(input: unknown): Promise<NoemaLoomEnvelope>
     }),
     countDocumentIndex(path.join(paths.documentsDir, 'anchor-index.json')),
     countJsonArray(path.join(paths.planningDir, 'features.json'), 'feature_projection_unreadable'),
-    countDerivedMap(path.join(paths.derivedMapDir, 'repository-map.json'))
+    countDerivedMap(path.join(paths.derivedMapDir, 'repository-map.json')),
+    inspectRefreshLock(projectRoot),
+    readRefreshFailure(projectRoot),
+    readIndexCoverage(projectRoot)
   ]);
 
   const warnings = collectWarnings(fileInventory, spanIndex, factIndex, documentIndex, featureProjection, derivedMap);
+  if (refreshLock.state === 'stale') {
+    warnings.push({
+      code: 'refresh_lock_stale',
+      severity: 'error',
+      message: `Refresh lock belongs to dead pid ${refreshLock.pid}. A previous refresh likely aborted before cleanup.`
+    });
+  } else if (refreshLock.state === 'active') {
+    warnings.push({
+      code: 'refresh_in_progress',
+      severity: 'warning',
+      message: `Refresh lock is active for pid ${refreshLock.pid}.`
+    });
+  } else if (refreshLock.state === 'unreadable') {
+    warnings.push({
+      code: 'refresh_lock_unreadable',
+      severity: 'error',
+      message: refreshLock.message
+    });
+  }
+  if (lastRefreshFailure) {
+    warnings.push({
+      code: 'refresh_last_failure',
+      severity: 'error',
+      message: `${lastRefreshFailure.tool}${lastRefreshFailure.target ? ` target=${lastRefreshFailure.target}` : ''} failed at ${lastRefreshFailure.failedAt}: ${lastRefreshFailure.message}`
+    });
+  }
   const states = [fileInventory.state, spanIndex.state, factIndex.state, documentIndex.state, featureProjection.state, derivedMap.state];
   const hasReady = states.includes('ready');
-  const hasError = states.includes('error');
+  const hasError = states.includes('error') || warnings.some(warning => warning.severity === 'error');
   const graphReady =
     fileInventory.state === 'ready' &&
     spanIndex.state === 'ready' &&
     factIndex.state === 'ready' &&
     derivedMap.state === 'ready';
+  const coverage = statusCoverage({ fileInventory, spanIndex, metadata: coverageMetadata });
 
   return createEnvelope({
     ok: !hasError,
@@ -235,11 +311,14 @@ export async function handleNlStatus(input: unknown): Promise<NoemaLoomEnvelope>
       stateDir: '.noemaloom',
       fileInventory: { state: fileInventory.state, files: fileInventory.files },
       spanIndex: { state: spanIndex.state, spans: spanIndex.counts.spans, edges: spanIndex.counts.edges },
+      coverage,
       factIndex: { state: factIndex.state, symbols: factIndex.counts.symbols, edges: factIndex.counts.edges },
       documentIndex: { state: documentIndex.state, blocks: documentIndex.blocks, parseErrors: documentIndex.parseErrors },
       artifactIndex: { state: 'missing' as const, entries: 0 },
       featureProjection: { state: featureProjection.state, features: featureProjection.count },
       derivedMap: { state: derivedMap.state, tokens: derivedMap.tokens },
+      refreshLock,
+      lastRefreshFailure: lastRefreshFailure ?? null,
       rawToolExposure: false,
       writerEnabled: false
     }

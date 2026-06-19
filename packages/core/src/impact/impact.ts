@@ -7,8 +7,11 @@ export type ImpactResult = {
   testImpact: TraceNode[];
   exampleImpact: TraceNode[];
   featureImpact: TraceNode[];
+  impactCoverage: 'full' | 'scoped' | 'none';
+  missingUnindexedPaths: string[];
   riskLevel: 'low' | 'medium' | 'high';
   requiredVerification: string[];
+  requiredActions: string[];
 };
 
 function uniquePaths(nodes: TraceNode[]): string[] {
@@ -53,7 +56,12 @@ export function computeImpact(input: {
     testImpact,
     exampleImpact,
     featureImpact,
-    riskLevel: impactCount >= 20 ? 'high' : impactCount >= 6 ? 'medium' : 'low',
-    requiredVerification
+    impactCoverage: graph.impactCoverage,
+    missingUnindexedPaths: graph.missingUnindexedPaths,
+    riskLevel: graph.impactCoverage === 'scoped' && graph.missingUnindexedPaths.length > 0
+      ? 'high'
+      : impactCount >= 20 ? 'high' : impactCount >= 6 ? 'medium' : 'low',
+    requiredVerification,
+    requiredActions: graph.requiredActions
   };
 }

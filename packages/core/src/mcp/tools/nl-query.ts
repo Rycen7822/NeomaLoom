@@ -27,6 +27,9 @@ type QueryResult = {
   scoreBreakdown: unknown;
   evidence: Array<Record<string, unknown>>;
   linkedSpans: Array<Record<string, unknown>>;
+  indexed?: boolean;
+  promotionAction?: { target: 'paths'; paths: string[]; reason: string };
+  editBoundary?: unknown;
   estimatedTokens: number;
 };
 
@@ -52,6 +55,9 @@ export async function handleNlQuery(input: unknown): Promise<NoemaLoomEnvelope> 
     scoreBreakdown: candidate.scoreBreakdown,
     evidence: candidate.evidence,
     linkedSpans: candidate.linkedSpans,
+    indexed: candidate.indexed ?? true,
+    promotionAction: candidate.promotionAction,
+    editBoundary: candidate.metadata?.editBoundary,
     estimatedTokens: 26 + candidate.evidence.length * 8 + candidate.linkedSpans.length * 4
   }));
   const budgeted = applyLocatorTokenBudget({
@@ -71,9 +77,13 @@ export async function handleNlQuery(input: unknown): Promise<NoemaLoomEnvelope> 
     warnings: budgeted.warnings,
     data: {
       results: budgetedResults,
+      unindexedCandidates: budgetedResults.filter(result => result.indexed === false),
+      coverage: generated.coverage,
       normalizedQuery: generated.normalizedQuery
     },
     evidence: budgetedResults.flatMap(result => result.evidence),
-    nextActions: ['use nl_locate for edit decisions']
+    nextActions: budgetedResults.some(result => result.indexed === false)
+      ? ['call nl_refresh with target="paths" for unindexedCandidates before using nl_read_span']
+      : ['use nl_locate for edit decisions']
   });
 }

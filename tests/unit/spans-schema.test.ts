@@ -25,6 +25,7 @@ describe('span schema migration', () => {
     try {
       applySpanMigrations(db);
       const expectedNames = [
+        'index_metadata',
         'refresh_revisions',
         'repo_edges',
         'repo_evidence',
@@ -45,6 +46,7 @@ describe('span schema migration', () => {
       expect(rows.map(row => row.name)).toEqual(expectedNames);
       expect(fts.sql).toContain('USING fts5');
       expect(INITIAL_MIGRATION_SQL).toContain('CREATE TABLE repo_files');
+      expect(INITIAL_MIGRATION_SQL).toContain('CREATE TABLE index_metadata');
       expect(INITIAL_MIGRATION_SQL).toContain('CREATE VIRTUAL TABLE repo_spans_fts');
     } finally {
       db.close();

@@ -82,6 +82,12 @@ async function unlinkIfExists(targetPath: string): Promise<void> {
   }
 }
 
+async function unlinkSqliteTempIfExists(targetPath: string): Promise<void> {
+  for (const candidate of [targetPath, `${targetPath}-journal`, `${targetPath}-wal`, `${targetPath}-shm`]) {
+    await unlinkIfExists(candidate);
+  }
+}
+
 export async function writeCodeGraphDb(input: {
   projectRoot: string;
   files: Array<{ path: string; language: string }>;
@@ -94,7 +100,7 @@ export async function writeCodeGraphDb(input: {
     paths.projectRoot,
     path.join(paths.factDir, `codegraph.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp.db`)
   );
-  await unlinkIfExists(tempDbPath);
+  await unlinkSqliteTempIfExists(tempDbPath);
   const db = openDatabase(tempDbPath);
   let wroteSuccessfully = false;
 
@@ -151,7 +157,7 @@ export async function writeCodeGraphDb(input: {
   } finally {
     db.close();
     if (!wroteSuccessfully) {
-      await unlinkIfExists(tempDbPath);
+      await unlinkSqliteTempIfExists(tempDbPath);
     }
   }
 

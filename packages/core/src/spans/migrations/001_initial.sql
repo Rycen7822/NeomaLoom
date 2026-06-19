@@ -72,6 +72,12 @@ CREATE TABLE refresh_revisions (
   warnings_json TEXT NOT NULL
 );
 
+CREATE TABLE index_metadata (
+  key TEXT PRIMARY KEY,
+  value_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
 CREATE VIRTUAL TABLE repo_spans_fts USING fts5(
   span_id,
   path,

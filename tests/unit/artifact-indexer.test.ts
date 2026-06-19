@@ -115,6 +115,18 @@ describe('ArtifactSpanIndexer', () => {
     );
   });
 
+  it('caps very large JSON artifacts and reports truncation', () => {
+    const result = indexArtifactSpans({
+      path: 'resources/models/vocab.json',
+      text: JSON.stringify(Object.fromEntries(Array.from({ length: 1200 }, (_, index) => [`token_${index}`, index])), null, 2),
+      maxSpans: 50
+    });
+
+    expect(result.spans).toHaveLength(50);
+    expect(result.spans[0]).toMatchObject({ kind: 'config.file', label: 'vocab.json' });
+    expect(result.warnings).toEqual(expect.arrayContaining([expect.stringContaining('Artifact span limit reached (50)')]));
+  });
+
   it('extracts package scripts, entrypoints, and workspace package names', () => {
     const result = indexArtifactSpans({
       path: 'package.json',

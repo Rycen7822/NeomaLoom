@@ -37,6 +37,9 @@ Read only the references that match the active task. If the task changes, load t
 ## Execution Rules
 
 1. Start with `nl_status`; refresh with `nl_refresh` only when indexes are missing, stale, or after verification passes.
+   - Use `target="files"` for inventory-only state.
+   - Use `target="paths"` with `paths=[...]` to promote exact cold/unindexed files into the scoped hotset before relying on span reads or final impact claims.
+   - Use `target="hotset"` to refresh the existing scoped hotset; use `target="all"` only when a full deep index is needed.
 2. Use `nl_prepare_context` before selecting files or spans to inspect.
 3. Use `nl_plan_change` before code, API, config, or symbol changes.
 4. Edit only with native Hermes file tools.

@@ -29,6 +29,38 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
+export type RefreshLockInspection =
+  | { state: 'missing' }
+  | { state: 'active' | 'stale'; pid: number; createdAt?: string }
+  | { state: 'unreadable'; message: string };
+
+export async function inspectRefreshLock(projectRoot: string): Promise<RefreshLockInspection> {
+  const paths = await ensureStateDir(projectRoot);
+  let raw = '';
+  try {
+    raw = await readFile(paths.refreshLockFile, 'utf8');
+  } catch (error) {
+    if (isErrnoException(error) && error.code === 'ENOENT') {
+      return { state: 'missing' };
+    }
+    return { state: 'unreadable', message: error instanceof Error ? error.message : String(error) };
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as { pid?: unknown; createdAt?: unknown };
+    if (typeof parsed.pid !== 'number') {
+      return { state: 'unreadable', message: 'refresh.lock does not contain a numeric pid' };
+    }
+    return {
+      state: processIsAlive(parsed.pid) ? 'active' : 'stale',
+      pid: parsed.pid,
+      ...(typeof parsed.createdAt === 'string' ? { createdAt: parsed.createdAt } : {})
+    };
+  } catch (error) {
+    return { state: 'unreadable', message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 async function removeStaleLockIfDead(projectRoot: string, lockFile: string): Promise<boolean> {
   let raw = '';
   try {

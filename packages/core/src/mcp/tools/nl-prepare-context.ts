@@ -20,7 +20,11 @@ type LocateData = {
     spanId: string;
     path: string;
     decision: string;
+    indexed?: boolean;
+    promotionAction?: { target: 'paths'; paths: string[]; reason: string };
   }>;
+  unindexedCandidates?: Array<{ path: string; promotionAction?: { target: 'paths'; paths: string[]; reason: string } }>;
+  coverage?: unknown;
   coveragePlan: unknown;
   normalizedQuery: unknown;
 };
@@ -73,7 +77,7 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
   const locateData = locate.data as LocateData;
   const readTargets = parsed.readTopSpans
     ? locateData.targets
-        .filter(target => ['must_edit', 'maybe_edit'].includes(target.decision))
+      .filter(target => target.indexed !== false && ['must_edit', 'maybe_edit'].includes(target.decision))
         .slice(0, parsed.maxReadSpans)
     : [];
   const readResults = await Promise.all(
@@ -89,9 +93,12 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
   const queryData = query?.data as QueryData | undefined;
   const ok = aggregateOk(envelopes);
   const graphState = combineGraphState(envelopes);
-  const nextActions = ok && graphState === 'ready' && locateData.targets.length > 0
-    ? ['edit with native agent tools', 'call nl_verify_task after edits']
-    : ['call nl_refresh before editing', 'inspect nl_status warnings'];
+  const unindexedCandidates = locateData.unindexedCandidates ?? locateData.targets.filter(target => target.indexed === false);
+  const nextActions = unindexedCandidates.length > 0
+    ? ['call nl_refresh with target="paths" for unindexedCandidates', 'rerun nl_prepare_context after promotion']
+    : ok && graphState === 'ready' && locateData.targets.length > 0
+      ? ['edit with native agent tools', 'call nl_verify_task after edits']
+      : ['call nl_refresh before editing', 'inspect nl_status warnings'];
 
   return createEnvelope({
     ok,
@@ -104,6 +111,8 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
     data: {
       queryPreview: queryData?.results ?? [],
       targets: locateData.targets,
+      unindexedCandidates,
+      coverage: locateData.coverage,
       coveragePlan: locateData.coveragePlan,
       normalizedQuery: locateData.normalizedQuery,
       context: context.data,

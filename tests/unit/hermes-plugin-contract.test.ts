@@ -44,6 +44,11 @@ describe('Hermes plugin contract', () => {
     expect(init).toContain('ctx.register_skill');
     expect(init).toContain('toolset="noemaloom"');
 
+    const schemas = await readFile('hermes-plugin/noemaloom/schemas.py', 'utf8');
+    expect(schemas).toContain('"paths"');
+    expect(schemas).toContain('"hotset"');
+    expect(schemas).toContain('"promotionReason"');
+
     const skill = await readFile('hermes-plugin/noemaloom/resources/skills/usage/SKILL.md', 'utf8');
     expect(skill).toContain('Only call these public Hermes tools');
     expect(skill).toContain('noemaloom:usage');

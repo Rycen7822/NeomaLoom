@@ -180,11 +180,18 @@ function projectDocumentSpan(projectRoot: string, span: DocumentSpan, blockOrdin
 
 function projectArtifactSpan(projectRoot: string, span: ArtifactSpan): RepoSpan {
   const pointer = String(span.metadata.pointer ?? span.metadata.jsonPointer ?? span.metadata.tomlPath ?? span.metadata.yamlPath ?? span.label);
+  const identityRole =
+    ['configKey', 'envVar', 'cliFlag', 'schemaFieldName']
+      .map(key => {
+        const value = span.metadata[key];
+        return typeof value === 'string' && value ? `${key}:${value}` : undefined;
+      })
+      .find(Boolean) ?? `label:${span.label}`;
   return createRepoSpan({
     spanId: createConfigSpanId({
       projectRoot,
       path: span.path,
-      jsonPointerOrTomlPath: pointer,
+      jsonPointerOrTomlPath: `${pointer}#${identityRole}#line:${span.startLine}`,
       normalizedValueHash: sha1(span.text)
     }),
     path: repoPath(span.path),
@@ -207,7 +214,8 @@ function projectTestExampleSpan(projectRoot: string, span: TestExampleSpan): Rep
       path: span.path,
       kind: span.kind,
       testOrExampleName: span.label,
-      normalizedTextHash: sha1(span.text)
+      normalizedTextHash: sha1(span.text),
+      startLine: span.startLine
     }),
     path: repoPath(span.path),
     kind: span.kind,
