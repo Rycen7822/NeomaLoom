@@ -101,6 +101,27 @@ describe('documentation policy', () => {
     expect(readme).toContain('does not patch Codex cache');
   });
 
+  it('documents and declares the runtime floor required by node:sqlite', async () => {
+    const packageJson = JSON.parse(await readFile('package.json', 'utf8')) as { engines?: { node?: string } };
+    const lockfile = JSON.parse(await readFile('package-lock.json', 'utf8')) as {
+      packages?: Record<string, { engines?: { node?: string } }>;
+    };
+    const readme = await readFile('README.md', 'utf8');
+    const readmeZh = await readFile('README.zh-CN.md', 'utf8');
+    const expectedRange = '>=22.13.0 <23 || >=23.4.0';
+
+    expect(packageJson.engines?.node).toBe(expectedRange);
+    expect(lockfile.packages?.['']?.engines?.node).toBe(expectedRange);
+    expect(readme).toContain('Node.js 22.13+ LTS, Node.js 23.4+, or Node.js 24+');
+    expect(readme).toContain('NoemaLoom uses the built-in `node:sqlite` module');
+    expect(readme).not.toContain('Node.js 20+');
+    expect(readme).not.toContain('Node.js 20 or newer');
+    expect(readmeZh).toContain('Node.js 22.13+ LTS、Node.js 23.4+ 或 Node.js 24+');
+    expect(readmeZh).toContain('NoemaLoom 使用内置 `node:sqlite` 模块');
+    expect(readmeZh).not.toContain('Node.js 20+');
+    expect(readmeZh).not.toContain('Node.js 20 或更新版本');
+  });
+
   it('skill is a lightweight router to the six workflow references', async () => {
     const skill = await readFile('skill/noemaloom/SKILL.md', 'utf8');
 

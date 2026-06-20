@@ -121,7 +121,7 @@ First choose the installation scope and keep the two scopes separate.
 
 User-level installation:
 - Use this when this user account's Hermes sessions should be able to use NoemaLoom across multiple projects.
-- Verify or install Node.js 20+, Python 3.11+, and npm dependencies in <NOEMALOOM_REPO> with `npm ci --include=dev`.
+- Verify or install Node.js 22.13+ LTS, Node.js 23.4+, or Node.js 24+, Python 3.11+, and npm dependencies in <NOEMALOOM_REPO> with `npm ci --include=dev`.
 - Install the plugin with `python3 scripts/sync-hermes-plugin.py --mode symlink --replace` or `python3 scripts/sync-hermes-plugin.py --mode copy --backup`; the script writes `INSTALL_METADATA.json` so fresh plugin calls can warn if installed provenance no longer matches source HEAD.
 - Enable the plugin with `hermes plugins enable noemaloom`, start a new session or restart the gateway, and load `skill_view(name="noemaloom:usage")` when workflow guidance is needed.
 
@@ -157,9 +157,11 @@ Rules:
 
 Requirements:
 
-- Node.js 20 or newer
+- Node.js 22.13+ LTS, Node.js 23.4+, or Node.js 24+
 - Python 3.11 or newer for the feature projection worker tests
 - npm
+
+NoemaLoom uses the built-in `node:sqlite` module for its derived span/codegraph databases. Node.js 20, Node.js 22.12 and earlier, and early Node.js 23 releases do not provide that module, so they are not supported runtimes.
 
 Useful commands:
 

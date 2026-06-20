@@ -7,7 +7,7 @@
     "packages/core"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13.0 <23 || >=23.4.0"
   },
   "scripts": {
     "build": "tsc --noEmit",

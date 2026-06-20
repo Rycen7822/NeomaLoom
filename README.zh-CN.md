@@ -122,7 +122,7 @@ args = ["serve", "--mcp"]
 
 用户级安装：
 - 当这个用户账号下的 Hermes sessions 需要在多个项目中使用 NoemaLoom 时，使用用户级安装。
-- 验证或安装 Node.js 20+、Python 3.11+，并在 <NOEMALOOM_REPO> 中运行 `npm ci --include=dev` 安装 npm 依赖。
+- 验证或安装 Node.js 22.13+ LTS、Node.js 23.4+ 或 Node.js 24+、Python 3.11+，并在 <NOEMALOOM_REPO> 中运行 `npm ci --include=dev` 安装 npm 依赖。
 - 使用 `python3 scripts/sync-hermes-plugin.py --mode symlink --replace` 或 `python3 scripts/sync-hermes-plugin.py --mode copy --backup` 安装插件；脚本会写入 `INSTALL_METADATA.json`，fresh plugin 调用可在安装 provenance 与 source HEAD 不一致时给出 warning。
 - 使用 `hermes plugins enable noemaloom` 启用插件，启动新 session 或重启 gateway；需要工作流指导时加载 `skill_view(name="noemaloom:usage")`。
 
@@ -158,9 +158,11 @@ args = ["serve", "--mcp"]
 
 运行要求：
 
-- Node.js 20 或更新版本
+- Node.js 22.13+ LTS、Node.js 23.4+ 或 Node.js 24+
 - Python 3.11 或更新版本，用于 feature projection worker 测试
 - npm
+
+NoemaLoom 使用内置 `node:sqlite` 模块存取派生 span/codegraph 数据库。Node.js 20、Node.js 22.12 及更早版本、以及早期 Node.js 23 版本不提供该模块，因此不属于支持的运行时。
 
 常用命令：
 
