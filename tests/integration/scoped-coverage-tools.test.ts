@@ -85,6 +85,87 @@ describe('scoped coverage tool semantics', () => {
     expect(data.impact.docImpact.map(node => node.path)).toContain('DeepScientist/quests/001/STAGE10_推进规划.md');
   });
 
+  it('nl_plan_change degrades to locate-only planning when only file inventory exists', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-plan-inventory-only-'));
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({ name: 'plan-inventory-only' }));
+    await writeProjectFile(projectRoot, 'problems.md', '# Problems\n\nFix the pressure-test ledger.\n');
+    await writeProjectFile(projectRoot, 'docs/related.md', '# Related\n\nLedger notes.\n');
+    await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'files',
+      mode: 'safe'
+    });
+
+    const result = await callRegisteredTool('nl_plan_change', {
+      projectPath: projectRoot,
+      target: 'problems.md',
+      targetType: 'file',
+      includeTrace: false,
+      limit: 12
+    });
+
+    const data = result.data as {
+      targets: Array<{ path: string; indexed?: boolean; promotionAction?: { target: string; paths: string[] } }>;
+      trace: unknown;
+      impact: unknown;
+      requiredActions: string[];
+    };
+    expect(result.ok).toBe(true);
+    expect(result.graphState).toBe('partial');
+    expect(data.targets[0]?.path).toBe('problems.md');
+    expect(data.targets[0]?.indexed).toBe(false);
+    expect(data.targets[0]?.promotionAction).toMatchObject({ target: 'paths', paths: ['problems.md'] });
+    expect(data.trace).toBeNull();
+    expect(data.impact).toBeNull();
+    expect(data.requiredActions).toEqual(expect.arrayContaining(['call nl_refresh with target="paths" for unindexedCandidates before final impact claims']));
+    expect(result.nextActions).toEqual(expect.arrayContaining(['call nl_refresh with target="paths" for unindexedCandidates before final impact claims']));
+    expect(result.warnings.map(warning => warning.code)).toContain('plan_change_impact_skipped');
+  });
+
+  it('nl_prepare_context caps coverage-plan linked paths during inventory fallback', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-prepare-inventory-cap-'));
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({ name: 'prepare-inventory-cap' }));
+    await Promise.all(
+      Array.from({ length: 160 }, (_, index) =>
+        writeProjectFile(
+          projectRoot,
+          `docs/topic-${String(index).padStart(3, '0')}.md`,
+          `# Topic ${index}\n\nShared topic documentation.\n`
+        )
+      )
+    );
+    await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'files',
+      mode: 'safe'
+    });
+
+    const result = await callRegisteredTool('nl_prepare_context', {
+      projectPath: projectRoot,
+      goal: 'update shared topic documentation',
+      scope: 'topic',
+      budget: 3200,
+      limit: 20,
+      readTopSpans: false
+    });
+
+    const data = result.data as {
+      coveragePlan: {
+        linkedDocsToVerify: string[];
+        linkedDocsToVerifyOmitted: number;
+        linkedTestsToVerify: string[];
+        linkedTestsToVerifyOmitted: number;
+      };
+    };
+    expect(result.ok).toBe(true);
+    expect(result.graphState).toBe('partial');
+    expect(data.coveragePlan.linkedDocsToVerify.length).toBeLessThanOrEqual(50);
+    expect(data.coveragePlan.linkedDocsToVerifyOmitted).toBeGreaterThan(0);
+    expect(data.coveragePlan.linkedTestsToVerify.length).toBeLessThanOrEqual(50);
+    expect(data.coveragePlan.linkedTestsToVerifyOmitted).toBe(0);
+    expect(JSON.stringify(result).length).toBeLessThan(100_000);
+  });
+
   it('nl_verify_task scans cold docs from inventory and fails on remaining old terms', async () => {
     const projectRoot = await createScopedProject();
     await writeProjectFile(projectRoot, 'src/client.ts', 'export function createClient() { return "timeoutMs"; }\n');

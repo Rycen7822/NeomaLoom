@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { createEnvelope, resolveProjectRootFromInput, type NoemaLoomEnvelope } from '../envelope.js';
+import { createEnvelope, resolveProjectRootFromInput, type EnvelopeWarning, type GraphState, type NoemaLoomEnvelope } from '../envelope.js';
 import {
   aggregateOk,
   combineEvidence,
@@ -24,6 +24,61 @@ type ImpactData = {
   requiredVerification?: string[];
   requiredActions?: string[];
 };
+
+type PlanSkippedData = {
+  status: 'skipped';
+  reason: string;
+  requiredActions: string[];
+};
+
+const PROMOTE_UNINDEXED_ACTION = 'call nl_refresh with target="paths" for unindexedCandidates before final impact claims';
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isMissingSpanIndexError(error: unknown): boolean {
+  const message = errorMessage(error).toLowerCase();
+  return (
+    message.includes('no such table: repo_spans') ||
+    message.includes('no such table: repo_edges') ||
+    message.includes('no such table: repo_spans_fts')
+  );
+}
+
+function uniqueActions(actions: string[]): string[] {
+  return [...new Set(actions)];
+}
+
+function locatePromotionActions(locateData: LocateData): string[] {
+  return locateData.targets.some(target => typeof target === 'object' && target !== null && 'indexed' in target && target.indexed === false)
+    ? [PROMOTE_UNINDEXED_ACTION]
+    : [];
+}
+
+function skippedPlanEnvelope(input: {
+  tool: 'nl_trace' | 'nl_impact';
+  projectRoot: string;
+  graphRevision: string | null;
+  graphState: GraphState;
+  warning: EnvelopeWarning;
+  requiredActions: string[];
+}): NoemaLoomEnvelope<PlanSkippedData> {
+  return createEnvelope({
+    ok: true,
+    tool: input.tool,
+    projectRoot: input.projectRoot,
+    graphRevision: input.graphRevision,
+    graphState: input.graphState,
+    warnings: [input.warning],
+    data: {
+      status: 'skipped',
+      reason: input.warning.message,
+      requiredActions: input.requiredActions
+    },
+    nextActions: input.requiredActions
+  });
+}
 
 export const nlPlanChangeInputSchema = z
   .object({
@@ -52,6 +107,9 @@ export async function handleNlPlanChange(input: unknown): Promise<NoemaLoomEnvel
     targetRoles: parsed.targetRoles,
     limit: parsed.limit
   });
+  const locateData = locate.data as LocateData;
+  const promotionActions = locatePromotionActions(locateData);
+  const skippedActions = promotionActions.length > 0 ? promotionActions : ['call nl_refresh before final impact claims'];
   const trace = parsed.includeTrace
     ? await handleNlTrace({
         projectPath: parsed.projectPath,
@@ -60,6 +118,22 @@ export async function handleNlPlanChange(input: unknown): Promise<NoemaLoomEnvel
         direction: parsed.direction,
         depth: parsed.depth,
         relationTypes: parsed.relationTypes
+      }).catch(error => {
+        if (!isMissingSpanIndexError(error)) {
+          throw error;
+        }
+        return skippedPlanEnvelope({
+          tool: 'nl_trace',
+          projectRoot,
+          graphRevision: locate.graphRevision,
+          graphState: locate.graphState,
+          warning: {
+            code: 'plan_change_trace_skipped',
+            severity: 'warning',
+            message: `trace skipped because span index is unavailable: ${errorMessage(error)}`
+          },
+          requiredActions: skippedActions
+        });
       })
     : null;
   const impact = await handleNlImpact({
@@ -67,10 +141,32 @@ export async function handleNlPlanChange(input: unknown): Promise<NoemaLoomEnvel
     target: parsed.target,
     targetType: parsed.targetType,
     depth: parsed.depth
+  }).catch(error => {
+    if (!isMissingSpanIndexError(error)) {
+      throw error;
+    }
+    return skippedPlanEnvelope({
+      tool: 'nl_impact',
+      projectRoot,
+      graphRevision: locate.graphRevision,
+      graphState: locate.graphState,
+      warning: {
+        code: 'plan_change_impact_skipped',
+        severity: 'warning',
+        message: `impact skipped because span index is unavailable: ${errorMessage(error)}`
+      },
+      requiredActions: skippedActions
+    });
   });
   const envelopes = [locate, trace, impact];
-  const locateData = locate.data as LocateData;
-  const impactData = impact.data as ImpactData;
+  const traceData = trace?.data as (PlanSkippedData | Record<string, unknown> | undefined);
+  const impactData = impact.data as (ImpactData & Partial<PlanSkippedData>);
+  const traceSkipped = traceData && 'status' in traceData && traceData.status === 'skipped';
+  const impactSkipped = impactData.status === 'skipped';
+  const requiredActions = uniqueActions([
+    ...promotionActions,
+    ...(impactData.requiredActions ?? [])
+  ]);
 
   return createEnvelope({
     ok: aggregateOk(envelopes),
@@ -84,15 +180,15 @@ export async function handleNlPlanChange(input: unknown): Promise<NoemaLoomEnvel
       targets: locateData.targets,
       coveragePlan: locateData.coveragePlan,
       normalizedQuery: locateData.normalizedQuery,
-      trace: trace?.data ?? null,
-      impact: impact.data,
+      trace: traceSkipped ? null : trace?.data ?? null,
+      impact: impactSkipped ? null : impact.data,
       requiredVerification: impactData.requiredVerification ?? [],
-      requiredActions: impactData.requiredActions ?? [],
+      requiredActions,
       steps: summarizeSteps(envelopes)
     },
     evidence: combineEvidence(envelopes),
-    nextActions: (impactData.requiredActions?.length ?? 0) > 0
-      ? [...(impactData.requiredActions ?? []), 'call nl_prepare_context when edit targets need ordering']
+    nextActions: requiredActions.length > 0
+      ? [...requiredActions, 'call nl_prepare_context when edit targets need ordering']
       : ['read impacted files with native tools', 'call nl_prepare_context when edit targets need ordering']
   });
 }
