@@ -114,6 +114,24 @@ function queryWantsParagraph(query: NormalizedQuery): boolean {
   return raw.includes('paragraph') || raw.includes('段落');
 }
 
+const CONTENT_INTENT_NOISE = new Set([
+  'find',
+  'document',
+  'paragraph',
+  'defines',
+  'that',
+  'this',
+  'with',
+  'requested',
+  'direct'
+]);
+
+function contentSpecificTerms(query: NormalizedQuery): string[] {
+  return [...new Set([...query.exactTerms, ...query.symbolTerms, ...query.featureTerms])]
+    .map(term => term.toLowerCase())
+    .filter(term => term.length >= 4 && !CONTENT_INTENT_NOISE.has(term) && !term.includes('.') && !term.endsWith('_'));
+}
+
 function kindPrecisionScore(candidate: LocatorCandidate, query: NormalizedQuery): number {
   const kind = String(candidate.kind);
   if (kind.startsWith('code.') && exactSymbolLabel(candidate, query)) {
@@ -122,8 +140,8 @@ function kindPrecisionScore(candidate: LocatorCandidate, query: NormalizedQuery)
     return 10;
   }
   if (kind === 'doc.paragraph' && (queryWantsParagraph(query) || exactPathOrBasenameMatch(candidate, query))) {
-    const contentTerms = [...query.exactTerms, ...query.featureTerms].filter(term => !term.includes('/') && !term.endsWith('.md'));
-    return 14 + Math.min(30, countHits(contentTerms, candidate.indexedText.toLowerCase()) * 4);
+    const contentTerms = contentSpecificTerms(query);
+    return 14 + Math.min(60, countHits(contentTerms, candidate.indexedText.toLowerCase()) * 6);
   }
   if ((kind === 'doc.heading' || kind === 'doc.section') && queryWantsParagraph(query)) {
     return -8;
