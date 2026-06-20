@@ -126,4 +126,64 @@ describe('locator query normalization and ranking', () => {
     expect(rankCandidates([generated], normalized)).toEqual([]);
     expect(rankCandidates([generated], normalized, { includeGeneratedVendor: true })).toHaveLength(1);
   });
+
+  it('keeps file extension tokens out of exact terms while preserving explicit path terms', () => {
+    const normalized = normalizeQuery({
+      query: 'Find H1 Gate-4 in v2h/h1修改执行清单.md claim alignment table'
+    });
+
+    expect(normalized.pathTerms).toContain('v2h/h1修改执行清单.md');
+    expect(normalized.pathTerms).not.toContain('.md');
+    expect(normalized.pathTerms).not.toContain('md');
+    expect(normalized.exactTerms).not.toContain('.md');
+    expect(normalized.exactTerms).not.toContain('md');
+    expect(normalized.docTerms).toEqual(expect.arrayContaining(['table', 'row']));
+  });
+
+  it('ranks table rows above whole tables for table-row intent', () => {
+    const normalized = normalizeQuery({ query: 'Find Gate-4 H1 claim alignment table row' });
+    const table = {
+      ...baseCandidate,
+      spanId: 'span-table',
+      path: 'v2h/h1修改执行清单.md',
+      kind: 'doc.table',
+      label: 'table',
+      indexedText: 'Gate-4 H1 claim alignment top-k route weights pass condition',
+      summary: 'H1 claim alignment table'
+    };
+    const tableRow = {
+      ...baseCandidate,
+      spanId: 'span-table-row',
+      path: 'v2h/h1修改执行清单.md',
+      kind: 'doc.table_row',
+      label: 'Gate-4 | H1 claim alignment | top-k route weights',
+      indexedText: 'Gate-4 | H1 claim alignment | top-k route weights pass condition',
+      summary: 'Gate-4 H1 claim alignment row'
+    };
+
+    const ranked = rankCandidates([table, tableRow], normalized);
+    expect(ranked[0].spanId).toBe('span-table-row');
+    expect(ranked[0].scoreBreakdown.kindPrecisionScore).toBeGreaterThan(ranked[1].scoreBreakdown.kindPrecisionScore);
+  });
+
+  it('prefers exact relative path matches over same-basename matches', () => {
+    const normalized = normalizeQuery({ query: 'Inspect v2h/tools/train_g8_ddp.py model config resolution' });
+    const exactPath = {
+      ...baseCandidate,
+      spanId: 'span-exact-path',
+      path: 'v2h/tools/train_g8_ddp.py',
+      role: 'source_file',
+      kind: 'code.module',
+      indexedText: 'model config resolution'
+    };
+    const sameBasename = {
+      ...exactPath,
+      spanId: 'span-same-basename',
+      path: 'v2/tools/train_g8_ddp.py'
+    };
+
+    const ranked = rankCandidates([sameBasename, exactPath], normalized);
+    expect(ranked[0].spanId).toBe('span-exact-path');
+    expect(ranked[0].scoreBreakdown.pathRoleScore).toBeGreaterThan(ranked[1].scoreBreakdown.pathRoleScore);
+  });
 });

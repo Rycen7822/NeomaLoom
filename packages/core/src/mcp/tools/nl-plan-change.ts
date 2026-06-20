@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { createEnvelope, resolveProjectRootFromInput, type EnvelopeWarning, type GraphState, type NoemaLoomEnvelope } from '../envelope.js';
+import { RESPONSE_PROFILES, shapeEvidence, shapePlanChangeData, type ResponseProfile } from '../output-profile.js';
 import {
   aggregateOk,
   combineEvidence,
@@ -91,7 +92,8 @@ export const nlPlanChangeInputSchema = z
     direction: z.enum(['upstream', 'downstream', 'both']).default('both'),
     depth: z.number().int().min(0).max(5).default(2),
     relationTypes: z.array(z.string()).default(['all']),
-    includeTrace: z.boolean().default(true)
+    includeTrace: z.boolean().default(true),
+    responseProfile: z.enum(RESPONSE_PROFILES).default('compact')
   })
   .passthrough();
 
@@ -170,6 +172,19 @@ export async function handleNlPlanChange(input: unknown): Promise<NoemaLoomEnvel
     ...(impactData.requiredActions ?? [])
   ]);
 
+  const responseProfile = parsed.responseProfile as ResponseProfile;
+  const data = {
+    targets: locateData.targets,
+    coveragePlan: locateData.coveragePlan,
+    normalizedQuery: locateData.normalizedQuery,
+    trace: traceSkipped ? null : trace?.data ?? null,
+    impact: impactSkipped ? null : impact.data,
+    requiredVerification: impactData.requiredVerification ?? [],
+    requiredActions,
+    steps: summarizeSteps(envelopes)
+  };
+  const evidence = combineEvidence(envelopes);
+
   return createEnvelope({
     ok: aggregateOk(envelopes),
     tool: 'nl_plan_change',
@@ -178,17 +193,8 @@ export async function handleNlPlanChange(input: unknown): Promise<NoemaLoomEnvel
     graphState: combineGraphState(envelopes),
     tokenBudget: combineTokenBudget(envelopes),
     warnings: combineWarnings(envelopes),
-    data: {
-      targets: locateData.targets,
-      coveragePlan: locateData.coveragePlan,
-      normalizedQuery: locateData.normalizedQuery,
-      trace: traceSkipped ? null : trace?.data ?? null,
-      impact: impactSkipped ? null : impact.data,
-      requiredVerification: impactData.requiredVerification ?? [],
-      requiredActions,
-      steps: summarizeSteps(envelopes)
-    },
-    evidence: combineEvidence(envelopes),
+    data: shapePlanChangeData(data, responseProfile) as Record<string, unknown>,
+    evidence: shapeEvidence(evidence, responseProfile),
     nextActions: requiredActions.length > 0
       ? [...requiredActions, 'call nl_prepare_context when edit targets need ordering']
       : ['read impacted files with native tools', 'call nl_prepare_context when edit targets need ordering']

@@ -74,7 +74,8 @@ describe('nl_prepare_context for a documentation update', () => {
       targetRoles: ['document', 'source', 'test'],
       limit: 20,
       budget: 2400,
-      includeSnippets: true
+      includeSnippets: true,
+      responseProfile: 'debug'
     });
 
     expect(prepared.ok).toBe(true);

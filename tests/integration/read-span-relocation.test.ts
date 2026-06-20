@@ -15,6 +15,16 @@ async function createProject(): Promise<string> {
   await writeProjectFile(projectRoot, 'src/client.ts', 'export function createClient() { return "client"; }\n');
   await writeProjectFile(
     projectRoot,
+    'src/large_module.py',
+    [
+      '"""Large module fixture for span sizing."""',
+      'LARGE_MODULE_SENTINEL = True',
+      ...Array.from({ length: 220 }, (_, index) => `VALUE_${index} = ${index}`),
+      ''
+    ].join('\n')
+  );
+  await writeProjectFile(
+    projectRoot,
     'docs/api/client.md',
     [
       '# Client API',
@@ -118,6 +128,51 @@ describe('nl_read_span relocation and block sizing', () => {
       spanEndLine: fence.endLine,
       segmentRanges: expect.arrayContaining([
         expect.objectContaining({ startLine: fence.startLine, endLine: expect.any(Number) })
+      ])
+    });
+    expect(read.data.content).toBe('');
+  });
+
+  it('returns segment ranges instead of whole content for oversized code modules', async () => {
+    const projectRoot = await createProject();
+    await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'all',
+      mode: 'safe'
+    });
+    const locate = await callInternalTool('nl_locate', {
+      projectPath: projectRoot,
+      goal: 'Read LARGE_MODULE_SENTINEL large_module module',
+      targetRoles: ['source'],
+      limit: 20
+    });
+    const locateData = locate.data as {
+      targets: Array<{ spanId: string; path: string; kind: string; startLine: number; endLine: number }>;
+    };
+    const moduleSpan = locateData.targets.find((item: { path: string; kind: string }) =>
+      item.path === 'src/large_module.py' &&
+      item.kind === 'code.module'
+    );
+    expect(moduleSpan).toBeTruthy();
+    if (!moduleSpan) {
+      throw new Error('large module span was not located');
+    }
+
+    const read = await callInternalTool('nl_read_span', {
+      projectPath: projectRoot,
+      spanId: moduleSpan.spanId,
+      contextLines: 0,
+      maxLines: 80
+    });
+
+    expect(read.ok).toBe(true);
+    expect(read.data).toMatchObject({
+      status: 'block_too_large',
+      path: 'src/large_module.py',
+      spanStartLine: moduleSpan.startLine,
+      spanEndLine: moduleSpan.endLine,
+      segmentRanges: expect.arrayContaining([
+        expect.objectContaining({ startLine: moduleSpan.startLine, endLine: expect.any(Number) })
       ])
     });
     expect(read.data.content).toBe('');

@@ -61,7 +61,8 @@ describe('aggregated impact planning and coverage verification after edits', () 
       target: 'createClient',
       targetType: 'auto',
       depth: 2,
-      relationTypes: ['all']
+      relationTypes: ['all'],
+      responseProfile: 'debug'
     });
     expect(plan.ok).toBe(true);
     expect(plan.tool).toBe('nl_plan_change');

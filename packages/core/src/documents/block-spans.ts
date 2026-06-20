@@ -142,6 +142,50 @@ function tableMetadata(node: AstNode): Record<string, unknown> {
   };
 }
 
+function tableColumns(node: AstNode): string[] {
+  const header = node.children?.[0];
+  return (header?.children ?? []).map(cell => toString(cell).trim());
+}
+
+function tableRowCells(row: AstNode): string[] {
+  return (row.children ?? []).map(cell => toString(cell).trim());
+}
+
+function buildTableRowSpans(input: {
+  node: AstNode;
+  path: string;
+  lines: string[];
+  headingPath: string[];
+  tableStartLine: number;
+}): DocumentSpan[] {
+  const columns = tableColumns(input.node);
+  return (input.node.children ?? [])
+    .slice(1)
+    .map((row, offset) => {
+      const cells = tableRowCells(row);
+      const normalizedRowText = cells.join(' | ');
+      const fallbackLine = input.tableStartLine + offset + 2;
+      const start = startLine(row) ?? fallbackLine;
+      const end = endLine(row) ?? start;
+      return createSpan({
+        kind: 'doc.table_row',
+        path: input.path,
+        label: normalizedRowText || 'table row',
+        startLine: start,
+        endLine: end,
+        headingPath: input.headingPath,
+        text: textForLines(input.lines, start, end),
+        metadata: {
+          columns,
+          rowIndex: offset + 1,
+          cells,
+          normalizedRowText
+        }
+      });
+    })
+    .filter(span => String(span.metadata.normalizedRowText ?? '').length > 0);
+}
+
 function linkMetadata(url: string): Record<string, unknown> {
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
     return {
@@ -341,6 +385,7 @@ function buildBlockSpans(
           metadata: tableMetadata(node)
         })
       );
+      spans.push(...buildTableRowSpans({ node, path: input.path, lines, headingPath, tableStartLine: start }));
     } else if (input.mdx && isMdxDegradedNode(node)) {
       warnings.push({
         code: 'mdx_degraded_block',

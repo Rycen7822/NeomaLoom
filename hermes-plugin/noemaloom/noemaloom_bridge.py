@@ -32,7 +32,7 @@ _BUILD_DIR_NAME = ".noemaloom-hermes-build"
 
 
 def _json(data: Any) -> str:
-    return json.dumps(data, ensure_ascii=False)
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
 
 def _format_exception(exc: BaseException, *, depth: int = 0) -> str:

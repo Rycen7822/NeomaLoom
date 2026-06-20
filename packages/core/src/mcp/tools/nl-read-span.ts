@@ -271,7 +271,7 @@ export async function handleNlReadSpan(input: unknown): Promise<NoemaLoomEnvelop
   }
   const spanLineCount = relocated.endLine - relocated.startLine + 1;
   const blockTooLarge =
-    ['doc.table', 'doc.list', 'doc.code_fence'].includes(row.kind) && spanLineCount > parsed.maxLines;
+    ['doc.table', 'doc.list', 'doc.code_fence', 'doc.section', 'code.module'].includes(row.kind) && spanLineCount > parsed.maxLines;
 
   if (blockTooLarge) {
     return createEnvelope({

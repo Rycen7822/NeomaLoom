@@ -134,6 +134,98 @@ describe('scoped coverage tool semantics', () => {
     expect(result.tokenBudget.used).toBeLessThanOrEqual(result.tokenBudget.requested);
   });
 
+  it('nl_prepare_context supports compact output while debug keeps diagnostic target details', async () => {
+    const projectRoot = await createLoopLikeProject();
+
+    const compact = await callRegisteredTool('nl_prepare_context', {
+      projectPath: projectRoot,
+      goal: 'Find the document paragraph that defines Stage10 LoopCert portfolio selector tags and the score-side no-target constraint',
+      scope: 'STAGE10_推进规划.md LoopCert score selector tags no-target recovery CE',
+      targetRoles: ['document'],
+      readTopSpans: true,
+      maxReadSpans: 1,
+      contextLines: 1,
+      limit: 5,
+      responseProfile: 'compact'
+    });
+    const debug = await callRegisteredTool('nl_prepare_context', {
+      projectPath: projectRoot,
+      goal: 'Find the document paragraph that defines Stage10 LoopCert portfolio selector tags and the score-side no-target constraint',
+      scope: 'STAGE10_推进规划.md LoopCert score selector tags no-target recovery CE',
+      targetRoles: ['document'],
+      readTopSpans: true,
+      maxReadSpans: 1,
+      contextLines: 1,
+      limit: 5,
+      responseProfile: 'debug'
+    });
+
+    const compactData = compact.data as {
+      targets: Array<{ path: string; startLine: number; endLine: number; reason: string }>;
+      readSpans: Array<{ content: string }>;
+      coveragePlan: unknown;
+    };
+    expect(compact.ok).toBe(true);
+    expect(compactData.targets[0]).toMatchObject({
+      path: 'DeepScientist/quests/001/STAGE10_推进规划.md',
+      startLine: 7,
+      endLine: 7
+    });
+    expect(compactData.readSpans[0].content).toContain('risk-calibrated no-target blend');
+    expect(compactData.coveragePlan).toBeTruthy();
+    expect(JSON.stringify(compact.data)).not.toContain('scoreBreakdown');
+    expect(JSON.stringify(compact.data)).not.toContain('linkedSpans');
+    expect(JSON.stringify(compact.evidence)).toBe('[]');
+    expect(JSON.stringify(debug.data)).toContain('scoreBreakdown');
+    expect(JSON.stringify(debug.data)).toContain('linkedSpans');
+    expect(JSON.stringify(compact).length).toBeLessThan(JSON.stringify(debug).length * 0.75);
+  });
+
+  it('nl_plan_change compact output summarizes trace while debug keeps full trace edges', async () => {
+    const projectRoot = await createLoopLikeProject();
+
+    const compact = await callRegisteredTool('nl_plan_change', {
+      projectPath: projectRoot,
+      target: 'portfolio_rows',
+      targetType: 'symbol',
+      targetRoles: ['source'],
+      goal: 'Find the Python function portfolio_rows that emits LoopCert portfolio selector rows',
+      limit: 8,
+      responseProfile: 'compact'
+    });
+    const debug = await callRegisteredTool('nl_plan_change', {
+      projectPath: projectRoot,
+      target: 'portfolio_rows',
+      targetType: 'symbol',
+      targetRoles: ['source'],
+      goal: 'Find the Python function portfolio_rows that emits LoopCert portfolio selector rows',
+      limit: 8,
+      responseProfile: 'debug'
+    });
+
+    const compactData = compact.data as {
+      targets: Array<{ path: string; kind: string; label: string }>;
+      trace: unknown;
+      traceSummary: { nodeCount: number; edgeCount: number };
+      impact: { requiredActions?: string[] };
+      requiredVerification: string[];
+    };
+    expect(compact.ok).toBe(true);
+    expect(compactData.targets[0]).toMatchObject({
+      path: 'DeepScientist/quests/001/experiments/stage10/scripts/stage10_loopcert_score.py',
+      kind: 'code.function',
+      label: 'portfolio_rows'
+    });
+    expect(compactData.trace).toBeNull();
+    expect(compactData.traceSummary).toMatchObject({ nodeCount: expect.any(Number), edgeCount: expect.any(Number) });
+    expect(compactData.requiredVerification).toBeTruthy();
+    expect(JSON.stringify(compact.data)).not.toContain('scoreBreakdown');
+    expect(JSON.stringify(compact.evidence)).toBe('[]');
+    expect(JSON.stringify(debug.data)).toContain('scoreBreakdown');
+    expect(JSON.stringify(debug.data)).toContain('edges');
+    expect(JSON.stringify(compact).length).toBeLessThan(JSON.stringify(debug).length * 0.75);
+  });
+
   it('nl_prepare_context returns promotion nextActions for cold inventory candidates', async () => {
     const projectRoot = await createScopedProject();
 

@@ -92,17 +92,29 @@ function normalizedPathTerm(term: string): string {
   return term.replaceAll('\\', '/').replace(/^\.\//, '').replace(/^\/+/, '');
 }
 
-function exactPathOrBasenameMatch(candidate: LocatorCandidate, query: NormalizedQuery): boolean {
-  return query.pathTerms.some(term => {
+function pathMatchStrength(candidate: LocatorCandidate, query: NormalizedQuery): number {
+  let best = 0;
+  for (const term of query.pathTerms) {
     const normalized = normalizedPathTerm(term).toLowerCase();
     const candidatePath = candidate.path.toLowerCase();
     const basename = candidatePath.split('/').at(-1) ?? candidatePath;
-    return candidatePath === normalized || basename === normalized || candidatePath.endsWith(`/${normalized}`);
-  });
+    if (candidatePath === normalized || candidatePath.endsWith(`/${normalized}`)) {
+      best = Math.max(best, 42);
+    } else if (basename === normalized) {
+      best = Math.max(best, 24);
+    } else if (candidatePath.includes(normalized)) {
+      best = Math.max(best, 10);
+    }
+  }
+  return best;
+}
+
+function exactPathOrBasenameMatch(candidate: LocatorCandidate, query: NormalizedQuery): boolean {
+  return pathMatchStrength(candidate, query) >= 24;
 }
 
 function pathContainsTerm(candidate: LocatorCandidate, query: NormalizedQuery): boolean {
-  return query.pathTerms.some(term => candidate.path.toLowerCase().includes(normalizedPathTerm(term).toLowerCase()));
+  return pathMatchStrength(candidate, query) > 0;
 }
 
 function exactSymbolLabel(candidate: LocatorCandidate, query: NormalizedQuery): boolean {
@@ -112,6 +124,11 @@ function exactSymbolLabel(candidate: LocatorCandidate, query: NormalizedQuery): 
 function queryWantsParagraph(query: NormalizedQuery): boolean {
   const raw = query.raw.toLowerCase();
   return raw.includes('paragraph') || raw.includes('段落');
+}
+
+function queryWantsTableRow(query: NormalizedQuery): boolean {
+  const raw = query.raw.toLowerCase();
+  return query.docTerms.some(term => ['table', 'row', 'rows'].includes(term)) || /[表行对应执行清单通过条件]/.test(raw);
 }
 
 const CONTENT_INTENT_NOISE = new Set([
@@ -139,6 +156,15 @@ function kindPrecisionScore(candidate: LocatorCandidate, query: NormalizedQuery)
     if (kind === 'code.module') return 4;
     return 10;
   }
+  if (queryWantsTableRow(query)) {
+    const contentTerms = contentSpecificTerms(query);
+    if (kind === 'doc.table_row') {
+      return 26 + Math.min(36, countHits(contentTerms, candidate.indexedText.toLowerCase()) * 4);
+    }
+    if (kind === 'doc.table') {
+      return 12 + Math.min(20, countHits(contentTerms, candidate.indexedText.toLowerCase()) * 2);
+    }
+  }
   if (kind === 'doc.paragraph' && (queryWantsParagraph(query) || exactPathOrBasenameMatch(candidate, query))) {
     const contentTerms = contentSpecificTerms(query);
     return 14 + Math.min(60, countHits(contentTerms, candidate.indexedText.toLowerCase()) * 6);
@@ -161,7 +187,7 @@ function scoreCandidate(candidate: LocatorCandidate, query: NormalizedQuery): Sc
   const configKeyScore = hasCaseSensitiveHit(query.configTerms, candidate) ? 8 : 0;
   const pathRoleScore = Math.min(
     56,
-    (exactPathOrBasenameMatch(candidate, query) ? 42 : pathContainsTerm(candidate, query) ? 10 : 0) +
+    (pathMatchStrength(candidate, query) || (pathContainsTerm(candidate, query) ? 10 : 0)) +
       (query.targetRoles.includes(candidate.role as FileRole) ? 8 : 0)
   );
   const linkConfidenceScore = Math.round(Math.min(1, Math.max(0, ...candidate.linkedSpans.map(span => span.confidence), 0)) * 10);

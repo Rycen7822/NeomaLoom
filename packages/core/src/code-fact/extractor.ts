@@ -273,39 +273,132 @@ function addJavascriptTypescriptSpans(input: ExtractCodeFactsInput, lines: strin
   });
 }
 
+type PythonClassFrame = {
+  name: string;
+  indent: number;
+};
+
+function indentation(line: string): number {
+  return (line.match(/^[ \t]*/)?.[0] ?? '').replaceAll('\t', '    ').length;
+}
+
+function isBlankOrComment(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.length === 0 || trimmed.startsWith('#');
+}
+
+function countParens(line: string): number {
+  return (line.match(/\(/g)?.length ?? 0) - (line.match(/\)/g)?.length ?? 0);
+}
+
+function pythonBlockEndLine(lines: string[], declarationIndex: number, signatureEndIndex: number, declarationIndent: number): number {
+  let lastContentIndex = signatureEndIndex;
+  for (let index = signatureEndIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (isBlankOrComment(line)) {
+      continue;
+    }
+    if (indentation(line) <= declarationIndent) {
+      break;
+    }
+    lastContentIndex = index;
+  }
+  return Math.max(declarationIndex + 1, lastContentIndex + 1);
+}
+
+function pythonSignature(input: { lines: string[]; startIndex: number }): {
+  name: string;
+  params: string;
+  returnType?: string;
+  signatureText: string;
+  signatureEndIndex: number;
+} | undefined {
+  const firstLine = input.lines[input.startIndex] ?? '';
+  const match = firstLine.match(/^\s*(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/);
+  if (!match) {
+    return undefined;
+  }
+  const collected: string[] = [];
+  let balance = 0;
+  let signatureEndIndex = input.startIndex;
+  for (let index = input.startIndex; index < input.lines.length; index += 1) {
+    const line = input.lines[index];
+    collected.push(line);
+    balance += countParens(line);
+    if (balance <= 0 && /:\s*(?:#.*)?$/.test(line)) {
+      signatureEndIndex = index;
+      break;
+    }
+  }
+  const signatureText = collected.join('\n');
+  const firstParen = signatureText.indexOf('(');
+  const lastParen = signatureText.lastIndexOf(')');
+  const params = firstParen >= 0 && lastParen > firstParen
+    ? signatureText.slice(firstParen + 1, lastParen).replace(/\s+/g, ' ').trim()
+    : '';
+  const returnType = signatureText.match(/\)\s*->\s*([^:]+):/)?.[1]?.trim();
+  return {
+    name: match[1],
+    params,
+    returnType,
+    signatureText,
+    signatureEndIndex
+  };
+}
+
 function addPythonSpans(input: ExtractCodeFactsInput, lines: string[], spans: CodeFactSpan[]): void {
+  const classStack: PythonClassFrame[] = [];
+
   lines.forEach((line, index) => {
     const lineNumber = index + 1;
-    const classMatch = line.match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)/);
-    const functionMatch = line.match(/^\s*def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)/);
+    if (!isBlankOrComment(line)) {
+      const lineIndent = indentation(line);
+      while (classStack.length > 0 && lineIndent <= classStack[classStack.length - 1].indent) {
+        classStack.pop();
+      }
+    }
+
+    const classMatch = line.match(/^(\s*)class\s+([A-Za-z_][A-Za-z0-9_]*)/);
     if (classMatch) {
+      const classIndent = indentation(classMatch[1]);
+      const endLine = pythonBlockEndLine(lines, index, index, classIndent);
+      classStack.push({ name: classMatch[2], indent: classIndent });
       spans.push(
         createSpan({
           projectRoot: input.projectRoot,
           kind: 'code.class',
           path: input.path,
-          label: classMatch[1],
+          label: classMatch[2],
           startLine: lineNumber,
-          text: line,
+          endLine,
+          text: lines.slice(index, endLine).join('\n'),
           metadata: {
-            qualifiedName: `${input.path}:${classMatch[1]}`,
-            signature: classMatch[1]
+            qualifiedName: `${input.path}:${classMatch[2]}`,
+            signature: classMatch[2]
           }
         })
       );
     }
-    if (functionMatch) {
+
+    const signature = pythonSignature({ lines, startIndex: index });
+    if (signature) {
+      const defIndent = indentation(line);
+      const classFrame = [...classStack].reverse().find(frame => defIndent > frame.indent);
+      const qualifiedLabel = classFrame ? `${classFrame.name}.${signature.name}` : signature.name;
+      const endLine = pythonBlockEndLine(lines, index, signature.signatureEndIndex, defIndent);
       spans.push(
         createSpan({
           projectRoot: input.projectRoot,
-          kind: line.startsWith(' ') ? 'code.method' : 'code.function',
+          kind: classFrame ? 'code.method' : 'code.function',
           path: input.path,
-          label: functionMatch[1],
+          label: signature.name,
           startLine: lineNumber,
-          text: line,
+          endLine,
+          text: lines.slice(index, endLine).join('\n'),
           metadata: {
-            qualifiedName: `${input.path}:${functionMatch[1]}`,
-            signature: signatureForFunction(functionMatch[1], functionMatch[2])
+            qualifiedName: `${input.path}:${qualifiedLabel}`,
+            signature: signatureForFunction(signature.name, signature.params, signature.returnType),
+            ...(classFrame ? { className: classFrame.name } : {})
           }
         })
       );

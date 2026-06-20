@@ -113,6 +113,47 @@ async function createScopedSpanDb(projectRoot: string): Promise<void> {
   }
 }
 
+async function createExactPathLongSpanDb(projectRoot: string): Promise<void> {
+  const spansDir = path.join(projectRoot, '.noemaloom', 'spans');
+  await mkdir(spansDir, { recursive: true });
+  const db = new DatabaseSync(path.join(spansDir, 'spans.db'));
+  try {
+    applySpanMigrations(db);
+    const repoPath = 'docs/long.md';
+    const insertFile = db.prepare(
+      `INSERT INTO repo_files
+        (path, absolute_path, role, language, content_hash, size_bytes, modified_at, indexed_at, generated, ignored, metadata_json)
+       VALUES (?, ?, 'canonical_api_doc', 'markdown', 'long-hash', 4096, 0, 0, 0, 0, '{}')`
+    );
+    const insertSpan = db.prepare(
+      `INSERT INTO repo_spans
+        (span_id, path, kind, role, label, start_line, end_line, language, heading_path_json,
+         symbol_path_json, stable_locator_json, text_hash, indexed_text, summary, metadata_json, source, updated_at)
+       VALUES (?, ?, 'doc.paragraph', 'canonical_api_doc', ?, ?, ?, 'markdown', '["Long Doc"]',
+         '[]', ?, ?, ?, ?, '{}', 'test', 0)`
+    );
+    const insertRevision = db.prepare(
+      `INSERT INTO refresh_revisions
+        (graph_revision, project_root, target, started_at, finished_at, file_count, span_count, edge_count, warnings_json)
+       VALUES ('rev-long-exact-path', ?, 'all', 0, 1, 1, 320, 0, '[]')`
+    );
+
+    db.exec('BEGIN');
+    insertFile.run(repoPath, path.join(projectRoot, repoPath));
+    for (let index = 1; index <= 320; index += 1) {
+      const text = `paragraph ${index}`;
+      insertSpan.run(`long-span-${index}`, repoPath, text, index, index, stableLocator(repoPath, index), `long-hash-${index}`, text, text);
+    }
+    insertRevision.run(projectRoot);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  } finally {
+    db.close();
+  }
+}
+
 async function createLargeScopedInventoryDb(projectRoot: string): Promise<void> {
   const spansDir = path.join(projectRoot, '.noemaloom', 'spans');
   await mkdir(spansDir, { recursive: true });
@@ -196,6 +237,22 @@ describe('candidate generation', () => {
     });
     expect(generated.unindexedCandidates.map(candidate => candidate.path)).toContain('docs/cold-api.md');
     expect(generated.warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'unindexed_candidates' })]));
+  });
+
+  it('keeps late spans from explicit path matches instead of only early file spans', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-exact-path-spans-'));
+    await mkdir(path.join(projectRoot, 'docs'), { recursive: true });
+    await writeFile(path.join(projectRoot, 'docs/long.md'), '# Long\n', 'utf8');
+    await createExactPathLongSpanDb(projectRoot);
+
+    const generated = await generateCandidates({
+      projectRoot,
+      query: 'docs/long.md',
+      targetRoles: ['canonical_api_doc'],
+      limit: 5
+    });
+
+    expect(generated.candidates.map(candidate => candidate.spanId)).toContain('long-span-260');
   });
 
   it('caps broad scoped inventory matches and keeps exact Codex work targets', async () => {

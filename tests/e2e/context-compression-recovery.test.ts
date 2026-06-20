@@ -13,7 +13,8 @@ describe('e2e context compression recovery', () => {
       projectPath: projectRoot,
       goal: 'Update createClient API docs',
       budget: 1024,
-      includeSnippets: false
+      includeSnippets: false,
+      responseProfile: 'debug'
     });
     expect(prepared.ok).toBe(true);
     const preparedData = prepared.data as {

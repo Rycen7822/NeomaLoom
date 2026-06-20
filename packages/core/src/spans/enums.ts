@@ -21,6 +21,7 @@ export const SPAN_KINDS = [
   'doc.paragraph',
   'doc.list',
   'doc.table',
+  'doc.table_row',
   'doc.code_fence',
   'doc.quote',
   'doc.link',

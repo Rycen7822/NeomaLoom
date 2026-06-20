@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
 import { createEnvelope, resolveProjectRootFromInput, type NoemaLoomEnvelope } from '../envelope.js';
+import { planExactRoute, applyExactRoute } from '../exact-route.js';
+import { RESPONSE_PROFILES, shapeEvidence, shapePrepareContextData, type ResponseProfile } from '../output-profile.js';
 import {
   combineEvidence,
   combineWarnings
@@ -45,7 +47,8 @@ export const nlPrepareContextInputSchema = z
     includeQueryPreview: z.boolean().default(true),
     readTopSpans: z.boolean().default(false),
     maxReadSpans: z.number().int().min(0).max(10).default(3),
-    contextLines: z.number().int().min(0).max(80).default(10)
+    contextLines: z.number().int().min(0).max(80).default(10),
+    responseProfile: z.enum(RESPONSE_PROFILES).default('compact')
   })
   .passthrough();
 
@@ -61,16 +64,20 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
     limit: parsed.limit,
     budget: parsed.budget
   });
+  const router = planExactRoute({ normalizedQuery: located.normalizedQuery, targets: located.targets });
+  const routedLocated = router.route === 'noemaloom_rank'
+    ? located
+    : { ...located, targets: applyExactRoute(located.targets, router) };
   const locateData: LocateData = {
-    targets: located.targets,
-    unindexedCandidates: located.targets.filter(target => target.indexed === false),
-    coverage: located.coverage,
-    coveragePlan: located.coveragePlan,
-    normalizedQuery: located.normalizedQuery
+    targets: routedLocated.targets,
+    unindexedCandidates: routedLocated.targets.filter(target => target.indexed === false),
+    coverage: routedLocated.coverage,
+    coveragePlan: routedLocated.coveragePlan,
+    normalizedQuery: routedLocated.normalizedQuery
   };
   const contextData = await buildContextDataFromLocated({
     projectRoot,
-    located,
+    located: routedLocated,
     includeSnippets: parsed.includeSnippets
   });
   const readTargets = parsed.readTopSpans && locateData.unindexedCandidates?.length === 0
@@ -114,6 +121,20 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
         promotionAction: target.promotionAction
       }))
     : [];
+  const responseProfile = parsed.responseProfile as ResponseProfile;
+  const data = {
+    router,
+    queryPreview,
+    targets: locateData.targets,
+    unindexedCandidates,
+    coverage: locateData.coverage,
+    coveragePlan: locateData.coveragePlan,
+    normalizedQuery: locateData.normalizedQuery,
+    context: contextData,
+    readSpans: readResults.map(result => result.data),
+    steps: ['nl_locate', 'nl_context_from_located', ...readResults.map(result => result.tool)]
+  };
+  const evidence = [...routedLocated.targets.flatMap(target => target.evidence), ...combineEvidence(readResults)];
 
   return createEnvelope({
     ok,
@@ -123,18 +144,8 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
     graphState,
     tokenBudget: located.tokenBudget,
     warnings: [...located.warnings, ...readWarnings],
-    data: {
-      queryPreview,
-      targets: locateData.targets,
-      unindexedCandidates,
-      coverage: locateData.coverage,
-      coveragePlan: locateData.coveragePlan,
-      normalizedQuery: locateData.normalizedQuery,
-      context: contextData,
-      readSpans: readResults.map(result => result.data),
-      steps: ['nl_locate', 'nl_context_from_located', ...readResults.map(result => result.tool)]
-    },
-    evidence: [...located.targets.flatMap(target => target.evidence), ...combineEvidence(readResults)],
+    data: shapePrepareContextData(data, responseProfile) as Record<string, unknown>,
+    evidence: shapeEvidence(evidence, responseProfile),
     nextActions
   });
 }

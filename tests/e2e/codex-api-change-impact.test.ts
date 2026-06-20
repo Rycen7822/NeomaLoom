@@ -10,7 +10,8 @@ describe('e2e code API change impact', () => {
       projectPath: projectRoot,
       target: 'SchedulerConfig',
       targetType: 'auto',
-      depth: 2
+      depth: 2,
+      responseProfile: 'debug'
     });
     const planData = plan.data as {
       impact: {
@@ -35,7 +36,8 @@ describe('e2e code API change impact', () => {
       projectPath: projectRoot,
       goal: 'Change SchedulerConfig.timeout to SchedulerConfig.deadlineSeconds and update all affected repository artifacts',
       targetRoles: ['source_file', 'config_file', 'canonical_api_doc', 'test_file', 'example_doc', 'feature_plan'],
-      limit: 40
+      limit: 40,
+      responseProfile: 'debug'
     });
     const targets = (prepared.data as { targets: Array<{ path: string; decision: string; role: string }> }).targets;
     expect(targets).toEqual(

@@ -384,10 +384,11 @@ function fileRowToCandidate(input: {
 
 const MAX_INDEXED_TEXT_READ_BYTES = 8192;
 
-function candidateCaps(limit?: number): { spanCap: number; fileCap: number; edgeCap: number } {
+function candidateCaps(limit?: number, query?: NormalizedQuery): { spanCap: number; fileCap: number; edgeCap: number } {
   const requested = Math.max(limit ?? 50, 20);
+  const hasExplicitPath = (query?.pathTerms ?? []).some(term => term.includes('/') || /\.[A-Za-z0-9]+$/.test(term));
   return {
-    spanCap: Math.max(requested * 8, 200),
+    spanCap: Math.max(requested * 8, hasExplicitPath ? 800 : 200),
     fileCap: Math.max(requested * 10, 250),
     edgeCap: Math.max(requested * 20, 1000)
   };
@@ -485,6 +486,10 @@ function selectSpanCandidateIds(db: Database, query: NormalizedQuery, cap: numbe
 
   for (const term of pathTerms) {
     if (ids.length >= cap) break;
+    const exactPathLimit = term.includes('/') || /\.[A-Za-z0-9]+$/.test(term);
+    const limitForTerm = exactPathLimit
+      ? Math.max(200, Math.min(cap - ids.length, 700))
+      : Math.max(25, Math.min(cap - ids.length, 100));
     addSpanIdsFromRows(
       ids,
       db
@@ -493,7 +498,7 @@ function selectSpanCandidateIds(db: Database, query: NormalizedQuery, cap: numbe
           ORDER BY CASE WHEN lower(path) = ? THEN 0 WHEN lower(path) LIKE ? ESCAPE '\\' THEN 1 ELSE 2 END,
                    length(path) ASC, path ASC, start_line ASC
           LIMIT ?`)
-        .all(likePattern(term), term.toLowerCase(), `%/${term.toLowerCase()}`, Math.max(25, Math.min(cap - ids.length, 100))) as Array<{ span_id: string }>,
+        .all(likePattern(term), term.toLowerCase(), `%/${term.toLowerCase()}`, limitForTerm) as Array<{ span_id: string }>,
       cap
     );
   }
@@ -660,7 +665,7 @@ function coverageFromDb(db: Database): IndexCoverage | undefined {
 function rowsFromDb(dbPath: string, query: NormalizedQuery, limit?: number): { spans: SpanRow[]; edges: EdgeRow[]; files: FileRow[]; coverage?: IndexCoverage } {
   const db = openDatabase(dbPath);
   try {
-    const caps = candidateCaps(limit);
+    const caps = candidateCaps(limit, query);
     const initialSpanIds = selectSpanCandidateIds(db, query, caps.spanCap);
     const initialEdges = selectNeighborEdges(db, initialSpanIds, caps.edgeCap);
     const spanIds = [...initialSpanIds];

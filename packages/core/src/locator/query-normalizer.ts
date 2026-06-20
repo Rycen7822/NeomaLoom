@@ -14,7 +14,8 @@ export type NormalizedQuery = {
   targetRoles: FileRole[];
 };
 
-const DOC_WORDS = new Set(['api', 'doc', 'docs', 'readme', 'quickstart', 'tutorial', 'guide', 'example', 'design']);
+const DOC_WORDS = new Set(['api', 'doc', 'docs', 'readme', 'quickstart', 'tutorial', 'guide', 'example', 'design', 'table', 'row', 'rows']);
+const FILE_EXTENSION_TERMS = new Set(['md', 'py', 'ts', 'tsx', 'js', 'jsx', 'json', 'yaml', 'yml', 'toml', 'txt', 'csv', 'ipynb']);
 const STOP_WORDS = new Set([
   'and',
   'the',
@@ -121,6 +122,20 @@ function featureTermsFromConfig(configTerms: string[]): string[] {
     .filter(term => term.length >= 4);
 }
 
+function isFileExtensionOnly(term: string): boolean {
+  const normalized = term.toLowerCase().replace(/^\./, '');
+  return FILE_EXTENSION_TERMS.has(normalized) && (term.startsWith('.') || term === normalized);
+}
+
+function tableIntentTerms(raw: string, exactTerms: string[]): string[] {
+  const lower = raw.toLowerCase();
+  const hasTableIntent =
+    exactTerms.some(term => ['table', 'row', 'rows'].includes(term)) ||
+    /\b(claim|alignment|gate)\b/.test(lower) ||
+    /[表行对应执行清单通过条件]/.test(raw);
+  return hasTableIntent ? ['table', 'row'] : [];
+}
+
 export function normalizeQuery(input: { query: string; targetRoles?: string[] }): NormalizedQuery {
   const raw = input.query.trim();
   const terms = words(raw);
@@ -130,10 +145,10 @@ export function normalizeQuery(input: { query: string; targetRoles?: string[] })
   const exactTerms = unique(
     [...cleanedTerms, ...qualifiedParts]
       .map(lowerWord)
-      .filter(term => term.length >= 2 && !STOP_WORDS.has(term))
+      .filter(term => term.length >= 2 && !STOP_WORDS.has(term) && !isFileExtensionOnly(term))
   );
   const configTerms = unique(terms.filter(isConfigLike));
-  const pathTerms = unique([...rawPathLikeTerms(raw), ...terms.filter(isPathLike)]);
+  const pathTerms = unique([...rawPathLikeTerms(raw), ...terms.filter(isPathLike)]).filter(term => !isFileExtensionOnly(term));
   const symbolTerms = unique([
     ...terms.filter(isSymbolLike),
     ...oldTerms,
@@ -141,7 +156,10 @@ export function normalizeQuery(input: { query: string; targetRoles?: string[] })
     ...qualifiedParts,
     ...Array.from(raw.matchAll(/`([^`]+)`/g), match => match[1]).filter(term => /^[A-Za-z_$][\w$]*$/.test(term))
   ]);
-  const docTerms = unique(exactTerms.filter(term => DOC_WORDS.has(term) || raw.toLowerCase().includes(`${term} api`)));
+  const docTerms = unique([
+    ...exactTerms.filter(term => DOC_WORDS.has(term) || raw.toLowerCase().includes(`${term} api`)),
+    ...tableIntentTerms(raw, exactTerms)
+  ]);
   const featureTerms = unique(
     [
       ...exactTerms.filter(term => !DOC_WORDS.has(term) && !STOP_WORDS.has(term) && term.length >= 4 && !pathTerms.includes(term)),
