@@ -121,4 +121,23 @@ describe('coverage verifier', () => {
       expect.objectContaining({ path: 'README.md', role: 'readme_doc', term: 'legacyTimeout' })
     ]);
   });
+
+  it('scans text files under directory changedPaths without throwing EISDIR', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-coverage-dir-'));
+    await writeProjectFile(projectRoot, 'AGENTS.md', '# Agents\n\nUse newTerm.\n');
+    await writeProjectFile(projectRoot, '.agents/skills/demo/SKILL.md', '# Demo\n\nStill says legacyTerm.\n');
+
+    const result = await verifyCoverage({
+      projectRoot,
+      goal: 'Rename legacyTerm to newTerm',
+      changedPaths: ['MISSING.md', 'AGENTS.md', '.agents/skills'],
+      oldTerms: ['legacyTerm'],
+      newTerms: ['newTerm']
+    });
+
+    expect(result.status).toBe('fail');
+    expect(result.remainingOldTermHits).toEqual([
+      expect.objectContaining({ path: '.agents/skills/demo/SKILL.md', term: 'legacyTerm' })
+    ]);
+  });
 });

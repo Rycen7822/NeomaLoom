@@ -1,4 +1,4 @@
-import { rename, unlink } from 'node:fs/promises';
+import { readdir, rename, stat, unlink } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
@@ -88,6 +88,50 @@ async function unlinkSqliteTempIfExists(targetPath: string): Promise<void> {
   }
 }
 
+function processIsAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function cleanupStaleCodeGraphTemps(factDir: string): Promise<void> {
+  let entries: string[];
+  try {
+    entries = await readdir(factDir);
+  } catch {
+    return;
+  }
+  const now = Date.now();
+  const staleBases = new Set<string>();
+  for (const entry of entries) {
+    const match = /^codegraph\.(\d+)\..+\.tmp\.db(?:-(?:journal|wal|shm))?$/.exec(entry);
+    if (!match) {
+      continue;
+    }
+    const base = entry.replace(/-(?:journal|wal|shm)$/, '');
+    const targetPath = path.join(factDir, entry);
+    let oldEnough = false;
+    try {
+      const info = await stat(targetPath);
+      oldEnough = now - info.mtimeMs > 60 * 60 * 1000;
+    } catch {
+      oldEnough = true;
+    }
+    if (!processIsAlive(Number(match[1])) || oldEnough) {
+      staleBases.add(base);
+    }
+  }
+  for (const base of staleBases) {
+    await unlinkSqliteTempIfExists(path.join(factDir, base));
+  }
+}
+
 export async function writeCodeGraphDb(input: {
   projectRoot: string;
   files: Array<{ path: string; language: string }>;
@@ -95,6 +139,7 @@ export async function writeCodeGraphDb(input: {
   edges: CodeFactEdge[];
 }): Promise<string> {
   const paths = await ensureStateDir(input.projectRoot);
+  await cleanupStaleCodeGraphTemps(paths.factDir);
   const dbPath = assertWritableStatePath(paths.projectRoot, path.join(paths.factDir, 'codegraph.db'));
   const tempDbPath = assertWritableStatePath(
     paths.projectRoot,

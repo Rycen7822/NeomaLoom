@@ -44,7 +44,7 @@ describe('locator token budget', () => {
     });
 
     expect(result.targets.map(target => target.spanId)).toEqual(['must-doc', 'verify-test']);
-    expect(result.tokenBudget).toEqual({ requested: 80, used: 60, truncated: true });
+    expect(result.tokenBudget).toEqual({ requested: 80, used: 80, truncated: true });
     expect(result.warnings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ code: 'coverage_missing' }),

@@ -45,6 +45,7 @@ describe('file inventory', () => {
     const projectRoot = await createTempProject('noemaloom-walk-inventory-');
     for (const repoPath of [
       'CHANGELOG.md',
+      'CODEX_STATE.md',
       'docs/api/client.md',
       'docs/tutorial-first/intro.md',
       'examples/basic.ts',
@@ -67,6 +68,7 @@ describe('file inventory', () => {
 
     expect(inventory.files.map(file => file.path)).toEqual([...inventory.files.map(file => file.path)].sort());
     expect(byPath.get('docs/api/client.md')?.role).toBe('canonical_api_doc');
+    expect(byPath.get('CODEX_STATE.md')?.role).toBe('design_doc');
     expect(byPath.get('docs/tutorial-first/intro.md')?.role).toBe('tutorial_doc');
     expect(byPath.get('examples/basic.ts')?.role).toBe('example_doc');
     expect(byPath.get('paper/notes.md')?.role).toBe('paper_doc');

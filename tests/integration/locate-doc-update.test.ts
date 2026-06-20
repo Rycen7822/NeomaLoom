@@ -71,7 +71,7 @@ describe('nl_prepare_context for a documentation update', () => {
     const prepared = await callRegisteredTool('nl_prepare_context', {
       projectPath: projectRoot,
       goal: 'Update createClient timeout documentation across API docs, README, examples, source, and tests',
-      targetRoles: ['canonical_api_doc', 'readme_doc', 'example_doc', 'source_file', 'test_file'],
+      targetRoles: ['document', 'source', 'test'],
       limit: 20,
       budget: 2400,
       includeSnippets: true
@@ -79,6 +79,7 @@ describe('nl_prepare_context for a documentation update', () => {
 
     expect(prepared.ok).toBe(true);
     expect(prepared.tool).toBe('nl_prepare_context');
+    expect(prepared.warnings.filter(warning => warning.code === 'coverage_missing')).toEqual([]);
     expect(prepared.graphRevision).toBe(refresh.graphRevision);
     const preparedData = prepared.data as {
       queryPreview: Array<Record<string, unknown>>;

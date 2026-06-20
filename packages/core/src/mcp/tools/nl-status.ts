@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { loadOrCreateConfig } from '../../config/config-loader.js';
 import { readRefreshFailure } from '../../state/refresh-failure.js';
 import { inspectRefreshLock } from '../../state/refresh-lock.js';
-import { readIndexCoverage, type IndexCoverage } from '../../state/refresh-revision.js';
+import { readIndexCoverage, readLatestRevision, type IndexCoverage } from '../../state/refresh-revision.js';
 import { resolveNoemaLoomPaths } from '../../state/paths.js';
 import { createEnvelope, resolveProjectRootFromInput, type EnvelopeWarning, type NoemaLoomEnvelope } from '../envelope.js';
 
@@ -237,8 +237,8 @@ export async function handleNlStatus(input: unknown): Promise<NoemaLoomEnvelope>
   }
 
   const paths = resolveNoemaLoomPaths(projectRoot);
-  const [fileInventory, spanIndex, factIndex, documentIndex, featureProjection, derivedMap, refreshLock, lastRefreshFailure, coverageMetadata] = await Promise.all([
-    countInventoryFiles(path.join(paths.filesDir, 'inventory.sqlite')),
+  const [fileInventory, spanIndex, factIndex, documentIndex, featureProjection, derivedMap, refreshLock, lastRefreshFailure, coverageMetadata, graphRevision] = await Promise.all([
+    countInventoryFiles(path.join(paths.filesDir, 'inventory.json')),
     readSqliteCounts({
       targetPath: path.join(paths.spansDir, 'spans.db'),
       unreadableCode: 'span_index_unreadable',
@@ -261,7 +261,8 @@ export async function handleNlStatus(input: unknown): Promise<NoemaLoomEnvelope>
     countDerivedMap(path.join(paths.derivedMapDir, 'repository-map.json')),
     inspectRefreshLock(projectRoot),
     readRefreshFailure(projectRoot),
-    readIndexCoverage(projectRoot)
+    readIndexCoverage(projectRoot),
+    readLatestRevision(projectRoot)
   ]);
 
   const warnings = collectWarnings(fileInventory, spanIndex, factIndex, documentIndex, featureProjection, derivedMap);
@@ -301,12 +302,21 @@ export async function handleNlStatus(input: unknown): Promise<NoemaLoomEnvelope>
     derivedMap.state === 'ready';
   const coverage = statusCoverage({ fileInventory, spanIndex, metadata: coverageMetadata });
 
+  const nextActions = refreshLock.state === 'stale'
+    ? [
+        'retry nl_refresh; stale dead-pid locks are removed automatically before refresh starts',
+        'if retry cannot run, delete .noemaloom/locks/refresh.lock after confirming no NoemaLoom refresh process is active'
+      ]
+    : [];
+
   return createEnvelope({
     ok: !hasError,
     tool: 'nl_status',
     projectRoot,
+    graphRevision: graphRevision ?? null,
     graphState: hasError ? 'error' : graphReady ? 'ready' : hasReady ? 'partial' : 'empty',
     warnings,
+    nextActions,
     data: {
       stateDir: '.noemaloom',
       fileInventory: { state: fileInventory.state, files: fileInventory.files },

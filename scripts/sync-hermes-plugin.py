@@ -87,6 +87,16 @@ def copy_plugin(source: Path, dest: Path) -> None:
     )
 
 
+def copy_runtime_build_if_present(source: Path, dest: Path) -> None:
+    build_src = source / ".noemaloom-hermes-build"
+    if not (build_src / "cli" / "main.js").exists():
+        return
+    build_dest = dest / ".noemaloom-hermes-build"
+    if build_dest.exists():
+        shutil.rmtree(build_dest)
+    shutil.copytree(build_src, build_dest, symlinks=True, ignore=shutil.ignore_patterns("*.map", "node_modules"))
+
+
 def symlink_plugin(source: Path, dest: Path) -> None:
     plugin_src = source / "hermes-plugin" / "noemaloom"
     dest.symlink_to(plugin_src, target_is_directory=True)
@@ -114,7 +124,7 @@ def assert_safe_existing_dest(source: Path, dest: Path) -> None:
 
 
 def write_metadata(source: Path, dest: Path, mode: str, profile: str, backup: Path | None) -> dict[str, object]:
-    build_main = source / ".noemaloom-hermes-build" / "cli" / "main.js"
+    build_main = (dest if mode == "copy" else source) / ".noemaloom-hermes-build" / "cli" / "main.js"
     schema_file = dest / "schemas.py"
     metadata: dict[str, object] = {
         "source": str(source),
@@ -165,6 +175,7 @@ def main(argv: list[str] | None = None) -> int:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if args.mode == "copy":
         copy_plugin(source, dest)
+        copy_runtime_build_if_present(source, dest)
     else:
         symlink_plugin(source, dest)
     metadata = write_metadata(source, dest, args.mode, args.profile, backup)

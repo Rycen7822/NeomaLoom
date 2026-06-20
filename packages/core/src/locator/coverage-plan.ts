@@ -1,4 +1,5 @@
 import type { EnvelopeWarning } from '../mcp/envelope.js';
+import { expandRoleAliases, roleMatchesRequest } from '../spans/role-groups.js';
 import type { NormalizedQuery } from './query-normalizer.js';
 import type { RankedCandidate } from './ranking.js';
 
@@ -27,9 +28,12 @@ export function buildCoveragePlan(input: {
   requestedRoles?: string[];
 }): CoveragePlan {
   const roles = [...new Set(input.targets.map(target => String(target.role)))].sort();
-  const requestedRoles = [...new Set([...(input.requestedRoles ?? []), ...input.query.targetRoles])];
+  const requestedRoles = [...new Set([...expandRoleAliases(input.requestedRoles ?? []), ...input.query.targetRoles])];
   const existingRequestedRoles = requestedRoles.filter(role => roles.includes(role)).sort();
-  const missingRequestedRoles = requestedRoles.filter(role => !roles.includes(role)).sort();
+  const rawRequests = input.requestedRoles && input.requestedRoles.length > 0 ? input.requestedRoles : requestedRoles;
+  const missingRequestedRoles = [...new Set(rawRequests)]
+    .filter(requested => !roles.some(role => role === requested || roleMatchesRequest(role, [requested])))
+    .sort();
 
   return {
     exactSweeps: [...new Set([...input.query.oldTerms, ...input.query.newTerms, ...input.query.symbolTerms, ...input.query.configTerms])],

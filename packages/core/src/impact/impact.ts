@@ -1,5 +1,8 @@
 import { traceGraph, type TraceNode } from './trace.js';
 
+const MAX_IMPACT_NODES_PER_GROUP = 25;
+const MAX_IMPACT_PATHS = 50;
+
 export type ImpactResult = {
   codeImpact: TraceNode[];
   docImpact: TraceNode[];
@@ -26,6 +29,10 @@ function kind(node: TraceNode): string {
   return String(node.kind);
 }
 
+function capNodes(nodes: TraceNode[]): TraceNode[] {
+  return nodes.slice(0, MAX_IMPACT_NODES_PER_GROUP);
+}
+
 export function computeImpact(input: {
   projectRoot: string;
   target: string;
@@ -50,18 +57,18 @@ export function computeImpact(input: {
   const impactCount = graph.nodes.length;
 
   return {
-    codeImpact,
-    docImpact,
-    configImpact,
-    testImpact,
-    exampleImpact,
-    featureImpact,
+    codeImpact: capNodes(codeImpact),
+    docImpact: capNodes(docImpact),
+    configImpact: capNodes(configImpact),
+    testImpact: capNodes(testImpact),
+    exampleImpact: capNodes(exampleImpact),
+    featureImpact: capNodes(featureImpact),
     impactCoverage: graph.impactCoverage,
-    missingUnindexedPaths: graph.missingUnindexedPaths,
+    missingUnindexedPaths: graph.missingUnindexedPaths.slice(0, MAX_IMPACT_PATHS),
     riskLevel: graph.impactCoverage === 'scoped' && graph.missingUnindexedPaths.length > 0
       ? 'high'
       : impactCount >= 20 ? 'high' : impactCount >= 6 ? 'medium' : 'low',
-    requiredVerification,
+    requiredVerification: requiredVerification.slice(0, MAX_IMPACT_PATHS),
     requiredActions: graph.requiredActions
   };
 }

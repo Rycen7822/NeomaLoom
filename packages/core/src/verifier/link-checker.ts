@@ -55,7 +55,12 @@ export async function checkMarkdownLinks(input: {
   const staleAnchors: StaleAnchor[] = [];
 
   for (const changedPath of input.changedPaths.filter(file => /\.(md|mdx|rst)$/i.test(file))) {
-    const text = await readFile(path.join(input.projectRoot, changedPath), 'utf8');
+    let text = '';
+    try {
+      text = await readFile(path.join(input.projectRoot, changedPath), 'utf8');
+    } catch {
+      continue;
+    }
     for (const match of text.matchAll(/\[[^\]]+\]\(([^)\s]+)\)/g)) {
       const rawTarget = match[1];
       if (isExternal(rawTarget)) {

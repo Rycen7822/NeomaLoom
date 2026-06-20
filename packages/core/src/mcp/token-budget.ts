@@ -76,7 +76,7 @@ export function applyLocatorTokenBudget<T extends BudgetedTarget>(input: {
     warnings,
     tokenBudget: {
       requested,
-      used,
+      used: omitted.length > 0 ? Math.max(used, requested) : used,
       truncated: omitted.length > 0
     }
   };

@@ -35,6 +35,42 @@ async function readRepositoryMap(projectRoot: string): Promise<unknown> {
   }
 }
 
+function summarizeRepositoryMap(map: unknown): unknown {
+  if (!map || typeof map !== 'object') {
+    return null;
+  }
+  const typed = map as Record<string, unknown>;
+  return {
+    graphRevision: typed.graphRevision ?? null,
+    directoryRoles: Array.isArray(typed.directoryRoles) ? typed.directoryRoles.slice(0, 20) : [],
+    canonicalDocs: Array.isArray(typed.canonicalDocs) ? typed.canonicalDocs.slice(0, 20) : [],
+    coreSourceModules: Array.isArray(typed.coreSourceModules) ? typed.coreSourceModules.slice(0, 20) : [],
+    docSurfaces: Array.isArray(typed.docSurfaces) ? typed.docSurfaces.slice(0, 20) : [],
+    highConfidenceLinks: Array.isArray(typed.highConfidenceLinks) ? typed.highConfidenceLinks.slice(0, 20) : [],
+    warnings: Array.isArray(typed.warnings) ? typed.warnings.slice(0, 20) : []
+  };
+}
+
+function slimTarget(target: LocatorTarget): Record<string, unknown> {
+  return {
+    spanId: target.spanId,
+    decision: target.decision,
+    path: target.path,
+    role: target.role,
+    kind: target.kind,
+    label: target.label,
+    startLine: target.startLine,
+    endLine: target.endLine,
+    recommendedReadRange: target.recommendedReadRange,
+    confidence: target.confidence,
+    score: target.score,
+    reason: target.reason,
+    indexed: target.indexed ?? true,
+    promotionAction: target.promotionAction,
+    editBoundary: target.editBoundary
+  };
+}
+
 function byRole(targets: LocatorTarget[], roles: string[]): LocatorTarget[] {
   return targets.filter(target => roles.includes(target.role));
 }
@@ -53,14 +89,14 @@ export async function buildContextDataFromLocated(input: {
   const supportingConfig = byRole(targets, ['config_file', 'schema_file', 'package_metadata']);
 
   return {
-    repositoryMap: await readRepositoryMap(input.projectRoot),
-    primaryTargets,
-    secondaryTargets,
-    supportingCode,
-    supportingDocs,
-    supportingConfig,
-    supportingTests,
-    featureContext: targets.filter(target => target.role === 'feature_plan'),
+    repositoryMap: summarizeRepositoryMap(await readRepositoryMap(input.projectRoot)),
+    primaryTargets: primaryTargets.map(slimTarget),
+    secondaryTargets: secondaryTargets.map(slimTarget),
+    supportingCode: supportingCode.map(slimTarget),
+    supportingDocs: supportingDocs.map(slimTarget),
+    supportingConfig: supportingConfig.map(slimTarget),
+    supportingTests: supportingTests.map(slimTarget),
+    featureContext: targets.filter(target => target.role === 'feature_plan').map(slimTarget),
     riskNotes: input.located.warnings,
     suggestedReadOrder: targets.map(target => ({
       spanId: target.spanId,

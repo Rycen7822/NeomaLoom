@@ -27,6 +27,8 @@ def make_source(root: Path) -> Path:
     (source / "packages" / "core" / "src" / "cli" / "main.ts").write_text("export {};\n", encoding="utf-8")
     (plugin_dir / "noemaloom_bridge.py").write_text("# bridge\n", encoding="utf-8")
     (plugin_dir / "schemas.py").write_text("SCHEMA = {}\n", encoding="utf-8")
+    (source / ".noemaloom-hermes-build" / "cli").mkdir(parents=True)
+    (source / ".noemaloom-hermes-build" / "cli" / "main.js").write_text("console.log('built');\n", encoding="utf-8")
     return source
 
 
@@ -55,6 +57,27 @@ def test_symlink_replace_unlinks_destination_symlink_without_deleting_source_plu
     metadata = json.loads((source_plugin / "INSTALL_METADATA.json").read_text(encoding="utf-8"))
     assert metadata["source"] == str(source.resolve())
     assert metadata["installMode"] == "symlink"
+
+
+def test_copy_install_copies_runtime_build_under_destination(tmp_path):
+    module = load_sync_module()
+    source = make_source(tmp_path)
+    dest = tmp_path / "hermes" / "plugins" / "noemaloom"
+
+    rc = module.main([
+        "--source",
+        str(source),
+        "--dest",
+        str(dest),
+        "--mode",
+        "copy",
+    ])
+
+    assert rc == 0
+    assert (dest / ".noemaloom-hermes-build" / "cli" / "main.js").exists()
+    metadata = json.loads((dest / "INSTALL_METADATA.json").read_text(encoding="utf-8"))
+    assert metadata["installMode"] == "copy"
+    assert metadata["buildMainSha256"] is not None
 
 
 def test_replace_refuses_to_delete_source_plugin_directory(tmp_path):

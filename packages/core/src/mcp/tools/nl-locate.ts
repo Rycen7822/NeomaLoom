@@ -55,6 +55,8 @@ export type LocatorRunResult = {
 
 function targetFromRanked(candidate: RankedCandidate): LocatorTarget {
   const decision = decideCandidate(candidate);
+  const evidence = candidate.evidence.slice(0, 12);
+  const linkedSpans = candidate.linkedSpans.slice(0, 20);
   const target = {
     spanId: candidate.spanId,
     decision: decision.decision,
@@ -73,14 +75,14 @@ function targetFromRanked(candidate: RankedCandidate): LocatorTarget {
     score: candidate.score,
     scoreBreakdown: candidate.scoreBreakdown,
     reason: decision.reason,
-    linkedSpans: candidate.linkedSpans,
-    evidence: candidate.evidence,
+    linkedSpans,
+    evidence,
     editRisk: decision.editRisk,
     sourcePlanSources: candidate.sourcePlanSources,
     indexed: candidate.indexed ?? true,
     promotionAction: candidate.promotionAction,
     editBoundary: candidate.metadata?.editBoundary,
-    estimatedTokens: 30 + candidate.evidence.length * 8 + candidate.linkedSpans.length * 4
+    estimatedTokens: 30 + evidence.length * 8 + linkedSpans.length * 4
   };
   return target;
 }

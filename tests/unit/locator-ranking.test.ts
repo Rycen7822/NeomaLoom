@@ -65,7 +65,7 @@ describe('locator query normalization and ranking', () => {
       symbolMatchScore: 15,
       headingMatchScore: 10,
       configKeyScore: 8,
-      pathRoleScore: 16,
+      pathRoleScore: 50,
       linkConfidenceScore: 8,
       featureRelevanceScore: 6,
       canonicalityScore: 6,
@@ -76,7 +76,7 @@ describe('locator query normalization and ranking', () => {
       boundaryRiskPenalty: 0,
       staleIndexPenalty: 0
     });
-    expect(ranked.score).toBe(98);
+    expect(ranked.score).toBe(132);
     expect(decideCandidate(ranked)).toMatchObject({
       decision: 'must_edit',
       reason: expect.stringContaining('score >= 85')

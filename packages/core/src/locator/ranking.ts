@@ -87,6 +87,14 @@ function hasCaseSensitiveHit(terms: string[], candidate: LocatorCandidate): bool
   return terms.some(term => haystack.includes(term));
 }
 
+function normalizedPathTerm(term: string): string {
+  return term.replaceAll('\\', '/').replace(/^\.\//, '').replace(/^\/+/, '');
+}
+
+function exactPathMatch(candidate: LocatorCandidate, query: NormalizedQuery): boolean {
+  return query.pathTerms.some(term => candidate.path === normalizedPathTerm(term));
+}
+
 function scoreCandidate(candidate: LocatorCandidate, query: NormalizedQuery): ScoreBreakdown {
   const text = searchable(candidate);
   const exactTermScore = Math.min(20, countHits(query.exactTerms, text) * 5);
@@ -95,8 +103,8 @@ function scoreCandidate(candidate: LocatorCandidate, query: NormalizedQuery): Sc
   const headingMatchScore = countHits([...query.docTerms, ...query.featureTerms], headingText) > 0 ? 10 : 0;
   const configKeyScore = hasCaseSensitiveHit(query.configTerms, candidate) ? 8 : 0;
   const pathRoleScore = Math.min(
-    16,
-    (query.pathTerms.some(term => candidate.path.includes(term)) ? 8 : 0) +
+    56,
+    (exactPathMatch(candidate, query) ? 42 : query.pathTerms.some(term => candidate.path.includes(normalizedPathTerm(term))) ? 10 : 0) +
       (query.targetRoles.includes(candidate.role as FileRole) ? 8 : 0)
   );
   const linkConfidenceScore = Math.round(Math.min(1, Math.max(0, ...candidate.linkedSpans.map(span => span.confidence), 0)) * 10);

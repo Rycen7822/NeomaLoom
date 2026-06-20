@@ -55,6 +55,21 @@ def _format_exception(exc: BaseException, *, depth: int = 0) -> str:
     return "; ".join(parts)
 
 
+def _contains_timeout(exc: BaseException, *, depth: int = 0) -> bool:
+    if depth > 8:
+        return False
+    if isinstance(exc, TimeoutError):
+        return True
+    nested = getattr(exc, "exceptions", None)
+    if nested and any(isinstance(inner, BaseException) and _contains_timeout(inner, depth=depth + 1) for inner in nested):
+        return True
+    cause = getattr(exc, "__cause__", None)
+    if isinstance(cause, BaseException) and _contains_timeout(cause, depth=depth + 1):
+        return True
+    context = getattr(exc, "__context__", None)
+    return isinstance(context, BaseException) and _contains_timeout(context, depth=depth + 1)
+
+
 def _error_envelope(tool: str, message: str, *, project_root: str | None = None, code: str = "noemaloom_plugin_error") -> str:
     root = str(Path(project_root or os.getcwd()).resolve())
     return _json(
@@ -92,6 +107,10 @@ def _repo_marker(path: Path) -> bool:
 
 def _install_metadata_path() -> Path:
     return Path(__file__).resolve().parent / "INSTALL_METADATA.json"
+
+
+def _plugin_root() -> Path:
+    return Path(__file__).resolve().parent
 
 
 def _read_install_metadata() -> dict[str, Any]:
@@ -195,6 +214,13 @@ def _source_mtime(repo: Path) -> float:
     return newest
 
 
+def _default_build_dir(repo: Path) -> Path:
+    metadata = _read_install_metadata()
+    if metadata.get("installMode") == "copy":
+        return _plugin_root() / _BUILD_DIR_NAME
+    return repo / _BUILD_DIR_NAME
+
+
 def _find_tsc(repo: Path) -> str:
     local_tsc = repo / "node_modules" / ".bin" / "tsc"
     if local_tsc.exists():
@@ -208,17 +234,37 @@ def _find_tsc(repo: Path) -> str:
     )
 
 
+def _ensure_build_runtime_layout(repo: Path, build_dir: Path) -> None:
+    """Make an out-of-tree emitted ESM build resolve package metadata and deps."""
+    package_json = build_dir / "package.json"
+    package_json.write_text('{"type":"module"}\n', encoding="utf-8")
+    source_node_modules = repo / "node_modules"
+    if not source_node_modules.exists():
+        return
+    build_node_modules = build_dir / "node_modules"
+    if build_node_modules.is_symlink() and build_node_modules.resolve() == source_node_modules.resolve():
+        return
+    if build_node_modules.exists() or build_node_modules.is_symlink():
+        if build_node_modules.is_dir() and not build_node_modules.is_symlink():
+            shutil.rmtree(build_node_modules)
+        else:
+            build_node_modules.unlink()
+    build_node_modules.symlink_to(source_node_modules, target_is_directory=True)
+
+
 def ensure_runtime_build(repo: Path) -> Path:
-    build_dir = Path(os.environ.get("NOEMALOOM_BUILD_DIR", repo / _BUILD_DIR_NAME)).expanduser().resolve()
+    build_dir = Path(os.environ.get("NOEMALOOM_BUILD_DIR", _default_build_dir(repo))).expanduser().resolve()
     main_js = build_dir / "cli" / "main.js"
     migration_out = build_dir / "spans" / "migrations" / "001_initial.sql"
     source_mtime = _source_mtime(repo)
 
     if main_js.exists() and migration_out.exists() and main_js.stat().st_mtime >= source_mtime:
+        _ensure_build_runtime_layout(repo, build_dir)
         return build_dir
 
     with _BUILD_LOCK:
         if main_js.exists() and migration_out.exists() and main_js.stat().st_mtime >= source_mtime:
+            _ensure_build_runtime_layout(repo, build_dir)
             return build_dir
         tsc = _find_tsc(repo)
         build_dir.mkdir(parents=True, exist_ok=True)
@@ -251,7 +297,30 @@ def ensure_runtime_build(repo: Path) -> Path:
         migration_src = repo / "packages" / "core" / "src" / "spans" / "migrations" / "001_initial.sql"
         migration_out.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(migration_src, migration_out)
+        _ensure_build_runtime_layout(repo, build_dir)
         return build_dir
+
+
+def _is_relative_to(child: Path, parent: Path) -> bool:
+    try:
+        child.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def _runtime_metadata(repo: Path, build_dir: Path) -> dict[str, Any]:
+    metadata = _read_install_metadata()
+    plugin_root = _plugin_root().resolve()
+    resolved_build = build_dir.resolve()
+    return {
+        "pluginRoot": str(plugin_root),
+        "sourceRoot": str(repo.resolve()),
+        "buildRoot": str(resolved_build),
+        "buildRootInsidePlugin": _is_relative_to(resolved_build, plugin_root),
+        "installMode": metadata.get("installMode"),
+        "metadataCommit": metadata.get("commit"),
+    }
 
 
 def _project_cwd(args: dict[str, Any]) -> str:
@@ -328,18 +397,23 @@ async def _call_tool_async(tool: str, args: dict[str, Any], timeout: float) -> s
         parsed.setdefault("warnings", [])
         if isinstance(parsed["warnings"], list):
             parsed["warnings"].extend(provenance_warnings)
+    parsed.setdefault("data", {})
+    if isinstance(parsed["data"], dict):
+        parsed["data"].setdefault("runtime", _runtime_metadata(repo, build_dir))
     return _json(parsed)
 
 
 def call_noemaloom_tool(tool: str, args: dict[str, Any] | None) -> str:
     payload = dict(args or {})
     project_root = _project_cwd(payload)
-    timeout = float(os.environ.get("NOEMALOOM_TOOL_TIMEOUT", "120"))
+    timeout = float(os.environ.get("NOEMALOOM_TOOL_TIMEOUT", "600"))
     try:
         return _run_async(_call_tool_async(tool, payload, timeout))
     except TimeoutError:
         return _timeout_envelope(tool, timeout, project_root=project_root)
     except Exception as exc:
+        if _contains_timeout(exc):
+            return _timeout_envelope(tool, timeout, project_root=project_root)
         return _error_envelope(tool, _format_exception(exc), project_root=project_root)
 
 

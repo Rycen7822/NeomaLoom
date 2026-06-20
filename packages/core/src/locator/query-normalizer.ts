@@ -1,4 +1,5 @@
 import type { FileRole } from '../spans/enums.js';
+import { expandRoleAliases } from '../spans/role-groups.js';
 
 export type NormalizedQuery = {
   raw: string;
@@ -158,6 +159,6 @@ export function normalizeQuery(input: { query: string; targetRoles?: string[] })
     featureTerms,
     oldTerms,
     newTerms,
-    targetRoles: unique((input.targetRoles ?? []) as FileRole[])
+    targetRoles: expandRoleAliases(input.targetRoles ?? [])
   };
 }

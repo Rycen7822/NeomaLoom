@@ -78,8 +78,9 @@ describe('scoped coverage tool semantics', () => {
       includeTrace: false
     });
 
-    const data = result.data as { trace: unknown; impact: { docImpact: Array<{ path: string }> } };
+    const data = result.data as { targets: Array<{ path: string }>; trace: unknown; impact: { docImpact: Array<{ path: string }> } };
     expect(result.ok).toBe(true);
+    expect(data.targets[0]?.path).toBe('DeepScientist/quests/001/STAGE10_推进规划.md');
     expect(data.trace).toBeNull();
     expect(data.impact.docImpact.map(node => node.path)).toContain('DeepScientist/quests/001/STAGE10_推进规划.md');
   });

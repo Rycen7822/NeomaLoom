@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, writeFile, mkdtemp } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, writeFile, mkdtemp } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -68,7 +68,8 @@ describe('nl_refresh target all', () => {
       'DerivedRepositoryMapBuilder',
       'RefreshRevisionWriter'
     ]);
-    await expect(access(path.join(projectRoot, '.noemaloom', 'files', 'inventory.sqlite'))).resolves.toBeUndefined();
+    await expect(access(path.join(projectRoot, '.noemaloom', 'files', 'inventory.json'))).resolves.toBeUndefined();
+    await expect(access(path.join(projectRoot, '.noemaloom', 'files', 'inventory.sqlite'))).rejects.toThrow();
     await expect(access(path.join(projectRoot, '.noemaloom', 'fact', 'codegraph.db'))).resolves.toBeUndefined();
     await expect(access(path.join(projectRoot, '.noemaloom', 'documents', 'anchor-index.json'))).resolves.toBeUndefined();
     await expect(access(path.join(projectRoot, '.noemaloom', 'spans', 'spans.db'))).resolves.toBeUndefined();
@@ -78,12 +79,28 @@ describe('nl_refresh target all', () => {
     expect(scalar(dbPath, 'SELECT COUNT(*) AS value FROM repo_spans')).toBeGreaterThan(0);
     expect(scalar(dbPath, 'SELECT COUNT(*) AS value FROM repo_edges')).toBeGreaterThan(0);
     expect(scalar(dbPath, 'SELECT COUNT(*) AS value FROM refresh_revisions')).toBe(1);
+    const status = await callRegisteredTool('nl_status', { projectPath: projectRoot });
+    expect(status.graphRevision).toBe(result.graphRevision);
     const map = JSON.parse(await readFile(path.join(projectRoot, '.noemaloom', 'derived-map', 'repository-map.json'), 'utf8')) as {
       coreSourceModules: Array<{ label: string }>;
       highConfidenceLinks: unknown[];
     };
     expect(map.coreSourceModules.some(item => item.label === 'createClient')).toBe(true);
     expect(map.highConfidenceLinks.length).toBeGreaterThan(0);
+  });
+
+  it('cleans stale codegraph temp DB artifacts before writing a new codegraph', async () => {
+    const projectRoot = await createProject();
+    const factDir = path.join(projectRoot, '.noemaloom', 'fact');
+    await mkdir(factDir, { recursive: true });
+    await writeFile(path.join(factDir, 'codegraph.99999999.1.dead.tmp.db'), 'stale');
+    await writeFile(path.join(factDir, 'codegraph.99999999.1.dead.tmp.db-journal'), 'stale journal');
+
+    const result = await callRegisteredTool('nl_refresh', { projectPath: projectRoot, target: 'all', mode: 'safe' });
+
+    expect(result.ok).toBe(true);
+    const factFiles = await readdir(factDir);
+    expect(factFiles.filter(name => name.includes('.tmp.db'))).toEqual([]);
   });
 
   it('handles same-line duplicate callsites during full projection without repo span collisions', async () => {
@@ -173,9 +190,38 @@ describe('nl_refresh target all', () => {
       steps: ['FileInventory'],
       counts: { spans: 0, edges: 0 }
     });
-    await expect(access(path.join(projectRoot, '.noemaloom', 'files', 'inventory.sqlite'))).resolves.toBeUndefined();
+    await expect(access(path.join(projectRoot, '.noemaloom', 'files', 'inventory.json'))).resolves.toBeUndefined();
+    await expect(access(path.join(projectRoot, '.noemaloom', 'files', 'inventory.sqlite'))).rejects.toThrow();
     await expect(access(path.join(projectRoot, '.noemaloom', 'fact', 'codegraph.db'))).rejects.toThrow();
     await expect(access(path.join(projectRoot, '.noemaloom', 'spans', 'spans.db'))).rejects.toThrow();
+  });
+
+  it('reports recovery actions for stale locks in nl_status', async () => {
+    const projectRoot = await createProject();
+    const locksDir = path.join(projectRoot, '.noemaloom', 'locks');
+    await mkdir(locksDir, { recursive: true });
+    await writeFile(path.join(locksDir, 'refresh.lock'), `${JSON.stringify({ pid: 99999999, createdAt: new Date(0).toISOString() })}\n`);
+
+    const status = await callRegisteredTool('nl_status', { projectPath: projectRoot });
+
+    expect(status.ok).toBe(false);
+    expect(status.warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'refresh_lock_stale' })]));
+    expect(status.nextActions).toEqual(expect.arrayContaining([expect.stringContaining('retry nl_refresh')]));
+  });
+
+  it('quarantines corrupt span DB evidence during target files refresh', async () => {
+    const projectRoot = await createProject();
+    const spansDir = path.join(projectRoot, '.noemaloom', 'spans');
+    await mkdir(spansDir, { recursive: true });
+    await writeFile(path.join(spansDir, 'spans.db'), '');
+
+    const result = await callRegisteredTool('nl_refresh', { projectPath: projectRoot, target: 'files', mode: 'safe' });
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining('corrupt sqlite evidence moved') })]));
+    await expect(access(path.join(spansDir, 'spans.db'))).rejects.toThrow();
+    const quarantined = await readdir(path.join(projectRoot, '.noemaloom', 'transient', 'quarantine'));
+    expect(quarantined.some(name => name.includes('spans__spans.db'))).toBe(true);
   });
 
   it('invalidates stale deep indexes when target files is run after a full refresh', async () => {

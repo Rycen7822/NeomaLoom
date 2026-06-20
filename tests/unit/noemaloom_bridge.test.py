@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hermes-plugin" / "noemaloom"))
 
 import noemaloom_bridge
-from noemaloom_bridge import _format_exception, _timeout_envelope
+from noemaloom_bridge import _contains_timeout, _default_build_dir, _format_exception, _runtime_metadata, _timeout_envelope
 
 
 def test_bridge_formats_nested_exception_groups():
@@ -16,6 +16,12 @@ def test_bridge_formats_nested_exception_groups():
     assert "ExceptionGroup: outer" in message
     assert "RuntimeError: inner boom" in message
     assert "ValueError: bad value" in message
+
+
+def test_bridge_detects_nested_timeout_exception_groups():
+    nested = ExceptionGroup("outer", [RuntimeError("inner"), TimeoutError("late tool")])
+
+    assert _contains_timeout(nested) is True
 
 
 def test_bridge_timeout_envelope_is_structured():
@@ -45,3 +51,18 @@ def test_bridge_reports_installed_metadata_mismatch(tmp_path, monkeypatch):
         "installed_plugin_source_mismatch",
         "installed_plugin_dirty_count_mismatch",
     }
+
+
+def test_bridge_copy_install_builds_under_plugin_root(tmp_path, monkeypatch):
+    plugin_root = tmp_path / "plugin"
+    plugin_root.mkdir()
+    plugin_file = plugin_root / "noemaloom_bridge.py"
+    plugin_file.write_text("", encoding="utf-8")
+    (plugin_root / "INSTALL_METADATA.json").write_text(json.dumps({"installMode": "copy", "commit": "abc"}), encoding="utf-8")
+    monkeypatch.setattr(noemaloom_bridge, "__file__", str(plugin_file))
+
+    build_dir = _default_build_dir(Path("/tmp/source"))
+    runtime = _runtime_metadata(Path("/tmp/source"), build_dir)
+
+    assert build_dir == plugin_root / ".noemaloom-hermes-build"
+    assert runtime["buildRootInsidePlugin"] is True

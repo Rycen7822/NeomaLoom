@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 export type OldTermHit = {
@@ -8,14 +8,73 @@ export type OldTermHit = {
   text: string;
 };
 
+const TEXT_EXTENSIONS = new Set([
+  '.md', '.mdx', '.rst', '.txt', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.json', '.jsonl', '.yaml', '.yml', '.toml', '.csv', '.sh', '.bash', '.zsh', '.sql', '.css', '.html', '.xml'
+]);
+
+function normalizeRepoPath(repoPath: string): string {
+  return repoPath.replaceAll('\\', '/').replace(/^\/+/, '');
+}
+
+function isTextPath(repoPath: string): boolean {
+  return TEXT_EXTENSIONS.has(path.posix.extname(normalizeRepoPath(repoPath))) || path.posix.basename(repoPath).toUpperCase() === 'AGENTS.md'.toUpperCase();
+}
+
+async function expandChangedPath(projectRoot: string, repoPath: string): Promise<string[]> {
+  const normalized = normalizeRepoPath(repoPath);
+  const absolute = path.resolve(projectRoot, normalized);
+  const root = path.resolve(projectRoot);
+  const relative = path.relative(root, absolute);
+  if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
+    return [];
+  }
+
+  let info;
+  try {
+    info = await stat(absolute);
+  } catch {
+    return [];
+  }
+  if (info.isFile()) {
+    return isTextPath(normalized) ? [normalized] : [];
+  }
+  if (!info.isDirectory()) {
+    return [];
+  }
+
+  const out: string[] = [];
+  async function walk(dir: string): Promise<void> {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === '.noemaloom') {
+        continue;
+      }
+      const child = path.join(dir, entry.name);
+      const childRelative = path.relative(root, child).replaceAll('\\', '/');
+      if (entry.isDirectory()) {
+        await walk(child);
+      } else if (entry.isFile() && isTextPath(childRelative)) {
+        out.push(childRelative);
+      }
+    }
+  }
+  await walk(absolute);
+  return out.sort();
+}
+
 export async function sweepOldTerms(input: {
   projectRoot: string;
   changedPaths: string[];
   oldTerms: string[];
 }): Promise<OldTermHit[]> {
   const hits: OldTermHit[] = [];
-  for (const changedPath of input.changedPaths) {
-    const text = await readFile(path.join(input.projectRoot, changedPath), 'utf8');
+  const expandedPaths = [...new Set((await Promise.all(input.changedPaths.map(changedPath => expandChangedPath(input.projectRoot, changedPath)))).flat())];
+  for (const changedPath of expandedPaths) {
+    let text = '';
+    try {
+      text = await readFile(path.join(input.projectRoot, changedPath), 'utf8');
+    } catch {
+      continue;
+    }
     const lines = text.split(/\r?\n/);
     lines.forEach((line, index) => {
       for (const term of input.oldTerms) {

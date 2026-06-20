@@ -43,7 +43,9 @@ export const nlPlanChangeInputSchema = z
 export async function handleNlPlanChange(input: unknown): Promise<NoemaLoomEnvelope> {
   const parsed = nlPlanChangeInputSchema.parse(input ?? {});
   const projectRoot = resolveProjectRootFromInput(parsed);
-  const goal = parsed.goal ?? parsed.target;
+  const goal = parsed.targetType === 'file'
+    ? `${parsed.target} ${parsed.goal ?? parsed.target}`
+    : parsed.goal ?? parsed.target;
   const locate = await handleNlLocate({
     projectPath: parsed.projectPath,
     goal,

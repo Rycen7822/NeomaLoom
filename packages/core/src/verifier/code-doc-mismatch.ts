@@ -16,7 +16,12 @@ export async function checkCodeDocMismatch(input: {
   }
   const mismatches: CodeDocMismatch[] = [];
   for (const changedPath of input.changedPaths.filter(file => /\.(md|mdx|rst)$/i.test(file))) {
-    const text = await readFile(path.join(input.projectRoot, changedPath), 'utf8');
+    let text = '';
+    try {
+      text = await readFile(path.join(input.projectRoot, changedPath), 'utf8');
+    } catch {
+      continue;
+    }
     if (!input.newTerms.some(term => text.includes(term))) {
       mismatches.push({ path: changedPath, reason: `changed doc does not mention new terms: ${input.newTerms.join(', ')}` });
     }

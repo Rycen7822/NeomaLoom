@@ -38,6 +38,9 @@ export function classifyFileRole(repoPath: string): FileRole {
   if (['.json', '.yaml', '.yml', '.toml'].includes(path.posix.extname(normalized))) {
     return 'config_file';
   }
+  if (['.md', '.mdx', '.rst'].includes(path.posix.extname(normalized))) {
+    return 'design_doc';
+  }
 
   return 'unknown';
 }

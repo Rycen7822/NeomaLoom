@@ -1,4 +1,5 @@
-import { readFile, unlink } from 'node:fs/promises';
+import { mkdir, readFile, rename, stat, unlink } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { z } from 'zod';
 
@@ -33,6 +34,18 @@ const refreshModes = ['safe', 'force'] as const;
 
 type RefreshTarget = (typeof refreshTargets)[number];
 type RefreshMode = (typeof refreshModes)[number];
+
+type Database = {
+  prepare: (sql: string) => { get: (...params: unknown[]) => unknown };
+  close: () => void;
+};
+
+const require = createRequire(import.meta.url);
+
+function openDatabase(filename: string): Database {
+  const sqlite = require('node:sqlite') as { DatabaseSync: new (filename: string) => Database };
+  return new sqlite.DatabaseSync(filename);
+}
 
 export const nlRefreshInputSchema = z
   .object({
@@ -185,7 +198,7 @@ async function writeInventoryOutputs(projectRoot: string, inventory: FileInvento
   const paths = await ensureStateDir(projectRoot);
   const snapshot = createInventorySnapshot(inventory);
   await writeFileInsideStateDir(paths.projectRoot, path.join(paths.filesDir, 'inventory.json'), `${JSON.stringify(snapshot, null, 2)}\n`);
-  await writeFileInsideStateDir(paths.projectRoot, path.join(paths.filesDir, 'inventory.sqlite'), `${JSON.stringify(snapshot)}\n`);
+  await unlinkIfExists(path.join(paths.filesDir, 'inventory.sqlite'));
 }
 
 async function writeDocumentAnchorIndex(projectRoot: string, spans: DocumentSpan[], warnings: string[]): Promise<void> {
@@ -215,8 +228,79 @@ async function unlinkIfExists(targetPath: string): Promise<void> {
   }
 }
 
-async function removeDeepIndexOutputs(projectRoot: string): Promise<void> {
+async function statIfExists(targetPath: string) {
+  try {
+    return await stat(targetPath);
+  } catch (error) {
+    if (isErrnoException(error) && error.code === 'ENOENT') {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function quarantineName(targetPath: string, stateDir: string): string {
+  const relative = path.relative(stateDir, targetPath).replaceAll('\\', '/');
+  return relative.replace(/[^A-Za-z0-9._/-]+/g, '_').replaceAll('/', '__');
+}
+
+async function sqliteLooksCorrupt(targetPath: string): Promise<boolean> {
+  const existing = await statIfExists(targetPath);
+  if (!existing?.isFile()) {
+    return false;
+  }
+  if (existing.size === 0) {
+    return true;
+  }
+  let db: Database | undefined;
+  try {
+    db = openDatabase(targetPath);
+    db.prepare('PRAGMA schema_version').get();
+    return false;
+  } catch {
+    return true;
+  } finally {
+    db?.close();
+  }
+}
+
+async function quarantineIfExists(input: { projectRoot: string; targetPath: string; quarantineDir: string }): Promise<string | undefined> {
+  const existing = await statIfExists(input.targetPath);
+  if (!existing?.isFile()) {
+    return undefined;
+  }
+  await mkdir(input.quarantineDir, { recursive: true });
+  const paths = resolveNoemaLoomPaths(input.projectRoot);
+  const destination = path.join(input.quarantineDir, `${Date.now()}-${process.pid}-${quarantineName(input.targetPath, paths.stateDir)}`);
+  await rename(input.targetPath, destination);
+  return destination;
+}
+
+async function quarantineCorruptSqliteGroup(input: { projectRoot: string; targetPath: string }): Promise<string[]> {
+  if (!(await sqliteLooksCorrupt(input.targetPath))) {
+    return [];
+  }
+  const paths = resolveNoemaLoomPaths(input.projectRoot);
+  const quarantineDir = path.join(paths.transientDir, 'quarantine');
+  const moved: string[] = [];
+  for (const candidate of [input.targetPath, `${input.targetPath}-journal`, `${input.targetPath}-wal`, `${input.targetPath}-shm`]) {
+    const destination = await quarantineIfExists({ projectRoot: input.projectRoot, targetPath: candidate, quarantineDir });
+    if (destination) {
+      moved.push(destination);
+    }
+  }
+  return moved;
+}
+
+async function removeDeepIndexOutputs(projectRoot: string): Promise<string[]> {
   const paths = resolveNoemaLoomPaths(projectRoot);
+  const warnings: string[] = [];
+  for (const targetPath of [path.join(paths.spansDir, 'spans.db'), path.join(paths.factDir, 'codegraph.db')]) {
+    const quarantined = await quarantineCorruptSqliteGroup({ projectRoot, targetPath });
+    if (quarantined.length > 0) {
+      warnings.push(`${path.relative(paths.stateDir, targetPath).replaceAll('\\', '/')}: corrupt sqlite evidence moved to transient/quarantine (${quarantined.length} files)`);
+    }
+  }
   for (const targetPath of [
     path.join(paths.spansDir, 'spans.db'),
     path.join(paths.spansDir, 'spans.db-journal'),
@@ -232,6 +316,7 @@ async function removeDeepIndexOutputs(projectRoot: string): Promise<void> {
   ]) {
     await unlinkIfExists(targetPath);
   }
+  return warnings;
 }
 
 async function runFeatureProjection(projectRoot: string, graphRevision: string): Promise<string[]> {
@@ -433,7 +518,7 @@ async function runRefresh(input: {
 
   if (input.target === 'files') {
     await writeInventoryOutputs(input.projectRoot, inventory);
-    await removeDeepIndexOutputs(input.projectRoot);
+    const cleanupWarnings = await removeDeepIndexOutputs(input.projectRoot);
     return {
       status: 'refreshed',
       target: input.target,
@@ -446,9 +531,9 @@ async function runRefresh(input: {
         files: inventory.files.length,
         spans: 0,
         edges: 0,
-        warnings: 0
+        warnings: cleanupWarnings.length
       },
-      warnings: [],
+      warnings: cleanupWarnings,
       changed: undefined
     };
   }
