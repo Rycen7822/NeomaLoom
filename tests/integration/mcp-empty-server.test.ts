@@ -2,13 +2,19 @@ import { createNoemaLoomServer } from '../../packages/core/src/mcp/server.js';
 import { createToolRegistry, NOEMALOOM_TOOL_NAMES } from '../../packages/core/src/mcp/tool-registry.js';
 
 describe('empty NoemaLoom MCP server', () => {
-  it('registers exactly the five agent-facing nl_* tools', () => {
+  it('registers exactly the curated agent-facing nl_* tools', () => {
     expect(NOEMALOOM_TOOL_NAMES).toEqual([
       'nl_status',
       'nl_refresh',
       'nl_prepare_context',
       'nl_plan_change',
-      'nl_verify_task'
+      'nl_verify_task',
+      'nl_anchor_status',
+      'nl_anchor_promote',
+      'nl_anchor_demote',
+      'nl_anchor_repair',
+      'nl_anchor_retire',
+      'nl_anchor_checkpoint'
     ]);
 
     expect(createToolRegistry().map(tool => tool.name)).toEqual(NOEMALOOM_TOOL_NAMES);

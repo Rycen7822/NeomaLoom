@@ -14,6 +14,7 @@ export type NoemaLoomPaths = {
   planningDir: string;
   derivedMapDir: string;
   hotsetDir: string;
+  worksetDir: string;
   logsDir: string;
   transientDir: string;
 };
@@ -37,6 +38,7 @@ export function resolveNoemaLoomPaths(projectRoot: string): NoemaLoomPaths {
     planningDir: path.join(stateDir, 'planning'),
     derivedMapDir: path.join(stateDir, 'derived-map'),
     hotsetDir: path.join(stateDir, 'hotset'),
+    worksetDir: path.join(stateDir, 'workset'),
     logsDir: path.join(stateDir, 'logs'),
     transientDir: path.join(stateDir, 'transient')
   };

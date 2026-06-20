@@ -1,4 +1,4 @@
-import { mkdir, writeFile, mkdtemp } from 'node:fs/promises';
+import { mkdir, writeFile, mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -179,6 +179,41 @@ describe('scoped coverage tool semantics', () => {
     expect(JSON.stringify(debug.data)).toContain('scoreBreakdown');
     expect(JSON.stringify(debug.data)).toContain('linkedSpans');
     expect(JSON.stringify(compact).length).toBeLessThan(JSON.stringify(debug).length * 0.75);
+  });
+
+  it('nl_prepare_context navigation profile emits anchor cards and records project-local workset state', async () => {
+    const projectRoot = await createLoopLikeProject();
+
+    const result = await callRegisteredTool('nl_prepare_context', {
+      projectPath: projectRoot,
+      goal: 'Find the document paragraph that defines Stage10 LoopCert portfolio selector tags and the score-side no-target constraint',
+      scope: 'STAGE10_推进规划.md LoopCert score selector tags no-target recovery CE',
+      targetRoles: ['document'],
+      readTopSpans: true,
+      maxReadSpans: 1,
+      contextLines: 1,
+      limit: 5,
+      responseProfile: 'navigation'
+    });
+
+    const data = result.data as {
+      navigation: { cards: Array<{ path: string; label: string }>; text: string; enabled: boolean; charBudget: number };
+      targets: Array<{ path: string; startLine: number; endLine: number }>;
+      context?: unknown;
+    };
+    expect(result.ok).toBe(true);
+    expect(data.navigation.enabled).toBe(false);
+    expect(data.navigation.charBudget).toBe(650);
+    expect(data.navigation.cards[0]).toMatchObject({ path: 'DeepScientist/quests/001/STAGE10_推进规划.md' });
+    expect(data.navigation.text).toContain('NoemaLoom navigation anchors:');
+    expect(data.targets[0]).toMatchObject({ path: 'DeepScientist/quests/001/STAGE10_推进规划.md', startLine: 7, endLine: 7 });
+    expect(data.context).toBeUndefined();
+    expect(JSON.stringify(result.data)).not.toContain('scoreBreakdown');
+    expect(JSON.stringify(result.evidence)).toBe('[]');
+
+    const worksetText = await readFile(path.join(projectRoot, '.noemaloom', 'workset', 'anchors.json'), 'utf8');
+    expect(worksetText).toContain('STAGE10_推进规划.md');
+    expect(worksetText).toContain('navigationQuerySeq');
   });
 
   it('nl_plan_change compact output summarizes trace while debug keeps full trace edges', async () => {

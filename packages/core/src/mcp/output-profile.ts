@@ -1,6 +1,6 @@
-export type ResponseProfile = 'compact' | 'standard' | 'debug';
+export type ResponseProfile = 'compact' | 'standard' | 'debug' | 'navigation';
 
-export const RESPONSE_PROFILES = ['compact', 'standard', 'debug'] as const;
+export const RESPONSE_PROFILES = ['compact', 'standard', 'debug', 'navigation'] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -205,8 +205,24 @@ function shapeReadSpan(value: unknown): unknown {
   return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
 }
 
+function shapeNavigationPrepareContextData(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  return {
+    router: value.router,
+    navigation: value.navigation,
+    targets: asArray(value.targets).slice(0, 5).map(target => slimTarget(target, 'compact')),
+    unindexedCandidates: value.unindexedCandidates,
+    coverage: value.coverage,
+    coveragePlan: value.coveragePlan,
+    readSpans: asArray(value.readSpans).slice(0, 3).map(shapeReadSpan),
+    requiredActions: value.requiredActions,
+    steps: value.steps
+  };
+}
+
 export function shapePrepareContextData(value: unknown, profile: ResponseProfile): unknown {
   if (profile === 'debug' || !isRecord(value)) return value;
+  if (profile === 'navigation') return shapeNavigationPrepareContextData(value);
   return {
     router: value.router,
     ...(profile === 'standard' ? { queryPreview: asArray(value.queryPreview).slice(0, 5).map(item => slimTarget(item, 'standard')) } : { queryPreview: [] }),

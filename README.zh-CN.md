@@ -26,21 +26,27 @@ NoemaLoom 只把派生状态写入项目本地的 `.noemaloom/`。
 
 ## 面向智能体的工具
 
-Hermes plugin 和 MCP server 都只暴露以下 5 个面向智能体的工具：
+Hermes plugin 和 MCP server 暴露以下受控的面向智能体工具：
 
 - `nl_status`
 - `nl_refresh`
 - `nl_prepare_context`
 - `nl_plan_change`
 - `nl_verify_task`
+- `nl_anchor_status`
+- `nl_anchor_promote`
+- `nl_anchor_demote`
+- `nl_anchor_repair`
+- `nl_anchor_retire`
+- `nl_anchor_checkpoint`
 
-其中 `nl_refresh` 会在 `.noemaloom/` 下写入派生缓存文件。其他工具对项目源码文件保持只读。
+其中 `nl_refresh` 会在 `.noemaloom/` 下写入派生缓存文件。`nl_anchor_*` 只通过受控操作写入项目本地导航状态 `.noemaloom/workset/`。所有工具都不写项目源码文件。
 
 ## Hermes Plugin
 
 当 Hermes 需要直接使用 NoemaLoom 时，使用 `hermes-plugin/noemaloom`。这个路径把 Hermes 侧集成收束到一个插件目录内：工具注册、运行时桥接、bundled usage skill。
 
-使用该 plugin 时，不需要单独添加 Hermes MCP server entry。插件会直接向 Hermes 注册 5 个受控工具，并在每次工具调用时内部启动一个短生命周期的本地 NoemaLoom stdio 进程。
+使用该 plugin 时，不需要单独添加 Hermes MCP server entry。插件会直接向 Hermes 注册受控工具，并在每次工具调用时内部启动一个短生命周期的本地 NoemaLoom stdio 进程。
 
 开发 / 源码链接安装：
 
@@ -130,7 +136,7 @@ args = ["serve", "--mcp"]
 - 当当前项目需要声明 agent 必须使用 NoemaLoom，但不改变用户范围的 agent 默认配置时，使用项目级安装。
 - 把插件安装到 `<target-project>/.hermes/plugins/noemaloom`，并从 `<target-project>` 启动 Hermes，同时设置 `HERMES_ENABLE_PROJECT_PLUGINS=true`。
 - 注意 standalone project plugin 仍需要当前 `$HERMES_HOME/config.yaml` 中的 `plugins.enabled` allow-list，除非本次运行刻意使用 project-local `HERMES_HOME`。
-- 添加项目说明，例如 `AGENTS.md` 的 NoemaLoom 小节，要求 agent 加载 `skill_view(name="noemaloom:usage")`，并只使用 5 个公开工具。
+- 添加项目说明，例如 `AGENTS.md` 的 NoemaLoom 小节，要求 agent 加载 `skill_view(name="noemaloom:usage")`，并只使用受控公开工具。
 
 兼容 MCP 安装：
 - 只在 Codex 或其他仅支持 MCP 的客户端中使用。

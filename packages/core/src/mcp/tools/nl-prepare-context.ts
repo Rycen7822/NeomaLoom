@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { createEnvelope, resolveProjectRootFromInput, type NoemaLoomEnvelope } from '../envelope.js';
+import { createEnvelope, resolveProjectRootFromInput, type EnvelopeWarning, type NoemaLoomEnvelope } from '../envelope.js';
 import { planExactRoute, applyExactRoute } from '../exact-route.js';
 import { RESPONSE_PROFILES, shapeEvidence, shapePrepareContextData, type ResponseProfile } from '../output-profile.js';
 import {
@@ -10,6 +10,7 @@ import {
 import { buildContextDataFromLocated } from './nl-context.js';
 import { runLocator } from './nl-locate.js';
 import { handleNlReadSpan } from './nl-read-span.js';
+import { recordNavigationTargets, renderNavigationCards, worksetRevision } from '../../state/workset.js';
 
 type LocateData = {
   targets: Array<{
@@ -122,6 +123,39 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
       }))
     : [];
   const responseProfile = parsed.responseProfile as ResponseProfile;
+  const worksetWarnings: EnvelopeWarning[] = [];
+  let navigation: Record<string, unknown> = {
+    revision: null,
+    cards: [],
+    text: '',
+    enabled: false,
+    charBudget: 0,
+    truncated: false
+  };
+  try {
+    const workset = await recordNavigationTargets({
+      projectRoot,
+      targets: locateData.targets,
+      reason: 'nl_prepare_context target',
+      maxTargets: Math.min(parsed.limit, 10)
+    });
+    const rendered = renderNavigationCards(workset, { includeDisabled: responseProfile === 'navigation' });
+    navigation = {
+      revision: worksetRevision(workset),
+      enabled: workset.options.navigation.enabled,
+      counters: workset.counters,
+      cards: rendered.cards,
+      text: rendered.text,
+      charBudget: rendered.charBudget,
+      truncated: rendered.truncated
+    };
+  } catch (error) {
+    worksetWarnings.push({
+      code: 'navigation_workset_record_failed',
+      severity: 'warning',
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
   const data = {
     router,
     queryPreview,
@@ -130,8 +164,10 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
     coverage: locateData.coverage,
     coveragePlan: locateData.coveragePlan,
     normalizedQuery: locateData.normalizedQuery,
+    navigation,
     context: contextData,
     readSpans: readResults.map(result => result.data),
+    requiredActions: nextActions,
     steps: ['nl_locate', 'nl_context_from_located', ...readResults.map(result => result.tool)]
   };
   const evidence = [...routedLocated.targets.flatMap(target => target.evidence), ...combineEvidence(readResults)];
@@ -143,7 +179,7 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
     graphRevision: located.graphRevision,
     graphState,
     tokenBudget: located.tokenBudget,
-    warnings: [...located.warnings, ...readWarnings],
+    warnings: [...located.warnings, ...readWarnings, ...worksetWarnings],
     data: shapePrepareContextData(data, responseProfile) as Record<string, unknown>,
     evidence: shapeEvidence(evidence, responseProfile),
     nextActions

@@ -19,7 +19,13 @@ const toolNames = [
   'nl_refresh',
   'nl_prepare_context',
   'nl_plan_change',
-  'nl_verify_task'
+  'nl_verify_task',
+  'nl_anchor_status',
+  'nl_anchor_promote',
+  'nl_anchor_demote',
+  'nl_anchor_repair',
+  'nl_anchor_retire',
+  'nl_anchor_checkpoint'
 ];
 
 const hiddenPrimitiveToolNames = [

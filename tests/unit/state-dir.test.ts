@@ -25,6 +25,8 @@ describe('NoemaLoom state directory', () => {
       paths.documentsDir,
       paths.planningDir,
       paths.derivedMapDir,
+      paths.hotsetDir,
+      paths.worksetDir,
       paths.logsDir,
       paths.transientDir
     ]) {

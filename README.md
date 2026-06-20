@@ -25,21 +25,27 @@ It does not write global config, does not install Git hooks, does not patch Code
 
 ## Agent-Facing Tools
 
-The Hermes plugin and MCP server expose exactly these five agent-facing tools:
+The Hermes plugin and MCP server expose these curated agent-facing tools:
 
 - `nl_status`
 - `nl_refresh`
 - `nl_prepare_context`
 - `nl_plan_change`
 - `nl_verify_task`
+- `nl_anchor_status`
+- `nl_anchor_promote`
+- `nl_anchor_demote`
+- `nl_anchor_repair`
+- `nl_anchor_retire`
+- `nl_anchor_checkpoint`
 
-`nl_refresh` writes derived cache files under `.noemaloom/`. The other tools are read-only with respect to project source files.
+`nl_refresh` writes derived cache files under `.noemaloom/`. The `nl_anchor_*` tools write only controlled project-local navigation state under `.noemaloom/workset/`. No tool writes project source files.
 
 ## Hermes Plugin
 
 Use `hermes-plugin/noemaloom` when Hermes should use NoemaLoom directly as a native plugin. This keeps the Hermes-facing setup in one plugin directory: tool registration, runtime bridge, and bundled usage skill.
 
-No separate Hermes MCP server entry is required for this plugin. The plugin registers the five curated tools directly in Hermes and internally starts a short-lived local NoemaLoom stdio process for each tool call.
+No separate Hermes MCP server entry is required for this plugin. The plugin registers the curated tools directly in Hermes and internally starts a short-lived local NoemaLoom stdio process for each tool call.
 
 Development/source-linked install:
 
@@ -129,7 +135,7 @@ Project-level installation:
 - Use this when the current project should declare that agents must use NoemaLoom, without changing user-wide agent defaults.
 - Install the plugin into `<target-project>/.hermes/plugins/noemaloom` and launch Hermes from `<target-project>` with `HERMES_ENABLE_PROJECT_PLUGINS=true`.
 - Remember that standalone project plugins still require a `plugins.enabled` allow-list in the active `$HERMES_HOME/config.yaml`, unless the run intentionally uses a project-local `HERMES_HOME`.
-- Add project instructions such as an `AGENTS.md` NoemaLoom section that tells agents to load `skill_view(name="noemaloom:usage")` and use only the five public tools.
+- Add project instructions such as an `AGENTS.md` NoemaLoom section that tells agents to load `skill_view(name="noemaloom:usage")` and use only the public curated tools.
 
 Compatibility MCP installation:
 - Use this only for Codex or other MCP-only clients.

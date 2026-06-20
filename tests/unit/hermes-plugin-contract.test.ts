@@ -4,6 +4,7 @@ const pluginFiles = [
   'hermes-plugin/noemaloom/plugin.yaml',
   'hermes-plugin/noemaloom/__init__.py',
   'hermes-plugin/noemaloom/noemaloom_bridge.py',
+  'hermes-plugin/noemaloom/navigation_hooks.py',
   'hermes-plugin/noemaloom/schemas.py',
   'hermes-plugin/noemaloom/resources/skills/usage/SKILL.md'
 ];
@@ -13,7 +14,13 @@ const publicTools = [
   'nl_refresh',
   'nl_prepare_context',
   'nl_plan_change',
-  'nl_verify_task'
+  'nl_verify_task',
+  'nl_anchor_status',
+  'nl_anchor_promote',
+  'nl_anchor_demote',
+  'nl_anchor_repair',
+  'nl_anchor_retire',
+  'nl_anchor_checkpoint'
 ];
 
 const hiddenTools = [
@@ -38,10 +45,15 @@ describe('Hermes plugin contract', () => {
     for (const tool of publicTools) {
       expect(manifest).toContain(`- ${tool}`);
     }
+    expect(manifest).toContain('provides_hooks:');
+    expect(manifest).toContain('- pre_llm_call');
+    expect(manifest).toContain('- post_tool_call');
 
     const init = await readFile('hermes-plugin/noemaloom/__init__.py', 'utf8');
     expect(init).toContain('ctx.register_tool');
     expect(init).toContain('ctx.register_skill');
+    expect(init).toContain('ctx.register_hook("pre_llm_call"');
+    expect(init).toContain('ctx.register_hook("post_tool_call"');
     expect(init).toContain('toolset="noemaloom"');
 
     const schemas = await readFile('hermes-plugin/noemaloom/schemas.py', 'utf8');

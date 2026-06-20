@@ -16,6 +16,7 @@ export async function ensureStateDir(projectRoot: string): Promise<NoemaLoomPath
     paths.planningDir,
     paths.derivedMapDir,
     paths.hotsetDir,
+    paths.worksetDir,
     paths.logsDir,
     paths.transientDir
   ]) {
