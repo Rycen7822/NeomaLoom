@@ -15,8 +15,17 @@ import { handleNlTrace } from './nl-trace.js';
 import { handleNlVerifyCoverage } from './nl-verify-coverage.js';
 
 type CoverageData = {
-  status?: string;
+  status?: 'pass' | 'needs_attention' | 'fail' | string;
 };
+
+function verifyTaskNextActions(status: CoverageData['status'], graphState: NoemaLoomEnvelope['graphState']): string[] {
+  if (status === 'pass') {
+    return graphState === 'stale' ? ['call nl_refresh with target="changed" and mode="safe"'] : [];
+  }
+  return status === 'needs_attention'
+    ? ['resolve reported coverage attention before refresh']
+    : ['fix reported coverage gaps before refresh'];
+}
 
 export const nlVerifyTaskInputSchema = z
   .object({
@@ -81,9 +90,6 @@ export async function handleNlVerifyTask(input: unknown): Promise<NoemaLoomEnvel
       steps: summarizeSteps(envelopes)
     },
     evidence: combineEvidence(envelopes),
-    nextActions:
-      coverageData.status === 'pass'
-        ? ['call nl_refresh with target="changed" and mode="safe"']
-        : ['fix reported coverage gaps before refresh']
+    nextActions: verifyTaskNextActions(coverageData.status, coverage.graphState)
   });
 }

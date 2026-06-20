@@ -84,6 +84,7 @@ describe('final safety assertions', () => {
       oldTerms: ['oldTerm'],
       newTerms: ['newTerm']
     });
+    expect(coverage.ok).toBe(false);
     expect(coverage.data).toMatchObject({ status: 'fail', coverage: { status: 'fail' } });
   });
 });

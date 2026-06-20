@@ -182,7 +182,7 @@ describe('scoped coverage tool semantics', () => {
     });
 
     const coverage = (result.data as { coverage: { status: string; unsyncedDocRoles: Array<{ path: string; term: string }> } }).coverage;
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
     expect(coverage.status).toBe('fail');
     expect(coverage.unsyncedDocRoles).toEqual([
       expect.objectContaining({ path: 'docs/api/client.md', term: 'legacyTimeout' })

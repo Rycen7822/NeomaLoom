@@ -115,7 +115,7 @@ describe('aggregated impact planning and coverage verification after edits', () 
       oldTerms: [],
       newTerms: []
     });
-    expect(sourceCoverage.ok).toBe(true);
+    expect(sourceCoverage.ok).toBe(false);
     expect(sourceCoverage.data).toMatchObject({
       status: 'needs_attention',
       coverage: {
@@ -139,7 +139,7 @@ describe('aggregated impact planning and coverage verification after edits', () 
       oldTerms: ['legacyTimeout'],
       newTerms: ['timeoutMs']
     });
-    expect(failingCoverage.ok).toBe(true);
+    expect(failingCoverage.ok).toBe(false);
     expect(failingCoverage.data).toMatchObject({
       status: 'fail',
       coverage: {
@@ -163,6 +163,8 @@ describe('aggregated impact planning and coverage verification after edits', () 
       newTerms: ['timeoutMs']
     });
     expect(passingCoverage.ok).toBe(true);
+    expect(passingCoverage.graphState).toBe('stale');
+    expect(passingCoverage.nextActions).toEqual(expect.arrayContaining(['call nl_refresh with target="changed" and mode="safe"']));
     expect(passingCoverage.data).toMatchObject({
       status: 'pass',
       coverage: {
@@ -171,6 +173,29 @@ describe('aggregated impact planning and coverage verification after edits', () 
         brokenLinks: [],
         codeDocMismatches: []
       }
+    });
+
+    const changedRefresh = await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'changed',
+      mode: 'safe'
+    });
+    expect(changedRefresh.ok).toBe(true);
+    expect(changedRefresh.graphState).toBe('ready');
+
+    const refreshedPassingCoverage = await callRegisteredTool('nl_verify_task', {
+      projectPath: projectRoot,
+      goal: 'Rename legacyTimeout to timeoutMs in docs',
+      changedPaths: ['docs/api/client.md'],
+      oldTerms: ['legacyTimeout'],
+      newTerms: ['timeoutMs']
+    });
+    expect(refreshedPassingCoverage.ok).toBe(true);
+    expect(refreshedPassingCoverage.graphState).toBe('ready');
+    expect(refreshedPassingCoverage.nextActions).not.toEqual(expect.arrayContaining(['call nl_refresh with target="changed" and mode="safe"']));
+    expect(refreshedPassingCoverage.data).toMatchObject({
+      status: 'pass',
+      coverage: { status: 'pass' }
     });
   });
 });
