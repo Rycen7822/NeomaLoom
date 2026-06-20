@@ -44,6 +44,33 @@ async function createInventoryOnlySpanDb(projectRoot: string): Promise<void> {
   }
 }
 
+async function createInventoryDbWithGeneratedDocRole(projectRoot: string): Promise<void> {
+  const spansDir = path.join(projectRoot, '.noemaloom', 'spans');
+  await mkdir(spansDir, { recursive: true });
+  const db = new DatabaseSync(path.join(spansDir, 'spans.db'));
+  try {
+    applySpanMigrations(db);
+    const insertFile = db.prepare(
+      `INSERT INTO repo_files
+        (path, absolute_path, role, language, content_hash, size_bytes, modified_at, indexed_at, generated, ignored, metadata_json)
+       VALUES (?, ?, ?, 'python-bytecode', ?, 64, 0, 0, 1, 0, '{}')`
+    );
+    db.exec('BEGIN');
+    insertFile.run(
+      'tests/__pycache__/test_client.cpython-312.pyc',
+      path.join(projectRoot, 'tests/__pycache__/test_client.cpython-312.pyc'),
+      'experiment_note_doc',
+      'generated-hash'
+    );
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  } finally {
+    db.close();
+  }
+}
+
 describe('coverage verifier', () => {
   it('fails while current changed files contain old terms or broken links and passes after they are fixed', async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-coverage-unit-'));
@@ -120,6 +147,25 @@ describe('coverage verifier', () => {
     expect(result.unsyncedDocRoles).toEqual([
       expect.objectContaining({ path: 'README.md', role: 'readme_doc', term: 'legacyTimeout' })
     ]);
+  });
+
+  it('ignores generated Python bytecode even when stale indexes classify it as a doc role', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-coverage-pyc-'));
+    await writeProjectFile(projectRoot, 'src/client.py', 'def create_client():\n    return "timeoutMs"\n');
+    await writeProjectFile(projectRoot, 'tests/__pycache__/test_client.cpython-312.pyc', 'legacyTimeout bytecode cache\n');
+    await createInventoryDbWithGeneratedDocRole(projectRoot);
+
+    const result = await verifyCoverage({
+      projectRoot,
+      goal: 'Rename legacyTimeout to timeoutMs',
+      changedPaths: ['src/client.py'],
+      oldTerms: ['legacyTimeout'],
+      newTerms: ['timeoutMs']
+    });
+
+    expect(result.status).toBe('pass');
+    expect(result.remainingOldTermHits).toEqual([]);
+    expect(result.unsyncedDocRoles).toEqual([]);
   });
 
   it('scans text files under directory changedPaths without throwing EISDIR', async () => {

@@ -42,6 +42,7 @@ export type ScoreBreakdown = {
   featureRelevanceScore: number;
   canonicalityScore: number;
   coverageDiversityScore: number;
+  kindPrecisionScore: number;
   freshnessScore: number;
   generatedFilePenalty: number;
   vendorFilePenalty: number;
@@ -91,8 +92,46 @@ function normalizedPathTerm(term: string): string {
   return term.replaceAll('\\', '/').replace(/^\.\//, '').replace(/^\/+/, '');
 }
 
-function exactPathMatch(candidate: LocatorCandidate, query: NormalizedQuery): boolean {
-  return query.pathTerms.some(term => candidate.path === normalizedPathTerm(term));
+function exactPathOrBasenameMatch(candidate: LocatorCandidate, query: NormalizedQuery): boolean {
+  return query.pathTerms.some(term => {
+    const normalized = normalizedPathTerm(term).toLowerCase();
+    const candidatePath = candidate.path.toLowerCase();
+    const basename = candidatePath.split('/').at(-1) ?? candidatePath;
+    return candidatePath === normalized || basename === normalized || candidatePath.endsWith(`/${normalized}`);
+  });
+}
+
+function pathContainsTerm(candidate: LocatorCandidate, query: NormalizedQuery): boolean {
+  return query.pathTerms.some(term => candidate.path.toLowerCase().includes(normalizedPathTerm(term).toLowerCase()));
+}
+
+function exactSymbolLabel(candidate: LocatorCandidate, query: NormalizedQuery): boolean {
+  return query.symbolTerms.some(term => candidate.label === term || candidate.symbolPath.includes(term));
+}
+
+function queryWantsParagraph(query: NormalizedQuery): boolean {
+  const raw = query.raw.toLowerCase();
+  return raw.includes('paragraph') || raw.includes('段落');
+}
+
+function kindPrecisionScore(candidate: LocatorCandidate, query: NormalizedQuery): number {
+  const kind = String(candidate.kind);
+  if (kind.startsWith('code.') && exactSymbolLabel(candidate, query)) {
+    if (['code.function', 'code.method', 'code.class', 'code.constant', 'code.component'].includes(kind)) return 18;
+    if (kind === 'code.module') return 4;
+    return 10;
+  }
+  if (kind === 'doc.paragraph' && (queryWantsParagraph(query) || exactPathOrBasenameMatch(candidate, query))) {
+    const contentTerms = [...query.exactTerms, ...query.featureTerms].filter(term => !term.includes('/') && !term.endsWith('.md'));
+    return 14 + Math.min(30, countHits(contentTerms, candidate.indexedText.toLowerCase()) * 4);
+  }
+  if ((kind === 'doc.heading' || kind === 'doc.section') && queryWantsParagraph(query)) {
+    return -8;
+  }
+  if (kind === 'file' && query.symbolTerms.length > 0) {
+    return -6;
+  }
+  return 0;
 }
 
 function scoreCandidate(candidate: LocatorCandidate, query: NormalizedQuery): ScoreBreakdown {
@@ -104,7 +143,7 @@ function scoreCandidate(candidate: LocatorCandidate, query: NormalizedQuery): Sc
   const configKeyScore = hasCaseSensitiveHit(query.configTerms, candidate) ? 8 : 0;
   const pathRoleScore = Math.min(
     56,
-    (exactPathMatch(candidate, query) ? 42 : query.pathTerms.some(term => candidate.path.includes(normalizedPathTerm(term))) ? 10 : 0) +
+    (exactPathOrBasenameMatch(candidate, query) ? 42 : pathContainsTerm(candidate, query) ? 10 : 0) +
       (query.targetRoles.includes(candidate.role as FileRole) ? 8 : 0)
   );
   const linkConfidenceScore = Math.round(Math.min(1, Math.max(0, ...candidate.linkedSpans.map(span => span.confidence), 0)) * 10);
@@ -115,6 +154,7 @@ function scoreCandidate(candidate: LocatorCandidate, query: NormalizedQuery): Sc
     ? 6
     : 0;
   const coverageDiversityScore = candidate.coverageRole || query.targetRoles.includes(candidate.role as FileRole) ? 4 : 0;
+  const precisionScore = kindPrecisionScore(candidate, query);
   const freshnessScore = candidate.boundary.stale ? 0 : 5;
   const generatedFilePenalty = candidate.file.generated || candidate.role === 'generated_file' ? 15 : 0;
   const vendorFilePenalty = candidate.file.vendor || candidate.role === 'vendor_file' ? 15 : 0;
@@ -131,6 +171,7 @@ function scoreCandidate(candidate: LocatorCandidate, query: NormalizedQuery): Sc
     featureRelevanceScore,
     canonicalityScore,
     coverageDiversityScore,
+    kindPrecisionScore: precisionScore,
     freshnessScore,
     generatedFilePenalty,
     vendorFilePenalty,
@@ -150,6 +191,7 @@ function sumBreakdown(breakdown: ScoreBreakdown): number {
     breakdown.featureRelevanceScore +
     breakdown.canonicalityScore +
     breakdown.coverageDiversityScore +
+    breakdown.kindPrecisionScore +
     breakdown.freshnessScore -
     breakdown.generatedFilePenalty -
     breakdown.vendorFilePenalty -

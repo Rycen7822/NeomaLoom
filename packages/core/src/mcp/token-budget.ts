@@ -40,13 +40,8 @@ export function applyLocatorTokenBudget<T extends BudgetedTarget>(input: {
   let used = 0;
 
   for (const item of sorted) {
-    if (item.target.decision === 'must_edit') {
-      kept.add(item.index);
-      used += item.tokens;
-      continue;
-    }
-
-    if (used + item.tokens <= requested) {
+    const shouldAlwaysKeepFirst = kept.size === 0;
+    if (shouldAlwaysKeepFirst || used + item.tokens <= requested) {
       kept.add(item.index);
       used += item.tokens;
     }

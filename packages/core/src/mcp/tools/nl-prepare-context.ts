@@ -73,7 +73,7 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
     located,
     includeSnippets: parsed.includeSnippets
   });
-  const readTargets = parsed.readTopSpans
+  const readTargets = parsed.readTopSpans && locateData.unindexedCandidates?.length === 0
     ? locateData.targets
       .filter(target => target.indexed !== false && ['must_edit', 'maybe_edit'].includes(target.decision))
         .slice(0, parsed.maxReadSpans)

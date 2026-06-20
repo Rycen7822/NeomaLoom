@@ -30,8 +30,10 @@ export function combineWarnings(envelopes: Array<NoemaLoomEnvelope | null | unde
   return envelopes.filter(Boolean).flatMap(envelope => envelope?.warnings ?? []);
 }
 
+const MAX_COMBINED_EVIDENCE = 80;
+
 export function combineEvidence(envelopes: Array<NoemaLoomEnvelope | null | undefined>): unknown[] {
-  return envelopes.filter(Boolean).flatMap(envelope => envelope?.evidence ?? []);
+  return envelopes.filter(Boolean).flatMap(envelope => envelope?.evidence ?? []).slice(0, MAX_COMBINED_EVIDENCE);
 }
 
 export function summarizeSteps(envelopes: Array<NoemaLoomEnvelope | null | undefined>) {

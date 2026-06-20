@@ -11,6 +11,11 @@ function matchesPattern(pattern: string, repoPath: string): boolean {
   const normalizedPattern = normalizeRepoPath(pattern);
   const normalizedPath = normalizeRepoPath(repoPath);
 
+  if (normalizedPattern.startsWith('**/') && normalizedPattern.endsWith('/**')) {
+    const segmentPath = normalizedPattern.slice(3, -3);
+    return normalizedPath === segmentPath || normalizedPath.startsWith(`${segmentPath}/`) || normalizedPath.includes(`/${segmentPath}/`);
+  }
+
   if (normalizedPattern.endsWith('/**')) {
     const prefix = normalizedPattern.slice(0, -3);
     return normalizedPath === prefix || normalizedPath.startsWith(`${prefix}/`);

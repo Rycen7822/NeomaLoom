@@ -53,6 +53,35 @@ export type LocatorRunResult = {
   tokenBudget: TokenBudget;
 };
 
+function preferCandidateForSamePath(left: RankedCandidate, right: RankedCandidate): RankedCandidate {
+  if (left.score !== right.score) return left.score > right.score ? left : right;
+  const precision = (candidate: RankedCandidate): number => {
+    const kind = String(candidate.kind);
+    if (kind === 'code.function' || kind === 'code.method') return 0;
+    if (kind.startsWith('code.')) return 1;
+    if (kind === 'doc.paragraph') return 2;
+    if (kind.startsWith('doc.')) return 3;
+    if (kind === 'file') return 5;
+    return 4;
+  };
+  return precision(left) <= precision(right) ? left : right;
+}
+
+function diversifyRankedCandidates(candidates: RankedCandidate[]): RankedCandidate[] {
+  const byPath = new Map<string, RankedCandidate>();
+  for (const candidate of candidates) {
+    const existing = byPath.get(candidate.path);
+    byPath.set(candidate.path, existing ? preferCandidateForSamePath(existing, candidate) : candidate);
+  }
+  return [...byPath.values()].sort(
+    (left, right) =>
+      right.score - left.score ||
+      left.path.localeCompare(right.path) ||
+      left.startLine - right.startLine ||
+      left.spanId.localeCompare(right.spanId)
+  );
+}
+
 function targetFromRanked(candidate: RankedCandidate): LocatorTarget {
   const decision = decideCandidate(candidate);
   const evidence = candidate.evidence.slice(0, 12);
@@ -103,12 +132,13 @@ export async function runLocator(input: {
     includeGeneratedVendor
   });
   const ranked = rankCandidates(generated.candidates, generated.normalizedQuery, { includeGeneratedVendor });
+  const diversified = diversifyRankedCandidates(ranked);
   const coveragePlan = buildCoveragePlan({
     query: generated.normalizedQuery,
     targets: ranked,
     requestedRoles: input.targetRoles
   });
-  const targets = ranked.slice(0, input.limit ?? 20).map(targetFromRanked);
+  const targets = diversified.slice(0, input.limit ?? 20).map(targetFromRanked);
   const budgeted = applyLocatorTokenBudget({
     requested: input.budget ?? 2400,
     targets,

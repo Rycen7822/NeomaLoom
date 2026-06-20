@@ -6,7 +6,7 @@ import { sweepOldTerms, type OldTermHit } from './old-term-sweep.js';
 import { checkAnchorsAndLinks } from './anchor-checker.js';
 import { checkCodeDocMismatch, type CodeDocMismatch } from './code-doc-mismatch.js';
 import type { BrokenLink, StaleAnchor } from './link-checker.js';
-import { classifyFileRole } from '../files/role-classifier.js';
+import { classifyFileRole, isGeneratedArtifactPath } from '../files/role-classifier.js';
 
 type Statement = {
   all: (...params: unknown[]) => unknown[];
@@ -80,7 +80,7 @@ function inventoryDocRolesFromSnapshot(input: {
     const changed = new Set(input.changedPaths);
     return Array.isArray(parsed.files)
       ? parsed.files
-          .filter(file => typeof file.path === 'string' && !changed.has(file.path))
+          .filter(file => typeof file.path === 'string' && !changed.has(file.path) && !isGeneratedArtifactPath(file.path))
           .map(file => ({ path: file.path, role: classifyFileRole(file.path), indexed: false }))
           .filter(file => file.role.endsWith('_doc'))
           .sort((left, right) => left.role.localeCompare(right.role) || left.path.localeCompare(right.path))
@@ -105,6 +105,9 @@ function readInventoryDocRoles(input: {
          FROM repo_files f
          WHERE f.role LIKE '%_doc'
            AND f.path NOT IN (${changed})
+           AND f.path NOT LIKE '%/__pycache__/%'
+           AND f.path NOT LIKE '%.pyc'
+           AND f.path NOT LIKE '%.pyo'
          ORDER BY f.role ASC, f.path ASC`
       )
       .all(...(input.changedPaths.length > 0 ? input.changedPaths : ['']))
@@ -136,7 +139,7 @@ function findUnsyncedDocRoles(input: {
       continue;
     }
     for (const term of input.oldTerms) {
-      if (term && text.includes(term)) {
+      if (!isGeneratedArtifactPath(doc.path) && term && text.includes(term)) {
         hits.push({ path: doc.path, role: doc.role, term, indexed: doc.indexed });
       }
     }

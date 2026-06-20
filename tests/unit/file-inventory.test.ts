@@ -74,6 +74,9 @@ describe('file inventory', () => {
     expect(byPath.get('paper/notes.md')?.role).toBe('paper_doc');
     expect(byPath.get('notes/run.md')?.role).toBe('experiment_note_doc');
     expect(classifyFileRole('DeepScientist/quests/001/experiments/stage10/run.json')).toBe('experiment_note_doc');
+    expect(classifyFileRole('DeepScientist/quests/001/experiments/stage10/scripts/stage10_loopcert_score.py')).toBe('source_file');
+    expect(classifyFileRole('DeepScientist/quests/001/experiments/stage10/tests/test_stage10_loopcert_score.py')).toBe('test_file');
+    expect(classifyFileRole('DeepScientist/quests/001/experiments/stage10/tests/__pycache__/test_stage10_loopcert_score.cpython-312.pyc')).toBe('generated_file');
     expect(classifyFileRole('DeepScientist/quests/001/.ds/bash_exec/terminal.log')).toBe('experiment_note_doc');
     expect(classifyFileRole('DeepScientist/quests/001/resources/code/github/huggingface__transformers/src/transformers/modeling_utils.py')).toBe('vendor_file');
     expect(byPath.get('design/arch.md')?.role).toBe('design_doc');
@@ -134,6 +137,7 @@ describe('file inventory', () => {
       'build/app.js',
       '.venv/bin/python',
       'coverage/summary.json',
+      'src/__pycache__/app.cpython-312.pyc',
       'vendor/pkg/index.js',
       'src/app.ts'
     ]) {
@@ -150,6 +154,7 @@ describe('file inventory', () => {
       'coverage/summary.json',
       'dist/app.js',
       'node_modules/pkg/index.js',
+      'src/__pycache__/app.cpython-312.pyc',
       'vendor/pkg/index.js'
     ]);
 

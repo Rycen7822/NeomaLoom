@@ -180,12 +180,35 @@ function resolveSeedSpanIds(db: Database, target: string, targetType = 'auto'): 
   if (targetType === 'file') {
     return (db.prepare('SELECT span_id FROM repo_spans WHERE path = ? ORDER BY start_line ASC, span_id ASC LIMIT ?').all(target, MAX_TRACE_SEEDS) as Array<{ span_id: string }>).map(row => row.span_id);
   }
+  if (targetType === 'symbol') {
+    ids = add(
+      ids,
+      db
+        .prepare(`SELECT span_id FROM repo_spans
+          WHERE kind LIKE 'code.%'
+            AND (label = ? OR symbol_path_json LIKE ? OR metadata_json LIKE ?)
+          ORDER BY CASE WHEN label = ? THEN 0 ELSE 1 END,
+                   CASE kind
+                     WHEN 'code.function' THEN 0
+                     WHEN 'code.method' THEN 1
+                     WHEN 'code.class' THEN 2
+                     WHEN 'code.constant' THEN 3
+                     WHEN 'code.component' THEN 4
+                     WHEN 'code.module' THEN 8
+                     ELSE 5
+                   END,
+                   length(path) ASC, path ASC, start_line ASC
+          LIMIT ?`)
+        .all(target, `%"${target}"%`, `%${target}%`, target, MAX_TRACE_SEEDS) as Array<{ span_id: string }>
+    );
+    if (ids.length > 0) return ids;
+  }
 
   ids = add(ids, db.prepare('SELECT span_id FROM repo_spans WHERE span_id = ? OR path = ? ORDER BY path ASC, start_line ASC LIMIT ?').all(target, target, MAX_TRACE_SEEDS) as Array<{ span_id: string }>);
   if (ids.length >= MAX_TRACE_SEEDS) return ids;
 
   const pattern = likePattern(target);
-  const kindPrefix = targetType === 'feature' ? 'feature.%' : targetType === 'config' ? 'config.%' : targetType === 'doc' ? 'doc.%' : undefined;
+  const kindPrefix = targetType === 'feature' ? 'feature.%' : targetType === 'config' ? 'config.%' : targetType === 'doc' ? 'doc.%' : targetType === 'symbol' ? 'code.%' : undefined;
   const params = [pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, ...(kindPrefix ? [kindPrefix] : []), MAX_TRACE_SEEDS - ids.length];
   ids = add(
     ids,

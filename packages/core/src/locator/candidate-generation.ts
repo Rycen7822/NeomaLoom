@@ -458,6 +458,31 @@ function selectSpanCandidateIds(db: Database, query: NormalizedQuery, cap: numbe
   const terms = searchTerms(query);
   const pathTerms = unique([...query.pathTerms, ...terms.filter(term => term.includes('.') || term.includes('/') || term.includes('_'))]);
 
+  for (const symbol of query.symbolTerms) {
+    if (ids.length >= cap) break;
+    addSpanIdsFromRows(
+      ids,
+      db
+        .prepare(`SELECT span_id FROM repo_spans
+          WHERE kind LIKE 'code.%'
+            AND (label = ? OR symbol_path_json LIKE ? OR metadata_json LIKE ?)
+          ORDER BY CASE WHEN label = ? THEN 0 ELSE 1 END,
+                   CASE kind
+                     WHEN 'code.function' THEN 0
+                     WHEN 'code.method' THEN 1
+                     WHEN 'code.class' THEN 2
+                     WHEN 'code.constant' THEN 3
+                     WHEN 'code.component' THEN 4
+                     WHEN 'code.module' THEN 8
+                     ELSE 5
+                   END,
+                   length(path) ASC, path ASC, start_line ASC
+          LIMIT ?`)
+        .all(symbol, `%"${symbol}"%`, `%${symbol}%`, symbol, Math.max(10, Math.min(cap - ids.length, 50))) as Array<{ span_id: string }>,
+      cap
+    );
+  }
+
   for (const term of pathTerms) {
     if (ids.length >= cap) break;
     addSpanIdsFromRows(

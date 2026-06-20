@@ -1,6 +1,8 @@
 import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { isGeneratedArtifactPath } from '../files/role-classifier.js';
+
 export type OldTermHit = {
   path: string;
   line: number;
@@ -17,7 +19,8 @@ function normalizeRepoPath(repoPath: string): string {
 }
 
 function isTextPath(repoPath: string): boolean {
-  return TEXT_EXTENSIONS.has(path.posix.extname(normalizeRepoPath(repoPath))) || path.posix.basename(repoPath).toUpperCase() === 'AGENTS.md'.toUpperCase();
+  const normalized = normalizeRepoPath(repoPath);
+  return !isGeneratedArtifactPath(normalized) && (TEXT_EXTENSIONS.has(path.posix.extname(normalized)) || path.posix.basename(repoPath).toUpperCase() === 'AGENTS.md'.toUpperCase());
 }
 
 async function expandChangedPath(projectRoot: string, repoPath: string): Promise<string[]> {
@@ -45,11 +48,14 @@ async function expandChangedPath(projectRoot: string, repoPath: string): Promise
   const out: string[] = [];
   async function walk(dir: string): Promise<void> {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
-      if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === '.noemaloom') {
+      if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === '.noemaloom' || entry.name === '__pycache__') {
         continue;
       }
       const child = path.join(dir, entry.name);
       const childRelative = path.relative(root, child).replaceAll('\\', '/');
+      if (isGeneratedArtifactPath(childRelative)) {
+        continue;
+      }
       if (entry.isDirectory()) {
         await walk(child);
       } else if (entry.isFile() && isTextPath(childRelative)) {

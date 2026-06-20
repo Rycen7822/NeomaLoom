@@ -20,7 +20,120 @@ async function createScopedProject(): Promise<string> {
   return projectRoot;
 }
 
+async function createLoopLikeProject(): Promise<string> {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-loop-direct-'));
+  await writeProjectFile(projectRoot, 'package.json', JSON.stringify({ name: 'loop-direct' }));
+  await writeProjectFile(
+    projectRoot,
+    'CODEX_STATE.md',
+    '# CODEX_STATE\n\nStage10 active anchors mention LoopCert selector tags and recovery CE only as a broad status index.\n'
+  );
+  await writeProjectFile(
+    projectRoot,
+    'DeepScientist/quests/001/STAGE10_推进方向.md',
+    '# STAGE10 推进方向\n\nGeneral LoopCert direction notes mention selector tags without the score-side no-target constraint.\n'
+  );
+  await writeProjectFile(
+    projectRoot,
+    'DeepScientist/quests/001/STAGE10_推进规划.md',
+    [
+      '# STAGE10 推进规划',
+      '',
+      '## S10-08 LoopCert score',
+      '',
+      'Introductory notes are intentionally generic.',
+      '',
+      'The Stage10 LoopCert portfolio selector tags are `CFC-only`, `LoopCert-only`, `OrbitRepair-Proxy`, `Pareto-front`, `risk-calibrated no-target blend`, and `family-balanced blend`. This paragraph defines the score-side no-target constraint: use only ScoreBank, HiddenTrajectoryBank, CFC, and LoopCert component ledgers; do not read recovery CE.',
+      '',
+      'Further notes stay outside the requested paragraph.',
+      ''
+    ].join('\n')
+  );
+  await writeProjectFile(
+    projectRoot,
+    'DeepScientist/quests/001/experiments/stage10/scripts/stage10_loopcert_score.py',
+    [
+      'def helper_score(row):',
+      '    return row.get("score", 0)',
+      '',
+      'def portfolio_rows(score_rows, generated_at, run_mode, topk):',
+      '    return [row for row in score_rows[:topk]]',
+      ''
+    ].join('\n')
+  );
+  await writeProjectFile(
+    projectRoot,
+    'DeepScientist/quests/001/experiments/stage10/tests/test_stage10_loopcert_score.py',
+    [
+      'from experiments.stage10.scripts.stage10_loopcert_score import portfolio_rows',
+      '',
+      'def test_portfolio_rows():',
+      '    assert portfolio_rows([{"score": 1}], "now", "formal", 1)',
+      ''
+    ].join('\n')
+  );
+  await callRegisteredTool('nl_refresh', { projectPath: projectRoot, target: 'all', mode: 'safe' });
+  return projectRoot;
+}
+
 describe('scoped coverage tool semantics', () => {
+  it('returns the exact scoped document paragraph instead of broad anchor docs', async () => {
+    const projectRoot = await createLoopLikeProject();
+
+    const result = await callRegisteredTool('nl_prepare_context', {
+      projectPath: projectRoot,
+      goal: 'Find the document paragraph that defines Stage10 LoopCert portfolio selector tags and the score-side no-target constraint',
+      scope: 'STAGE10_推进规划.md LoopCert score selector tags no-target recovery CE',
+      targetRoles: ['document'],
+      readTopSpans: true,
+      maxReadSpans: 1,
+      contextLines: 1,
+      limit: 5
+    });
+
+    const data = result.data as {
+      targets: Array<{ path: string; kind: string }>;
+      readSpans: Array<{ path: string; spanStartLine: number; spanEndLine: number; content: string }>;
+    };
+    expect(result.ok).toBe(true);
+    expect(data.targets[0]).toMatchObject({
+      path: 'DeepScientist/quests/001/STAGE10_推进规划.md',
+      kind: 'doc.paragraph'
+    });
+    expect(data.readSpans[0]).toMatchObject({
+      path: 'DeepScientist/quests/001/STAGE10_推进规划.md',
+      spanStartLine: 7,
+      spanEndLine: 7
+    });
+    expect(data.readSpans[0].content).toContain('risk-calibrated no-target blend');
+    expect(data.readSpans[0].content).toContain('do not read recovery CE');
+  });
+
+  it('resolves exact Python symbols as source functions with bounded plan-change output', async () => {
+    const projectRoot = await createLoopLikeProject();
+
+    const result = await callRegisteredTool('nl_plan_change', {
+      projectPath: projectRoot,
+      target: 'portfolio_rows',
+      targetType: 'symbol',
+      targetRoles: ['source'],
+      goal: 'Find the Python function portfolio_rows that emits LoopCert portfolio selector rows',
+      limit: 8
+    });
+
+    const data = result.data as { targets: Array<{ path: string; kind: string; role: string; label: string }> };
+    expect(result.ok).toBe(true);
+    expect(data.targets[0]).toMatchObject({
+      path: 'DeepScientist/quests/001/experiments/stage10/scripts/stage10_loopcert_score.py',
+      kind: 'code.function',
+      role: 'source_file',
+      label: 'portfolio_rows'
+    });
+    expect(result.warnings.filter(warning => warning.code === 'coverage_missing')).toEqual([]);
+    expect(JSON.stringify(result).length).toBeLessThan(100_000);
+    expect(result.tokenBudget.used).toBeLessThanOrEqual(result.tokenBudget.requested);
+  });
+
   it('nl_prepare_context returns promotion nextActions for cold inventory candidates', async () => {
     const projectRoot = await createScopedProject();
 

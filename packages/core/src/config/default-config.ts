@@ -73,6 +73,9 @@ export function createDefaultConfig(projectRoot: string): NoemaLoomConfig {
         '.venv/**',
         'venv/**',
         '__pycache__/**',
+        '**/__pycache__/**',
+        '*.pyc',
+        '*.pyo',
         '.noemaloom/**',
         'coverage/**',
         'vendor/**'
