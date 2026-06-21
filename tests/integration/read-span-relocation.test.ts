@@ -84,6 +84,24 @@ function readSpanByPathKind(projectRoot: string, repoPath: string, kind: string)
 }
 
 describe('nl_read_span relocation and block sizing', () => {
+  it('returns span_index_missing instead of handler_error when the span DB is absent', async () => {
+    const projectRoot = await createProject();
+
+    const read = await callInternalTool('nl_read_span', {
+      projectPath: projectRoot,
+      spanId: 'missing-span-id'
+    });
+
+    expect(read.ok).toBe(false);
+    expect(read.graphState).toBe('empty');
+    expect(read.data).toEqual({ status: 'span_index_missing' });
+    expect(read.warnings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'span_index_missing', severity: 'error' })])
+    );
+    expect(JSON.stringify(read)).not.toContain('handler_error');
+    expect(read.nextActions).toEqual(expect.arrayContaining([expect.stringContaining('nl_refresh')]));
+  });
+
   it('relocates a span after line drift and reads from current disk content', async () => {
     const projectRoot = await createProject();
     await callRegisteredTool('nl_refresh', {
@@ -345,6 +363,51 @@ describe('nl_read_span relocation and block sizing', () => {
       relocation: { used: true, method: 'truncated_prefix_search' }
     });
     expect(read.data.content).toContain('TRUNCATED_PREFIX_SENTINEL');
+  });
+
+  it('relocates truncated large code spans by line fingerprint when the stored prefix changed', async () => {
+    const projectRoot = await createProject();
+    await writeProjectFile(
+      projectRoot,
+      'src/truncated_module.py',
+      [
+        'TRUNCATED_PREFIX_SENTINEL = True',
+        ...Array.from({ length: 1200 }, (_, index) => `VALUE_${index} = ${index}`),
+        ''
+      ].join('\n')
+    );
+    await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'all',
+      mode: 'safe'
+    });
+    const moduleSpan = readSpanByPathKind(projectRoot, 'src/truncated_module.py', 'code.module');
+    expect(moduleSpan).toBeTruthy();
+    if (!moduleSpan) {
+      throw new Error('truncated module span was not indexed');
+    }
+    expect(JSON.parse(moduleSpan.metadataJson)).toMatchObject({ indexedTextTruncatedAtWrite: true });
+
+    const modulePath = path.join(projectRoot, 'src/truncated_module.py');
+    const original = await readFile(modulePath, 'utf8');
+    await writeFile(modulePath, original.replace('TRUNCATED_PREFIX_SENTINEL = True', 'CHANGED_PREFIX_SENTINEL = True'), 'utf8');
+
+    const read = await callInternalTool('nl_read_span', {
+      projectPath: projectRoot,
+      spanId: moduleSpan.spanId,
+      contextLines: 0,
+      maxLines: 80
+    });
+
+    expect(read.ok).toBe(true);
+    expect(read.graphState).toBe('stale');
+    expect(read.data).toMatchObject({
+      status: 'block_too_large',
+      path: 'src/truncated_module.py',
+      contentStatus: 'preview',
+      relocation: { used: true, method: 'line_fingerprint_search' }
+    });
+    expect(read.data.content).toContain('CHANGED_PREFIX_SENTINEL');
   });
 
   it('returns a clear relocation failure when a changed span cannot be found', async () => {

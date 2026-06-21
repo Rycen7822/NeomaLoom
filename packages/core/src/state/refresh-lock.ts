@@ -46,7 +46,33 @@ function lockIsActive(parsed: { pid?: unknown; createdAt?: unknown }): parsed is
 export type RefreshLockInspection =
   | { state: 'missing' }
   | { state: 'active' | 'stale'; pid: number; createdAt?: string }
+  | { state: 'stale'; reason: 'empty_or_malformed'; message: string }
   | { state: 'unreadable'; message: string };
+
+type ParsedRefreshLock =
+  | { ok: true; pid: number; createdAt?: string; active: boolean }
+  | { ok: false; reason: 'empty_or_malformed'; message: string };
+
+function parseRefreshLock(raw: string): ParsedRefreshLock {
+  if (raw.trim() === '') {
+    return { ok: false, reason: 'empty_or_malformed', message: 'refresh.lock is empty' };
+  }
+  let parsed: { pid?: unknown; createdAt?: unknown };
+  try {
+    parsed = JSON.parse(raw) as { pid?: unknown; createdAt?: unknown };
+  } catch (error) {
+    return { ok: false, reason: 'empty_or_malformed', message: error instanceof Error ? error.message : String(error) };
+  }
+  if (typeof parsed.pid !== 'number') {
+    return { ok: false, reason: 'empty_or_malformed', message: 'refresh.lock does not contain a numeric pid' };
+  }
+  return {
+    ok: true,
+    pid: parsed.pid,
+    ...(typeof parsed.createdAt === 'string' ? { createdAt: parsed.createdAt } : {}),
+    active: lockIsActive(parsed)
+  };
+}
 
 export async function inspectRefreshLock(projectRoot: string): Promise<RefreshLockInspection> {
   const paths = await ensureStateDir(projectRoot);
@@ -60,19 +86,15 @@ export async function inspectRefreshLock(projectRoot: string): Promise<RefreshLo
     return { state: 'unreadable', message: error instanceof Error ? error.message : String(error) };
   }
 
-  try {
-    const parsed = JSON.parse(raw) as { pid?: unknown; createdAt?: unknown };
-    if (typeof parsed.pid !== 'number') {
-      return { state: 'unreadable', message: 'refresh.lock does not contain a numeric pid' };
-    }
-    return {
-      state: lockIsActive(parsed) ? 'active' : 'stale',
-      pid: parsed.pid,
-      ...(typeof parsed.createdAt === 'string' ? { createdAt: parsed.createdAt } : {})
-    };
-  } catch (error) {
-    return { state: 'unreadable', message: error instanceof Error ? error.message : String(error) };
+  const parsed = parseRefreshLock(raw);
+  if (!parsed.ok) {
+    return { state: 'stale', reason: parsed.reason, message: parsed.message };
   }
+  return {
+    state: parsed.active ? 'active' : 'stale',
+    pid: parsed.pid,
+    ...(parsed.createdAt ? { createdAt: parsed.createdAt } : {})
+  };
 }
 
 async function removeStaleLockIfDead(projectRoot: string, lockFile: string): Promise<boolean> {
@@ -83,14 +105,8 @@ async function removeStaleLockIfDead(projectRoot: string, lockFile: string): Pro
     return false;
   }
 
-  let parsed: { pid?: unknown; createdAt?: unknown };
-  try {
-    parsed = JSON.parse(raw) as { pid?: unknown; createdAt?: unknown };
-  } catch {
-    return false;
-  }
-
-  if (lockIsActive(parsed)) {
+  const parsed = parseRefreshLock(raw);
+  if (parsed.ok && parsed.active) {
     return false;
   }
 

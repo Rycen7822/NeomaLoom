@@ -60,4 +60,21 @@ describe('refresh lock', () => {
     await expect(inspectRefreshLock(projectRoot)).resolves.toMatchObject({ state: 'stale', pid: process.pid });
     await expect(withRefreshLock(projectRoot, async () => 'after-expired')).resolves.toEqual({ ok: true, result: 'after-expired' });
   });
+
+  it('recovers empty and malformed lock files instead of reporting permanent progress', async () => {
+    const projectRoot = await createTempProject();
+    const paths = resolveNoemaLoomPaths(projectRoot);
+    await mkdir(paths.locksDir, { recursive: true });
+
+    await writeFile(paths.refreshLockFile, '');
+    await expect(inspectRefreshLock(projectRoot)).resolves.toMatchObject({ state: 'stale', reason: 'empty_or_malformed' });
+    await expect(withRefreshLock(projectRoot, async () => 'after-empty')).resolves.toEqual({ ok: true, result: 'after-empty' });
+    await expect(access(paths.refreshLockFile)).rejects.toThrow();
+
+    await mkdir(paths.locksDir, { recursive: true });
+    await writeFile(paths.refreshLockFile, '{not-json');
+    await expect(inspectRefreshLock(projectRoot)).resolves.toMatchObject({ state: 'stale', reason: 'empty_or_malformed' });
+    await expect(withRefreshLock(projectRoot, async () => 'after-malformed')).resolves.toEqual({ ok: true, result: 'after-malformed' });
+    await expect(access(paths.refreshLockFile)).rejects.toThrow();
+  });
 });

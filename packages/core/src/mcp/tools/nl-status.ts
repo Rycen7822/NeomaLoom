@@ -326,7 +326,10 @@ export async function handleNlStatus(input: unknown): Promise<NoemaLoomEnvelope>
     warnings.push({
       code: 'refresh_lock_stale',
       severity: 'error',
-      message: `Refresh lock belongs to dead pid ${refreshLock.pid}. A previous refresh likely aborted before cleanup.`
+      message:
+        'pid' in refreshLock
+          ? `Refresh lock belongs to dead pid ${refreshLock.pid}. A previous refresh likely aborted before cleanup.`
+          : `Refresh lock is stale because it is malformed: ${refreshLock.message}`
     });
   } else if (refreshLock.state === 'active') {
     warnings.push({

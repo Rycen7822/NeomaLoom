@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { z } from 'zod';
@@ -72,21 +73,37 @@ function parseJson<T>(value: string | null | undefined, fallback: T): T {
   }
 }
 
-function readSpanRow(projectRoot: string, spanId: string): SpanRow | undefined {
-  const db = openDatabase(path.join(projectRoot, '.noemaloom', 'spans', 'spans.db'));
+type SpanRowReadResult =
+  | { status: 'ready'; row?: SpanRow }
+  | { status: 'missing_index' }
+  | { status: 'unreadable'; message: string };
+
+function readSpanRow(projectRoot: string, spanId: string): SpanRowReadResult {
+  const dbPath = path.join(projectRoot, '.noemaloom', 'spans', 'spans.db');
+  if (!existsSync(dbPath)) {
+    return { status: 'missing_index' };
+  }
+
+  let db: Database | undefined;
   try {
-    return db
-      .prepare(
-        `SELECT s.span_id, s.path, s.kind, s.role, s.label, s.start_line, s.end_line,
-                s.heading_path_json, s.anchor, s.stable_locator_json, s.text_hash, s.indexed_text,
-                s.metadata_json, f.content_hash AS file_content_hash
-         FROM repo_spans s
-         LEFT JOIN repo_files f ON f.path = s.path
-         WHERE s.span_id = ?`
-      )
-      .get(spanId) as SpanRow | undefined;
+    db = openDatabase(dbPath);
+    return {
+      status: 'ready',
+      row: db
+        .prepare(
+          `SELECT s.span_id, s.path, s.kind, s.role, s.label, s.start_line, s.end_line,
+                  s.heading_path_json, s.anchor, s.stable_locator_json, s.text_hash, s.indexed_text,
+                  s.metadata_json, f.content_hash AS file_content_hash
+           FROM repo_spans s
+           LEFT JOIN repo_files f ON f.path = s.path
+           WHERE s.span_id = ?`
+        )
+        .get(spanId) as SpanRow | undefined
+    };
+  } catch (error) {
+    return { status: 'unreadable', message: error instanceof Error ? error.message : String(error) };
   } finally {
-    db.close();
+    db?.close();
   }
 }
 
@@ -169,6 +186,75 @@ function indexedTextForRelocation(row: SpanRow): string {
   return row.indexed_text;
 }
 
+function fingerprintLines(text: string): string[] {
+  return text.split(/\r?\n/).map(line => line.trimEnd());
+}
+
+function hashLines(lines: string[]): string {
+  return sha1(lines.join('\n'));
+}
+
+function metadataString(metadata: Record<string, unknown>, key: string): string | undefined {
+  const value = metadata[key];
+  return typeof value === 'string' && value ? value : undefined;
+}
+
+function metadataNumber(metadata: Record<string, unknown>, key: string): number | undefined {
+  const value = metadata[key];
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+}
+
+function lineFingerprintLineRange(row: SpanRow, currentText: string): { startLine: number; endLine: number; text: string; method: string } | undefined {
+  const metadata = parseJson<Record<string, unknown>>(row.metadata_json, {});
+  if (metadata.indexedTextTruncatedAtWrite !== true) {
+    return undefined;
+  }
+  const spanLineCount = metadataNumber(metadata, 'relocationLineCount') ?? Math.max(1, row.end_line - row.start_line + 1);
+  const fingerprintLineCount = Math.min(
+    metadataNumber(metadata, 'relocationFingerprintLineCount') ?? 8,
+    spanLineCount
+  );
+  const prefixHash = metadataString(metadata, 'relocationPrefixHash');
+  const suffixHash = metadataString(metadata, 'relocationSuffixHash');
+  const firstLineHash = metadataString(metadata, 'relocationFirstLineHash');
+  const lastLineHash = metadataString(metadata, 'relocationLastLineHash');
+  if (!prefixHash && !suffixHash && !firstLineHash && !lastLineHash) {
+    return undefined;
+  }
+
+  const lines = fingerprintLines(currentText);
+  if (spanLineCount > lines.length) {
+    return undefined;
+  }
+
+  const candidates: Array<{ startLine: number; score: number; distance: number }> = [];
+  for (let startIndex = 0; startIndex <= lines.length - spanLineCount; startIndex += 1) {
+    const suffixStartIndex = startIndex + spanLineCount - fingerprintLineCount;
+    let score = 0;
+    if (prefixHash && hashLines(lines.slice(startIndex, startIndex + fingerprintLineCount)) === prefixHash) score += 4;
+    if (suffixHash && hashLines(lines.slice(suffixStartIndex, suffixStartIndex + fingerprintLineCount)) === suffixHash) score += 4;
+    if (firstLineHash && hashLines(lines.slice(startIndex, startIndex + 1)) === firstLineHash) score += 1;
+    if (lastLineHash && hashLines(lines.slice(startIndex + spanLineCount - 1, startIndex + spanLineCount)) === lastLineHash) score += 1;
+    if (score >= 4) {
+      const startLine = startIndex + 1;
+      candidates.push({ startLine, score, distance: Math.abs(startLine - row.start_line) });
+    }
+  }
+
+  if (candidates.length === 0) {
+    return undefined;
+  }
+
+  const best = candidates.sort((left, right) => right.score - left.score || left.distance - right.distance || left.startLine - right.startLine)[0];
+  const endLine = Math.min(lines.length, best.startLine + spanLineCount - 1);
+  return {
+    startLine: best.startLine,
+    endLine,
+    text: sliceLines(currentText, best.startLine, endLine),
+    method: 'line_fingerprint_search'
+  };
+}
+
 function previousRelocatable(row: SpanRow): RelocatableSpan {
   const headingPath = parseJson<string[]>(row.heading_path_json, []);
   const stableLocator = parseJson<{ blockOrdinal?: number; nearbyHeadingHash?: string }>(row.stable_locator_json, {});
@@ -238,11 +324,11 @@ function textSearchLineRange(row: SpanRow, currentText: string): { startLine: nu
   }
   const prefix = row.indexed_text.slice(0, -TRUNCATION_SUFFIX.length);
   if (!prefix) {
-    return undefined;
+    return lineFingerprintLineRange(row, currentText);
   }
   const index = currentText.indexOf(prefix);
   if (index < 0) {
-    return undefined;
+    return lineFingerprintLineRange(row, currentText);
   }
   const before = currentText.slice(0, index);
   const startLine = lineCount(before);
@@ -307,7 +393,41 @@ export async function handleNlReadSpan(input: unknown): Promise<NoemaLoomEnvelop
   const parsed = nlReadSpanInputSchema.parse(input ?? {});
   const projectRoot = resolveProjectRootFromInput(parsed);
   const graphRevision = (await readLatestRevision(projectRoot)) ?? null;
-  const row = readSpanRow(projectRoot, parsed.spanId);
+  const rowResult = readSpanRow(projectRoot, parsed.spanId);
+
+  if (rowResult.status === 'missing_index') {
+    return createEnvelope({
+      ok: false,
+      tool: 'nl_read_span',
+      projectRoot,
+      graphRevision,
+      graphState: 'empty',
+      warnings: [
+        {
+          code: 'span_index_missing',
+          severity: 'error',
+          message: 'span index is missing; run nl_refresh before reading spans'
+        }
+      ],
+      data: { status: 'span_index_missing' },
+      nextActions: ['call nl_refresh with target="changed" and mode="safe"']
+    });
+  }
+
+  if (rowResult.status === 'unreadable') {
+    return createEnvelope({
+      ok: false,
+      tool: 'nl_read_span',
+      projectRoot,
+      graphRevision,
+      graphState: 'error',
+      warnings: [{ code: 'span_index_unreadable', severity: 'error', message: rowResult.message }],
+      data: { status: 'span_index_unreadable' },
+      nextActions: ['call nl_refresh with target="changed" and mode="safe"']
+    });
+  }
+
+  const row = rowResult.row;
 
   if (!row) {
     return createEnvelope({

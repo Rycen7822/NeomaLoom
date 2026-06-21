@@ -148,8 +148,11 @@ export async function writeCodeGraphDb(input: {
   await unlinkSqliteTempIfExists(tempDbPath);
   const db = openDatabase(tempDbPath);
   let wroteSuccessfully = false;
+  let transactionActive = false;
 
   try {
+    db.exec('PRAGMA synchronous = OFF; PRAGMA journal_mode = MEMORY; PRAGMA temp_store = MEMORY; BEGIN IMMEDIATE;');
+    transactionActive = true;
     createSchema(db);
     const insertFile = db.prepare('INSERT INTO facts_files (path, language) VALUES (?, ?)');
     const insertNode = db.prepare(
@@ -198,8 +201,17 @@ export async function writeCodeGraphDb(input: {
         JSON.stringify(edge.evidence)
       );
     }
+    db.exec('COMMIT');
+    transactionActive = false;
     wroteSuccessfully = true;
   } finally {
+    if (transactionActive) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        // Best effort: failed temp databases are removed below.
+      }
+    }
     db.close();
     if (!wroteSuccessfully) {
       await unlinkSqliteTempIfExists(tempDbPath);

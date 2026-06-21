@@ -59,6 +59,7 @@ const MAX_REPO_SPAN_LABEL_BYTES = 1024;
 const MAX_REPO_SPAN_SUMMARY_BYTES = 2048;
 const MAX_REFRESH_REVISIONS = 50;
 const MAX_REFRESH_LOG_BYTES = 1_048_576;
+const RELOCATION_FINGERPRINT_LINES = 8;
 
 function byteLength(value: string): number {
   return Buffer.byteLength(value, 'utf8');
@@ -83,6 +84,28 @@ function truncateUtf8(value: string, maxBytes: number): string {
   return `${output}${suffix}`;
 }
 
+function fingerprintLines(text: string): string[] {
+  return text.split(/\r?\n/).map(line => line.trimEnd());
+}
+
+function hashLines(lines: string[]): string {
+  return sha1(lines.join('\n'));
+}
+
+function truncatedSpanRelocationMetadata(span: RepoSpan, indexedText: string): Record<string, unknown> {
+  const lines = fingerprintLines(indexedText);
+  const lineCount = Math.max(1, span.endLine - span.startLine + 1);
+  const fingerprintLineCount = Math.min(RELOCATION_FINGERPRINT_LINES, Math.max(1, lines.length));
+  return {
+    relocationLineCount: lineCount,
+    relocationFingerprintLineCount: fingerprintLineCount,
+    relocationFirstLineHash: hashLines(lines.slice(0, 1)),
+    relocationLastLineHash: hashLines(lines.slice(-1)),
+    relocationPrefixHash: hashLines(lines.slice(0, fingerprintLineCount)),
+    relocationSuffixHash: hashLines(lines.slice(-fingerprintLineCount))
+  };
+}
+
 function boundedIndexedText(span: RepoSpan): { indexedText: string; metadata: Record<string, unknown> } {
   const redaction = redactText(span.indexedText);
   const metadata: Record<string, unknown> = redaction.hasSensitiveContent
@@ -98,7 +121,8 @@ function boundedIndexedText(span: RepoSpan): { indexedText: string; metadata: Re
       ...metadata,
       indexedTextTruncatedAtWrite: true,
       originalIndexedTextBytes: byteLength(span.indexedText),
-      originalIndexedTextHash: sha1(span.indexedText)
+      originalIndexedTextHash: sha1(span.indexedText),
+      ...truncatedSpanRelocationMetadata(span, redaction.redactedText)
     }
   };
 }
