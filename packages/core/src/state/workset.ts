@@ -110,6 +110,7 @@ export type RenderNavigationOptions = {
   maxAnchors?: number;
   charBudget?: number;
   includeDisabled?: boolean;
+  includeDormant?: boolean;
 };
 
 const DEFAULT_BUDGETS: WorksetBudgets = {
@@ -171,8 +172,8 @@ function normalizeState(value: unknown): NavigationAnchorLifecycleState {
     : 'active';
 }
 
-function anchorIdFor(target: Pick<NavigationTargetLike, 'spanId' | 'path' | 'startLine' | 'endLine' | 'label' | 'kind'>): string {
-  const stable = target.spanId || `${target.path ?? 'unknown'}:${target.startLine ?? ''}:${target.endLine ?? ''}:${target.kind ?? ''}:${target.label ?? ''}`;
+function anchorIdFor(target: Pick<NavigationTargetLike, 'spanId' | 'path' | 'startLine' | 'endLine' | 'kind'>): string {
+  const stable = target.spanId || `${target.path ?? 'unknown'}:${target.startLine ?? ''}:${target.endLine ?? ''}:${target.kind ?? ''}`;
   return `nav-${sha1(stable).slice(0, 16)}`;
 }
 
@@ -324,52 +325,107 @@ function rankAnchor(anchor: NavigationAnchor): number {
 export function sortAndCapAnchors(anchors: NavigationAnchor[], budgets: WorksetBudgets): NavigationAnchor[] {
   const byId = new Map<string, NavigationAnchor>();
   for (const anchor of anchors) {
+    if (anchor.state === 'tombstoned') continue;
     const existing = byId.get(anchor.id);
     if (!existing || rankAnchor(anchor) >= rankAnchor(existing)) {
       byId.set(anchor.id, anchor);
     }
   }
+
   const sorted = [...byId.values()].sort((left, right) => rankAnchor(right) - rankAnchor(left) || left.path.localeCompare(right.path));
-  const perPathCounts = new Map<string, number>();
-  const active: NavigationAnchor[] = [];
-  const pinned: NavigationAnchor[] = [];
-  const cold: NavigationAnchor[] = [];
+  const totalPerPath = new Map<string, number>();
+  const activePerPath = new Map<string, number>();
+  let activeCount = 0;
+  let pinnedCount = 0;
+  let coldCount = 0;
+  const kept: NavigationAnchor[] = [];
+
   for (const anchor of sorted) {
-    const count = perPathCounts.get(anchor.path) ?? 0;
-    if (count >= budgets.perPathHardMax) continue;
-    perPathCounts.set(anchor.path, count + 1);
-    if (anchor.pinned && pinned.length < budgets.pinnedHardMax) {
-      pinned.push(anchor);
-    } else if (anchor.state === 'active' && active.length < budgets.activeHardMax) {
-      active.push(anchor);
-    } else if (anchor.state !== 'tombstoned' && cold.length < budgets.coldArchiveHardMax) {
-      cold.push(anchor.state === 'active' ? { ...anchor, state: 'dormant' } : anchor);
+    const totalCount = totalPerPath.get(anchor.path) ?? 0;
+    if (totalCount >= budgets.perPathHardMax) continue;
+    totalPerPath.set(anchor.path, totalCount + 1);
+
+    let next = anchor;
+    if (next.state === 'active') {
+      const activePathCount = activePerPath.get(next.path) ?? 0;
+      if (activeCount >= budgets.activeHardMax || activePathCount >= budgets.perPathMax) {
+        next = { ...next, state: 'dormant' };
+      } else {
+        activeCount += 1;
+        activePerPath.set(next.path, activePathCount + 1);
+      }
     }
+
+    if (next.pinned) {
+      if (pinnedCount >= budgets.pinnedHardMax) {
+        next = { ...next, pinned: false };
+      } else {
+        pinnedCount += 1;
+      }
+    }
+
+    if (next.state !== 'active') {
+      if (!next.pinned && coldCount >= budgets.coldArchiveHardMax) continue;
+      coldCount += 1;
+    }
+
+    kept.push(next);
   }
-  return [...pinned, ...active, ...cold].sort((left, right) => rankAnchor(right) - rankAnchor(left) || left.path.localeCompare(right.path));
+
+  return kept.sort((left, right) => rankAnchor(right) - rankAnchor(left) || left.path.localeCompare(right.path));
 }
 
-function targetToAnchor(target: NavigationTargetLike, existing: NavigationAnchor | undefined, counters: WorksetCounters, at: string, source: NavigationAnchor['source'], reason: string): NavigationAnchor | undefined {
+function targetToAnchor(
+  target: NavigationTargetLike,
+  existing: NavigationAnchor | undefined,
+  counters: WorksetCounters,
+  at: string,
+  source: NavigationAnchor['source'],
+  reason: string,
+  options: { defaultState?: Extract<NavigationAnchorLifecycleState, 'active' | 'dormant'>; reviveDormant?: boolean; preserveCurated?: boolean } = {}
+): NavigationAnchor | undefined {
   if (typeof target.path !== 'string' || target.path.length === 0) return undefined;
   const id = anchorIdFor(target);
   if (existing?.state === 'tombstoned' || existing?.state === 'retired') {
     return existing;
   }
+
+  const isAutomaticObservation = source === 'nl_prepare_context';
+  const preservedExisting = options.preserveCurated !== false &&
+    isAutomaticObservation &&
+    existing &&
+    existing.source !== 'nl_prepare_context'
+    ? existing
+    : undefined;
+  const nextState = (() => {
+    if (!existing) return options.defaultState ?? 'active';
+    if (preservedExisting) return preservedExisting.state;
+    if (isAutomaticObservation && options.reviveDormant === false && (existing.state === 'archived' || existing.state === 'dormant')) {
+      return existing.state;
+    }
+    if (source === 'agent_curated') return 'active';
+    return existing.state === 'archived' || existing.state === 'dormant' ? 'active' : existing.state;
+  })();
+  const nextSource = preservedExisting ? preservedExisting.source : source;
+  const nextReason = preservedExisting
+    ? preservedExisting.reason
+    : (typeof target.reason === 'string' && target.reason.length > 0 ? target.reason : reason);
+
   return {
     id,
     path: target.path,
-    label: typeof target.label === 'string' && target.label.length > 0 ? target.label : target.path,
-    kind: typeof target.kind === 'string' && target.kind.length > 0 ? target.kind : 'file',
-    role: typeof target.role === 'string' && target.role.length > 0 ? target.role : 'source_file',
-    startLine: typeof target.startLine === 'number' ? target.startLine : undefined,
-    endLine: typeof target.endLine === 'number' ? target.endLine : undefined,
-    headingPath: stringArray(target.headingPath),
-    state: existing?.state === 'archived' || existing?.state === 'dormant' ? 'active' : existing?.state ?? 'active',
-    pinned: existing?.pinned ?? false,
-    source,
-    reason: typeof target.reason === 'string' && target.reason.length > 0 ? target.reason : reason,
-    score: finiteNumber(target.score, existing?.score ?? 0),
-    confidence: finiteNumber(target.confidence, existing?.confidence ?? 0),
+    label: preservedExisting ? preservedExisting.label : (typeof target.label === 'string' && target.label.length > 0 ? target.label : target.path),
+    kind: typeof target.kind === 'string' && target.kind.length > 0 ? target.kind : existing?.kind ?? 'file',
+    role: typeof target.role === 'string' && target.role.length > 0 ? target.role : existing?.role ?? 'source_file',
+    startLine: typeof target.startLine === 'number' ? target.startLine : existing?.startLine,
+    endLine: typeof target.endLine === 'number' ? target.endLine : existing?.endLine,
+    headingPath: stringArray(target.headingPath).length > 0 ? stringArray(target.headingPath) : existing?.headingPath ?? [],
+    state: nextState,
+    pinned: preservedExisting ? preservedExisting.pinned : existing?.pinned ?? false,
+    source: nextSource,
+    reason: nextReason,
+    score: Math.max(finiteNumber(target.score, existing?.score ?? 0), existing?.score ?? Number.NEGATIVE_INFINITY),
+    confidence: Math.max(finiteNumber(target.confidence, existing?.confidence ?? 0), existing?.confidence ?? Number.NEGATIVE_INFINITY),
     createdAt: existing?.createdAt ?? at,
     updatedAt: at,
     createdSeq: existing?.createdSeq ?? counters.projectActivitySeq,
@@ -389,6 +445,9 @@ export function upsertNavigationTargets(input: {
   reason?: string;
   now?: Date;
   maxTargets?: number;
+  defaultState?: Extract<NavigationAnchorLifecycleState, 'active' | 'dormant'>;
+  reviveDormant?: boolean;
+  preserveCurated?: boolean;
 }): WorksetManifest {
   const at = nowIso(input.now);
   const manifest: WorksetManifest = {
@@ -407,7 +466,19 @@ export function upsertNavigationTargets(input: {
     if (tombstoneIds.has(id) || (typeof target.path === 'string' && tombstonePaths.has(target.path))) {
       continue;
     }
-    const anchor = targetToAnchor(target, byId.get(id), manifest.counters, at, input.source ?? 'nl_prepare_context', input.reason ?? 'nl_prepare_context target');
+    const anchor = targetToAnchor(
+      target,
+      byId.get(id),
+      manifest.counters,
+      at,
+      input.source ?? 'nl_prepare_context',
+      input.reason ?? 'nl_prepare_context target',
+      {
+        defaultState: input.defaultState,
+        reviveDormant: input.reviveDormant,
+        preserveCurated: input.preserveCurated
+      }
+    );
     if (anchor) byId.set(anchor.id, anchor);
   }
   return {
@@ -423,6 +494,9 @@ export async function recordNavigationTargets(input: {
   reason?: string;
   now?: Date;
   maxTargets?: number;
+  defaultState?: Extract<NavigationAnchorLifecycleState, 'active' | 'dormant'>;
+  reviveDormant?: boolean;
+  preserveCurated?: boolean;
 }): Promise<WorksetManifest> {
   const current = await readWorksetManifest(input.projectRoot);
   const next = upsertNavigationTargets({
@@ -431,7 +505,10 @@ export async function recordNavigationTargets(input: {
     source: input.source,
     reason: input.reason,
     now: input.now,
-    maxTargets: input.maxTargets
+    maxTargets: input.maxTargets,
+    defaultState: input.defaultState,
+    reviveDormant: input.reviveDormant,
+    preserveCurated: input.preserveCurated
   });
   await writeWorksetManifest(input.projectRoot, next);
   await appendWorksetEvent(input.projectRoot, {
@@ -463,7 +540,7 @@ export function selectNavigationAnchors(manifest: WorksetManifest, options: Rend
           : manifest.budgets.injectionDefaultAnchors
   );
   return manifest.anchors
-    .filter(anchor => ['active', 'dormant'].includes(anchor.state))
+    .filter(anchor => anchor.state === 'active' || (options.includeDormant === true && anchor.state === 'dormant'))
     .sort((left, right) => rankAnchor(right) - rankAnchor(left) || left.path.localeCompare(right.path))
     .slice(0, maxAnchors);
 }
@@ -565,15 +642,14 @@ export function retireAnchor(manifest: WorksetManifest, anchorId: string, reason
     ...manifest.counters,
     projectActivitySeq: manifest.counters.projectActivitySeq + 1
   };
-  const anchors = manifest.anchors.map(anchor => anchor.id === anchorId
-    ? { ...anchor, state: 'tombstoned' as const, updatedAt: at, tombstoneReason: reason }
-    : anchor);
   const retired = manifest.anchors.find(anchor => anchor.id === anchorId);
+  const anchors = manifest.anchors.filter(anchor => anchor.id !== anchorId);
+  const tombstoneExists = manifest.tombstones.some(entry => entry.id === anchorId);
   return {
     ...manifest,
     counters: nextCounters,
     anchors,
-    tombstones: retired
+    tombstones: retired && !tombstoneExists
       ? [...manifest.tombstones, { id: retired.id, path: retired.path, reason, tombstonedAt: at, tombstonedSeq: nextCounters.projectActivitySeq }]
       : manifest.tombstones
   };

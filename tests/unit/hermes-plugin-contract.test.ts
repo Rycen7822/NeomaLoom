@@ -2,6 +2,7 @@ import { access, readFile } from 'node:fs/promises';
 
 const pluginFiles = [
   'hermes-plugin/noemaloom/plugin.yaml',
+  'hermes-plugin/noemaloom/README.md',
   'hermes-plugin/noemaloom/__init__.py',
   'hermes-plugin/noemaloom/noemaloom_bridge.py',
   'hermes-plugin/noemaloom/navigation_hooks.py',
@@ -62,6 +63,17 @@ describe('Hermes plugin contract', () => {
     for (const tool of publicTools) {
       expect(skill).toContain(tool);
     }
+
+    const pluginReadme = await readFile('hermes-plugin/noemaloom/README.md', 'utf8');
+    expect(pluginReadme).toContain('six curated `nl_*` tools');
+    expect(pluginReadme).not.toContain('five curated');
+    for (const tool of publicTools) {
+      expect(pluginReadme).toContain(tool);
+    }
+    expect(pluginReadme).toContain('repair');
+    expect(pluginReadme).toContain('retire');
+    expect(pluginReadme).toContain('checkpoint');
+    expect(pluginReadme).toContain('CLI-only');
   });
 
   it('keeps the Hermes plugin surface curated and does not document hidden primitives as callable tools', async () => {

@@ -204,16 +204,28 @@ describe('scoped coverage tool semantics', () => {
     expect(result.ok).toBe(true);
     expect(data.navigation.enabled).toBe(false);
     expect(data.navigation.charBudget).toBe(650);
-    expect(data.navigation.cards[0]).toMatchObject({ path: 'DeepScientist/quests/001/STAGE10_推进规划.md' });
-    expect(data.navigation.text).toContain('NoemaLoom navigation anchors:');
+    expect(data.navigation.cards).toEqual([]);
+    expect(data.navigation.text).toBe('');
     expect(data.targets[0]).toMatchObject({ path: 'DeepScientist/quests/001/STAGE10_推进规划.md', startLine: 7, endLine: 7 });
     expect(data.context).toBeUndefined();
     expect(JSON.stringify(result.data)).not.toContain('scoreBreakdown');
     expect(JSON.stringify(result.evidence)).toBe('[]');
 
-    const worksetText = await readFile(path.join(projectRoot, '.noemaloom', 'workset', 'anchors.json'), 'utf8');
-    expect(worksetText).toContain('STAGE10_推进规划.md');
-    expect(worksetText).toContain('navigationQuerySeq');
+    const workset = JSON.parse(await readFile(path.join(projectRoot, '.noemaloom', 'workset', 'anchors.json'), 'utf8')) as {
+      anchors: Array<{ path: string; state: string; source: string }>;
+      counters: { navigationQuerySeq: number };
+      options: { navigation: { enabled: boolean; mode: string } };
+    };
+    expect(workset.counters.navigationQuerySeq).toBeGreaterThan(0);
+    expect(workset.options.navigation).toMatchObject({ enabled: false, mode: 'silent' });
+    expect(workset.anchors.find(anchor => anchor.path === 'DeepScientist/quests/001/STAGE10_推进规划.md')).toMatchObject({
+      state: 'dormant',
+      source: 'nl_prepare_context'
+    });
+
+    const status = await callRegisteredTool('nl_status', { projectPath: projectRoot, includeAnchors: true });
+    expect((status.data as { anchorWorkset: { navigation: { cards: unknown[]; text: string } } }).anchorWorkset.navigation.cards).toEqual([]);
+    expect((status.data as { anchorWorkset: { navigation: { text: string } } }).anchorWorkset.navigation.text).toBe('');
   });
 
   it('nl_plan_change compact output summarizes trace while debug keeps full trace edges', async () => {

@@ -1,6 +1,6 @@
 # NoemaLoom Hermes Plugin
 
-This directory is a native Hermes plugin wrapper for the NoemaLoom repository. It registers the five curated `nl_*` tools directly in Hermes and bundles the `noemaloom:usage` operator skill.
+This directory is a native Hermes plugin wrapper for the NoemaLoom repository. It registers the six curated `nl_*` tools directly in Hermes and bundles the `noemaloom:usage` operator skill.
 
 ## Tools
 
@@ -9,6 +9,9 @@ This directory is a native Hermes plugin wrapper for the NoemaLoom repository. I
 - `nl_prepare_context`
 - `nl_plan_change`
 - `nl_verify_task`
+- `nl_anchor_manage`
+
+`nl_anchor_manage` supports the default public promote/demote curation path only. Lower-frequency anchor maintenance operations remain CLI-only: use `noemaloom anchor repair`, `noemaloom anchor retire`, or `noemaloom anchor checkpoint` from the source checkout when a human/operator intentionally wants those lifecycle operations.
 
 No separate Hermes MCP server entry is required for this plugin. The plugin starts a short-lived local NoemaLoom stdio process internally for each tool call and returns the normal NoemaLoom envelope.
 

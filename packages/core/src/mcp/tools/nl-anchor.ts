@@ -1,3 +1,5 @@
+import { lstat } from 'node:fs/promises';
+import path from 'node:path';
 import { z } from 'zod';
 
 import {
@@ -104,6 +106,54 @@ function selectorWarning(selector: { anchorId?: string; path?: string }) {
   };
 }
 
+function pathWarning(code: string, message: string) {
+  return {
+    code,
+    severity: 'warning' as const,
+    message
+  };
+}
+
+async function validateAnchorProjectPath(projectRoot: string, repoPath: string) {
+  if (path.isAbsolute(repoPath)) {
+    return pathWarning('anchor_path_outside_project', `Navigation anchor path must be project-relative: ${repoPath}`);
+  }
+
+  const absolutePath = path.resolve(projectRoot, repoPath);
+  const relative = path.relative(projectRoot, absolutePath);
+  if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
+    return pathWarning('anchor_path_outside_project', `Navigation anchor path escapes project root: ${repoPath}`);
+  }
+
+  const parts = relative.split(path.sep).filter(Boolean);
+  if (parts[0] === '.noemaloom') {
+    return pathWarning('anchor_path_forbidden', `Navigation anchors cannot target NoemaLoom state files: ${repoPath}`);
+  }
+
+  let stat;
+  try {
+    stat = await lstat(absolutePath);
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return pathWarning('anchor_path_not_found', `Navigation anchor path does not exist: ${repoPath}`);
+    }
+    throw error;
+  }
+
+  if (!stat.isFile()) {
+    return pathWarning('anchor_path_not_file', `Navigation anchor path must point to a regular file: ${repoPath}`);
+  }
+
+  return undefined;
+}
+
+function anchorMatchesInput(anchor: NavigationAnchor, input: { path: string; kind?: string; startLine?: number; endLine?: number }): boolean {
+  return anchor.path === input.path &&
+    anchor.kind === (input.kind ?? anchor.kind) &&
+    anchor.startLine === input.startLine &&
+    anchor.endLine === input.endLine;
+}
+
 export function anchorStatusData(manifest: WorksetManifest, includeRetired: boolean, includeText: boolean): Record<string, unknown> {
   const rendered = renderNavigationCards(manifest, { includeDisabled: true });
   return {
@@ -160,11 +210,25 @@ export async function handleNlAnchorPromote(input: unknown): Promise<NoemaLoomEn
   const parsed = nlAnchorPromoteInputSchema.parse(input ?? {});
   const projectRoot = resolveProjectRootFromInput(parsed);
   let manifest = await readWorksetManifest(projectRoot);
+  const validationWarning = await validateAnchorProjectPath(projectRoot, parsed.path);
+  if (validationWarning) {
+    return createEnvelope({
+      ok: false,
+      tool: 'nl_anchor_promote',
+      projectRoot,
+      graphRevision: worksetRevision(manifest),
+      graphState: anchorGraphStateFor(manifest),
+      warnings: [validationWarning],
+      data: anchorStatusData(manifest, true, true)
+    });
+  }
+
   manifest = upsertNavigationTargets({
     manifest,
     source: 'agent_curated',
     reason: parsed.reason,
     maxTargets: 1,
+    preserveCurated: false,
     targets: [
       {
         path: parsed.path,
@@ -179,12 +243,14 @@ export async function handleNlAnchorPromote(input: unknown): Promise<NoemaLoomEn
       }
     ]
   });
-  manifest = {
-    ...manifest,
-    anchors: manifest.anchors.map(anchor => anchor.path === parsed.path
-      ? { ...anchor, pinned: parsed.pinned || anchor.pinned, state: 'active' as const, source: 'agent_curated' as const, reason: parsed.reason }
-      : anchor)
-  };
+  if (parsed.pinned) {
+    manifest = {
+      ...manifest,
+      anchors: manifest.anchors.map(anchor => anchorMatchesInput(anchor, parsed)
+        ? { ...anchor, pinned: true }
+        : anchor)
+    };
+  }
   if (typeof parsed.enableNavigation === 'boolean') {
     manifest = setNavigationEnabled(manifest, parsed.enableNavigation);
   }
@@ -262,6 +328,20 @@ export async function handleNlAnchorRepair(input: unknown): Promise<NoemaLoomEnv
       warnings: [selectorWarning(parsed)],
       data: anchorStatusData(manifest, true, true)
     });
+  }
+  if (parsed.newPath) {
+    const validationWarning = await validateAnchorProjectPath(projectRoot, parsed.newPath);
+    if (validationWarning) {
+      return createEnvelope({
+        ok: false,
+        tool: 'nl_anchor_repair',
+        projectRoot,
+        graphRevision: worksetRevision(manifest),
+        graphState: anchorGraphStateFor(manifest),
+        warnings: [validationWarning],
+        data: anchorStatusData(manifest, true, true)
+      });
+    }
   }
   const nextCounters = {
     ...manifest.counters,

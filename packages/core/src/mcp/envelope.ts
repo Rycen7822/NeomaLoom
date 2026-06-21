@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { z } from 'zod';
 
 export type GraphState = 'empty' | 'ready' | 'stale' | 'partial' | 'error';
 
@@ -104,6 +105,48 @@ export function createToolUnavailableEnvelope(tool: string, projectRoot = proces
     ],
     data: {
       status: 'tool_not_available'
+    }
+  });
+}
+
+function validationIssues(error: unknown): Array<{ path: string; code: string; message: string }> {
+  if (error instanceof z.ZodError) {
+    return error.issues.map(issue => ({
+      path: issue.path.map(part => String(part)).join('.'),
+      code: issue.code,
+      message: issue.message
+    }));
+  }
+  return [{ path: '', code: 'invalid_input', message: error instanceof Error ? error.message : String(error) }];
+}
+
+export function createValidationErrorEnvelope(
+  tool: string,
+  projectRoot: string,
+  error: unknown
+): NoemaLoomEnvelope {
+  const issues = validationIssues(error);
+  const isInvalidPublicAnchorAction = tool === 'nl_anchor_manage' && issues.some(issue => issue.path === 'action');
+  const warningCode = isInvalidPublicAnchorAction ? 'invalid_action' : 'validation_error';
+  const message = isInvalidPublicAnchorAction
+    ? 'Invalid nl_anchor_manage action. Public Hermes tools support only promote and demote; use the noemaloom anchor repair|retire|checkpoint CLI for low-frequency maintenance.'
+    : `Invalid ${tool} input: ${issues.map(issue => issue.path ? `${issue.path}: ${issue.message}` : issue.message).join('; ')}`;
+
+  return createEnvelope({
+    ok: false,
+    tool,
+    projectRoot,
+    graphState: 'error',
+    warnings: [
+      {
+        code: warningCode,
+        severity: 'error',
+        message
+      }
+    ],
+    data: {
+      status: 'validation_error',
+      issues
     }
   });
 }

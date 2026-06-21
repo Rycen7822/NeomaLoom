@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { z } from 'zod';
 
 import {
   handleNlAnchorCheckpoint,
@@ -9,6 +10,7 @@ import {
   handleNlAnchorRetire
 } from '../mcp/tools/nl-anchor.js';
 import { handleNlStatus } from '../mcp/tools/nl-status.js';
+import { createValidationErrorEnvelope, resolveProjectRootFromInput, type NoemaLoomEnvelope } from '../mcp/envelope.js';
 import { serveMcp } from '../mcp/server.js';
 import { getHelpText } from './help.js';
 
@@ -80,17 +82,25 @@ async function runAnchorCommand(argv: string[], io: CliIo): Promise<number> {
   }
 
   const payload = parsed.payload;
-  const result = parsed.action === 'status'
-    ? await handleNlStatus({ ...payload, includeAnchors: true })
-    : parsed.action === 'promote'
-      ? await handleNlAnchorPromote(payload)
-      : parsed.action === 'demote'
-        ? await handleNlAnchorDemote(payload)
-        : parsed.action === 'repair'
-          ? await handleNlAnchorRepair(payload)
-          : parsed.action === 'retire'
-            ? await handleNlAnchorRetire(payload)
-            : await handleNlAnchorCheckpoint(payload);
+  let result: NoemaLoomEnvelope;
+  try {
+    result = parsed.action === 'status'
+      ? await handleNlStatus({ ...payload, includeAnchors: true })
+      : parsed.action === 'promote'
+        ? await handleNlAnchorPromote(payload)
+        : parsed.action === 'demote'
+          ? await handleNlAnchorDemote(payload)
+          : parsed.action === 'repair'
+            ? await handleNlAnchorRepair(payload)
+            : parsed.action === 'retire'
+              ? await handleNlAnchorRetire(payload)
+              : await handleNlAnchorCheckpoint(payload);
+  } catch (error) {
+    if (!(error instanceof z.ZodError)) {
+      throw error;
+    }
+    result = createValidationErrorEnvelope(`nl_anchor_${parsed.action}`, resolveProjectRootFromInput(payload), error);
+  }
 
   io.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   return result.ok ? 0 : 1;

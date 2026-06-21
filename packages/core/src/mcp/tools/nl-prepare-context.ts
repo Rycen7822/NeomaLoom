@@ -10,7 +10,7 @@ import {
 import { buildContextDataFromLocated } from './nl-context.js';
 import { runLocator } from './nl-locate.js';
 import { handleNlReadSpan } from './nl-read-span.js';
-import { recordNavigationTargets, renderNavigationCards, worksetRevision } from '../../state/workset.js';
+import { readWorksetManifest, recordNavigationTargets, renderNavigationCards, worksetRevision } from '../../state/workset.js';
 
 type LocateData = {
   targets: Array<{
@@ -133,11 +133,16 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
     truncated: false
   };
   try {
+    const currentWorkset = await readWorksetManifest(projectRoot);
+    const activateObservedTargets = currentWorkset.options.navigation.enabled && currentWorkset.options.navigation.mode === 'inject';
     const workset = await recordNavigationTargets({
       projectRoot,
       targets: locateData.targets,
       reason: 'nl_prepare_context target',
-      maxTargets: Math.min(parsed.limit, 10)
+      maxTargets: Math.min(parsed.limit, 10),
+      defaultState: activateObservedTargets ? 'active' : 'dormant',
+      reviveDormant: activateObservedTargets,
+      preserveCurated: true
     });
     const rendered = renderNavigationCards(workset, { includeDisabled: responseProfile === 'navigation' });
     navigation = {

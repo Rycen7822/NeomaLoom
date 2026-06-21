@@ -60,6 +60,90 @@ describe('NoemaLoom navigation workset state', () => {
     await expect(readFile(path.join(paths.worksetDir, 'events.jsonl'), 'utf8')).resolves.toContain('navigation_query');
   });
 
+  it('records automatic navigation observations as dormant weak candidates when requested', async () => {
+    const projectRoot = await createTempProject();
+
+    const manifest = await recordNavigationTargets({
+      projectRoot,
+      targets: [
+        {
+          path: 'docs/plan.md',
+          kind: 'doc.section',
+          role: 'design_doc',
+          label: 'Plan',
+          startLine: 4,
+          endLine: 9,
+          score: 90,
+          reason: 'query observation'
+        }
+      ],
+      defaultState: 'dormant',
+      reviveDormant: false,
+      preserveCurated: true,
+      now: new Date('2026-06-21T00:00:00.000Z')
+    });
+
+    expect(manifest.anchors).toHaveLength(1);
+    expect(manifest.anchors[0]).toMatchObject({
+      path: 'docs/plan.md',
+      state: 'dormant',
+      source: 'nl_prepare_context'
+    });
+
+    const enabled = setNavigationEnabled(manifest, true);
+    expect(renderNavigationCards(enabled).cards).toEqual([]);
+    expect(renderNavigationCards(enabled, { includeDormant: true }).cards[0]).toMatchObject({ path: 'docs/plan.md', state: 'dormant' });
+  });
+
+  it('uses stable path/range/kind identity and preserves curated provenance from automatic observations', () => {
+    let manifest = createEmptyWorksetManifest('/tmp/project');
+    manifest = upsertNavigationTargets({
+      manifest,
+      source: 'agent_curated',
+      targets: [
+        {
+          path: 'src/client.ts',
+          kind: 'code.function',
+          role: 'source_file',
+          label: 'createClient',
+          startLine: 10,
+          endLine: 18,
+          score: 100,
+          reason: 'manual owner seam'
+        }
+      ]
+    });
+    const curatedId = manifest.anchors[0].id;
+
+    manifest = upsertNavigationTargets({
+      manifest,
+      source: 'nl_prepare_context',
+      defaultState: 'dormant',
+      preserveCurated: true,
+      reviveDormant: false,
+      targets: [
+        {
+          path: 'src/client.ts',
+          kind: 'code.function',
+          role: 'source_file',
+          label: 'client factory from query',
+          startLine: 10,
+          endLine: 18,
+          score: 95,
+          reason: 'automatic query hit'
+        }
+      ]
+    });
+
+    expect(manifest.anchors.filter(anchor => anchor.path === 'src/client.ts')).toHaveLength(1);
+    expect(manifest.anchors[0]).toMatchObject({
+      id: curatedId,
+      source: 'agent_curated',
+      reason: 'manual owner seam',
+      state: 'active'
+    });
+  });
+
   it('renders only enabled project anchors within the default navigation budget', () => {
     let manifest = createEmptyWorksetManifest('/tmp/project');
     manifest = upsertNavigationTargets({
@@ -115,6 +199,8 @@ describe('NoemaLoom navigation workset state', () => {
     const anchorId = manifest.anchors[0].id;
 
     manifest = retireAnchor(manifest, anchorId, 'obsolete path');
+    expect(manifest.anchors.find(anchor => anchor.id === anchorId)).toBeUndefined();
+    expect(manifest.tombstones).toHaveLength(1);
     manifest = upsertNavigationTargets({
       manifest,
       targets: [{ spanId: 'dead', path: 'src/dead.ts', kind: 'code.function', role: 'source_file', label: 'dead', score: 100 }]

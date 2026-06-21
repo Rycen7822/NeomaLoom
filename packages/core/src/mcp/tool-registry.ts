@@ -4,6 +4,7 @@ import {
   createEnvelope,
   createToolUnavailableEnvelope,
   createUnhandledErrorEnvelope,
+  createValidationErrorEnvelope,
   resolveProjectRootFromInput,
   type NoemaLoomEnvelope
 } from './envelope.js';
@@ -84,6 +85,9 @@ function wrapHandler(
     try {
       return await handler(args);
     } catch (error) {
+      if (error instanceof z.ZodError) {
+        return createValidationErrorEnvelope(tool, resolveProjectRootFromInput(args), error);
+      }
       return createUnhandledErrorEnvelope(tool, resolveProjectRootFromInput(args), error);
     }
   };
