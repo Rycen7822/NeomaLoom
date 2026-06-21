@@ -7,3 +7,4 @@ __pycache__/
 /.noemaloom-hermes-build/
 /tmp/
 /hermes-plugin/noemaloom/INSTALL_METADATA.json
+/packages/core/dist/

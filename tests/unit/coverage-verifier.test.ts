@@ -186,4 +186,22 @@ describe('coverage verifier', () => {
       expect.objectContaining({ path: '.agents/skills/demo/SKILL.md', term: 'legacyTerm' })
     ]);
   });
+
+  it('ignores changed paths that escape the project root', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-coverage-escape-'));
+    const outsidePath = path.join(path.dirname(projectRoot), 'outside.md');
+    await writeFile(outsidePath, '[Missing](missing.md) legacyTerm\n', 'utf8');
+
+    const result = await verifyCoverage({
+      projectRoot,
+      goal: 'Ignore unsafe changed paths',
+      changedPaths: ['../outside.md'],
+      oldTerms: ['legacyTerm'],
+      newTerms: []
+    });
+
+    expect(result.status).toBe('pass');
+    expect(result.remainingOldTermHits).toEqual([]);
+    expect(result.brokenLinks).toEqual([]);
+  });
 });

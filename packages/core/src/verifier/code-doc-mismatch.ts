@@ -1,5 +1,4 @@
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
+import { safeReadFileInsideProject } from '../safety/path-guard.js';
 
 export type CodeDocMismatch = {
   path: string;
@@ -18,7 +17,7 @@ export async function checkCodeDocMismatch(input: {
   for (const changedPath of input.changedPaths.filter(file => /\.(md|mdx|rst)$/i.test(file))) {
     let text = '';
     try {
-      text = await readFile(path.join(input.projectRoot, changedPath), 'utf8');
+      text = await safeReadFileInsideProject(input.projectRoot, changedPath, 'utf8');
     } catch {
       continue;
     }

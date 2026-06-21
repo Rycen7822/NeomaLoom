@@ -1,8 +1,17 @@
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { callInternalTool, callRegisteredTool } from '../../packages/core/src/mcp/tool-registry.js';
+
+const require = createRequire(import.meta.url);
+const { DatabaseSync } = require('node:sqlite') as {
+  DatabaseSync: new (filename: string) => {
+    prepare: (sql: string) => { run: (...params: unknown[]) => void };
+    close: () => void;
+  };
+};
 
 async function writeProjectFile(projectRoot: string, repoPath: string, text: string): Promise<void> {
   const absolutePath = path.join(projectRoot, repoPath);
@@ -42,6 +51,15 @@ async function createProject(): Promise<string> {
     ].join('\n')
   );
   return projectRoot;
+}
+
+function poisonSpanPath(projectRoot: string, spanId: string, unsafePath: string): void {
+  const db = new DatabaseSync(path.join(projectRoot, '.noemaloom', 'spans', 'spans.db'));
+  try {
+    db.prepare('UPDATE repo_spans SET path = ? WHERE span_id = ?').run(unsafePath, spanId);
+  } finally {
+    db.close();
+  }
 }
 
 describe('nl_read_span relocation and block sizing', () => {
@@ -86,6 +104,49 @@ describe('nl_read_span relocation and block sizing', () => {
     expect(read.data.relocation).toMatchObject({ used: true, method: 'text_hash' });
     expect(read.data.spanStartLine).toBeGreaterThan(target.startLine);
     expect(read.data.content).toContain('The stable paragraph mentions `createClient` and timeout options.');
+  });
+
+  it('rejects DB-poisoned span paths that escape the project root', async () => {
+    const projectRoot = await createProject();
+    await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'all',
+      mode: 'safe'
+    });
+    const locate = await callInternalTool('nl_locate', {
+      projectPath: projectRoot,
+      goal: 'Read createClient timeout paragraph',
+      targetRoles: ['canonical_api_doc'],
+      limit: 5
+    });
+    const locateData = locate.data as {
+      targets: Array<{ spanId: string; path: string; kind: string; label: string }>;
+    };
+    const target = locateData.targets.find((item: { path: string; kind: string; label: string }) =>
+      item.path === 'docs/api/client.md' &&
+      item.kind === 'doc.paragraph' &&
+      item.label.includes('createClient')
+    );
+    expect(target).toBeTruthy();
+    if (!target) {
+      throw new Error('target span was not located');
+    }
+    const original = await readFile(path.join(projectRoot, 'docs/api/client.md'), 'utf8');
+    await writeFile(path.join(path.dirname(projectRoot), 'outside.md'), original, 'utf8');
+    poisonSpanPath(projectRoot, target.spanId, '../outside.md');
+
+    const read = await callInternalTool('nl_read_span', {
+      projectPath: projectRoot,
+      spanId: target.spanId,
+      contextLines: 1
+    });
+
+    expect(read.ok).toBe(false);
+    expect(read.data).toEqual({ status: 'unsafe_span_path' });
+    expect(read.warnings[0]).toMatchObject({
+      code: 'unsafe_span_path',
+      severity: 'error'
+    });
   });
 
   it('returns segment ranges instead of truncating oversized Markdown code fences', async () => {

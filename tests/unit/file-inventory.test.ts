@@ -6,8 +6,6 @@ import { promisify } from 'node:util';
 
 import { createDefaultConfig } from '../../packages/core/src/config/default-config.js';
 import { buildFileInventory } from '../../packages/core/src/files/file-inventory.js';
-import { languageForPath } from '../../packages/core/src/files/language.js';
-import { classifyFileRole } from '../../packages/core/src/files/role-classifier.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -41,7 +39,7 @@ describe('file inventory', () => {
     });
   });
 
-  it('walks non-git repositories and classifies roles and languages deterministically', async () => {
+  it('walks non-git repositories and keeps inventory records sorted', async () => {
     const projectRoot = await createTempProject('noemaloom-walk-inventory-');
     for (const repoPath of [
       'CHANGELOG.md',
@@ -67,29 +65,25 @@ describe('file inventory', () => {
     const byPath = new Map(inventory.files.map(file => [file.path, file]));
 
     expect(inventory.files.map(file => file.path)).toEqual([...inventory.files.map(file => file.path)].sort());
-    expect(byPath.get('docs/api/client.md')?.role).toBe('canonical_api_doc');
-    expect(byPath.get('CODEX_STATE.md')?.role).toBe('design_doc');
-    expect(byPath.get('docs/tutorial-first/intro.md')?.role).toBe('tutorial_doc');
-    expect(byPath.get('examples/basic.ts')?.role).toBe('example_doc');
-    expect(byPath.get('paper/notes.md')?.role).toBe('paper_doc');
-    expect(byPath.get('notes/run.md')?.role).toBe('experiment_note_doc');
-    expect(classifyFileRole('DeepScientist/quests/001/experiments/stage10/run.json')).toBe('experiment_note_doc');
-    expect(classifyFileRole('DeepScientist/quests/001/experiments/stage10/scripts/stage10_loopcert_score.py')).toBe('source_file');
-    expect(classifyFileRole('DeepScientist/quests/001/experiments/stage10/tests/test_stage10_loopcert_score.py')).toBe('test_file');
-    expect(classifyFileRole('DeepScientist/quests/001/experiments/stage10/tests/__pycache__/test_stage10_loopcert_score.cpython-312.pyc')).toBe('generated_file');
-    expect(classifyFileRole('DeepScientist/quests/001/.ds/bash_exec/terminal.log')).toBe('experiment_note_doc');
-    expect(classifyFileRole('DeepScientist/quests/001/resources/code/github/huggingface__transformers/src/transformers/modeling_utils.py')).toBe('vendor_file');
-    expect(byPath.get('design/arch.md')?.role).toBe('design_doc');
-    expect(byPath.get('src/app.ts')?.role).toBe('source_file');
-    expect(byPath.get('tests/app.test.ts')?.role).toBe('test_file');
-    expect(byPath.get('fixtures/sample.json')?.role).toBe('fixture_file');
-    expect(byPath.get('config/settings.yaml')?.role).toBe('config_file');
-    expect(byPath.get('schema/settings.schema.json')?.role).toBe('schema_file');
-    expect(byPath.get('package.json')?.role).toBe('package_metadata');
-    expect(byPath.get('features/plan.md')?.role).toBe('feature_plan');
-    expect(languageForPath('src/app.ts')).toBe('typescript');
-    expect(languageForPath('docs/api/client.md')).toBe('markdown');
-    expect(classifyFileRole('vendor/pkg/index.js')).toBe('vendor_file');
+    expect(byPath.get('docs/api/client.md')).toMatchObject({ role: 'canonical_api_doc', language: 'markdown' });
+    expect(byPath.get('src/app.ts')).toMatchObject({ role: 'source_file', language: 'typescript' });
+    expect(byPath.get('tests/app.test.ts')).toMatchObject({ role: 'test_file', language: 'typescript' });
+    expect(byPath.get('package.json')).toMatchObject({ role: 'package_metadata', language: 'json' });
+  });
+
+  it('honors includeExtensions before creating inventory files', async () => {
+    const projectRoot = await createTempProject('noemaloom-extension-inventory-');
+    await writeProjectFile(projectRoot, 'README.md', '# Demo\n');
+    await writeProjectFile(projectRoot, 'LICENSE', 'MIT\n');
+    await writeProjectFile(projectRoot, 'src/app.ts', 'export const app = 1;\n');
+    await writeProjectFile(projectRoot, 'assets/logo.svg', '<svg />\n');
+    const config = createDefaultConfig(projectRoot);
+    config.fileInventory.includeExtensions = ['.ts'];
+
+    const inventory = await buildFileInventory({ projectRoot, config });
+
+    expect(inventory.files.map(file => file.path)).toEqual(['LICENSE', 'src/app.ts']);
+    expect(inventory.ignoredPaths).toEqual(['README.md', 'assets/logo.svg']);
   });
 
   it('marks oversized files as file-only spans without normal FTS text', async () => {

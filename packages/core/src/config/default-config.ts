@@ -61,9 +61,20 @@ export function createDefaultConfig(projectRoot: string): NoemaLoomConfig {
         '.mdx',
         '.rst',
         '.json',
+        '.jsonl',
         '.yaml',
         '.yml',
-        '.toml'
+        '.toml',
+        '.ini',
+        '.sql',
+        '.txt',
+        '.csv',
+        '.sh',
+        '.bash',
+        '.zsh',
+        '.css',
+        '.html',
+        '.xml'
       ],
       ignoreGlobs: [
         '.git/**',

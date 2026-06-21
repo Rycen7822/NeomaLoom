@@ -6,6 +6,7 @@ import path from 'node:path';
 import { classifyFileRole } from '../files/role-classifier.js';
 import { languageForPath } from '../files/language.js';
 import type { EnvelopeWarning, GraphState } from '../mcp/envelope.js';
+import { safeReadFileInsideProject } from '../safety/path-guard.js';
 import type { FileRole, SpanKind } from '../spans/enums.js';
 import { readHotsetManifest, type HotsetManifest } from '../state/hotset.js';
 import { readIndexCoverage, readLatestRevision, type IndexCoverage } from '../state/refresh-revision.js';
@@ -236,7 +237,7 @@ function classifyInventorySources(row: FileRow, query: NormalizedQuery): Set<Pla
 
 async function readCurrentText(projectRoot: string, repoPath: string): Promise<string | undefined> {
   try {
-    return await readFile(path.join(projectRoot, repoPath), 'utf8');
+    return await safeReadFileInsideProject(projectRoot, repoPath, 'utf8');
   } catch {
     return undefined;
   }

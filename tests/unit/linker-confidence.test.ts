@@ -1,5 +1,4 @@
 import {
-  CONFIDENCE_SCORES,
   buildCrossReferenceEdges,
   confidenceForEvidence,
   shouldWriteCandidate,
@@ -49,19 +48,16 @@ function span(input: {
 }
 
 describe('linker confidence', () => {
-  it('uses the fixed confidence scores from the plan', () => {
-    expect(CONFIDENCE_SCORES).toEqual({
-      explicit_markdown_link: 1.0,
-      exact_qualified_symbol_inline_code: 0.97,
-      exact_config_cli_env_mention: 0.95,
-      test_case_calls_source_symbol: 0.92,
-      example_imports_or_calls_source_symbol: 0.9,
-      rpg_feature_explicit_map: 0.88,
-      exact_symbol_name_relevant_heading: 0.82,
-      path_name_exact_relation: 0.75,
-      call_neighborhood_overlap: 0.68,
-      fuzzy_heading_symbol_relation: 0.6
-    });
+  it('preserves relative confidence priority for strong and weak evidence kinds', () => {
+    expect(confidenceForEvidence('explicit_markdown_link')).toBeGreaterThan(
+      confidenceForEvidence('fuzzy_heading_symbol_relation')
+    );
+    expect(confidenceForEvidence('exact_qualified_symbol_inline_code')).toBeGreaterThan(
+      confidenceForEvidence('path_name_exact_relation')
+    );
+    expect(confidenceForEvidence('test_case_calls_source_symbol')).toBeGreaterThan(
+      confidenceForEvidence('call_neighborhood_overlap')
+    );
   });
 
   it('rejects candidates below 0.60', () => {

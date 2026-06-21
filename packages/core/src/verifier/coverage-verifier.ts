@@ -7,6 +7,7 @@ import { checkAnchorsAndLinks } from './anchor-checker.js';
 import { checkCodeDocMismatch, type CodeDocMismatch } from './code-doc-mismatch.js';
 import type { BrokenLink, StaleAnchor } from './link-checker.js';
 import { classifyFileRole, isGeneratedArtifactPath } from '../files/role-classifier.js';
+import { safeReadFileInsideProjectSync } from '../safety/path-guard.js';
 
 type Statement = {
   all: (...params: unknown[]) => unknown[];
@@ -134,7 +135,7 @@ function findUnsyncedDocRoles(input: {
   for (const doc of readInventoryDocRoles(input)) {
     let text = '';
     try {
-      text = readFileSync(path.join(input.projectRoot, doc.path), 'utf8');
+      text = safeReadFileInsideProjectSync(input.projectRoot, doc.path, 'utf8');
     } catch {
       continue;
     }

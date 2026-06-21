@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { z } from 'zod';
 
 import { indexDocumentSpans } from '../../documents/document-span-indexer.js';
+import { safeReadFileInsideProject } from '../../safety/path-guard.js';
 import { relocateSpan, type RelocatableSpan } from '../../spans/relocation.js';
 import type { SpanKind } from '../../spans/enums.js';
 import { readLatestRevision } from '../../state/refresh-revision.js';
@@ -248,7 +248,26 @@ export async function handleNlReadSpan(input: unknown): Promise<NoemaLoomEnvelop
     });
   }
 
-  const currentText = await readFile(path.join(projectRoot, row.path), 'utf8');
+  let currentText: string;
+  try {
+    currentText = await safeReadFileInsideProject(projectRoot, row.path, 'utf8');
+  } catch (error) {
+    return createEnvelope({
+      ok: false,
+      tool: 'nl_read_span',
+      projectRoot,
+      graphRevision,
+      graphState: 'stale',
+      warnings: [
+        {
+          code: 'unsafe_span_path',
+          severity: 'error',
+          message: error instanceof Error ? error.message : String(error)
+        }
+      ],
+      data: { status: 'unsafe_span_path' }
+    });
+  }
   let relocated: Awaited<ReturnType<typeof relocateIfNeeded>>;
   try {
     relocated = await relocateIfNeeded({ row, currentText });

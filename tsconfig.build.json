@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "packages/core/src",
+    "outDir": "packages/core/dist",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "noEmit": false
+  },
+  "include": [
+    "packages/core/src/**/*.ts"
+  ],
+  "exclude": [
+    "packages/core/dist",
+    "tests",
+    "node_modules",
+    "reference",
+    "worknotes"
+  ]
+}

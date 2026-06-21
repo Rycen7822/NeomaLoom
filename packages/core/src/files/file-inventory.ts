@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
-import { lstat, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { createDefaultConfig, type NoemaLoomConfig } from '../config/default-config.js';
+import { safeLstatInsideProject, safeReadFileInsideProject, safeStatInsideProject, resolveProjectReadPath } from '../safety/path-guard.js';
 import type { FileRole, SpanKind } from '../spans/enums.js';
 import { isGitRepository, listGitVisibleFiles } from './git-files.js';
 import { createIgnoreMatcher } from './ignore-rules.js';
@@ -47,6 +47,19 @@ function sha1(data: string | Uint8Array): string {
   return createHash('sha1').update(data).digest('hex');
 }
 
+function normalizeExtension(extension: string): string {
+  const lower = extension.toLowerCase();
+  return lower.startsWith('.') ? lower : `.${lower}`;
+}
+
+function isIncludedExtension(repoPath: string, includeExtensions: Set<string>): boolean {
+  if (includeExtensions.size === 0) {
+    return true;
+  }
+  const extension = path.posix.extname(repoPath).toLowerCase();
+  return extension === '' || includeExtensions.has(extension);
+}
+
 async function listCandidateFiles(projectRoot: string): Promise<string[]> {
   if (await isGitRepository(projectRoot)) {
     return listGitVisibleFiles(projectRoot);
@@ -62,15 +75,15 @@ async function createInventoryFile(
   indexedAt: number,
   loadIndexedText: boolean
 ): Promise<InventoryFile> {
-  const absolutePath = path.join(projectRoot, repoPath);
-  const fileStat = await stat(absolutePath);
+  const absolutePath = resolveProjectReadPath(projectRoot, repoPath);
+  const fileStat = await safeStatInsideProject(projectRoot, repoPath);
   const role = classifyFileRole(repoPath);
   const oversized = fileStat.size > maxFileBytes;
   let contentHash = `oversized:${fileStat.size}:${Math.floor(fileStat.mtimeMs)}`;
   let indexedText = '';
 
   if (!oversized) {
-    const content = await readFile(absolutePath);
+    const content = await safeReadFileInsideProject(projectRoot, repoPath);
     contentHash = sha1(content);
     indexedText = loadIndexedText ? content.toString('utf8') : '';
   }
@@ -94,7 +107,11 @@ async function createInventoryFile(
 }
 
 async function isSymlink(projectRoot: string, repoPath: string): Promise<boolean> {
-  return (await lstat(path.join(projectRoot, repoPath))).isSymbolicLink();
+  try {
+    return (await safeLstatInsideProject(projectRoot, repoPath)).isSymbolicLink();
+  } catch {
+    return true;
+  }
 }
 
 export async function buildFileInventory(options: BuildFileInventoryOptions): Promise<FileInventory> {
@@ -103,6 +120,7 @@ export async function buildFileInventory(options: BuildFileInventoryOptions): Pr
   const ignoreMatcher = createIgnoreMatcher(config.fileInventory.ignoreGlobs, {
     includeVendor: options.includeVendor
   });
+  const includeExtensions = new Set(config.fileInventory.includeExtensions.map(normalizeExtension));
   const candidates = (await listCandidateFiles(projectRoot)).map(toRepoPath).sort();
   const ignoredPaths: string[] = [];
   const files: InventoryFile[] = [];
@@ -111,6 +129,11 @@ export async function buildFileInventory(options: BuildFileInventoryOptions): Pr
 
   for (const repoPath of candidates) {
     if (ignoreMatcher.ignores(repoPath)) {
+      ignoredPaths.push(repoPath);
+      continue;
+    }
+
+    if (!isIncludedExtension(repoPath, includeExtensions)) {
       ignoredPaths.push(repoPath);
       continue;
     }

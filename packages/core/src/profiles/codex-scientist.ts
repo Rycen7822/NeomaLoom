@@ -1,7 +1,7 @@
-import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { InventoryFile } from '../files/file-inventory.js';
+import { safeReadFileInsideProject } from '../safety/path-guard.js';
 
 export type EditBoundary = {
   editable: boolean;
@@ -90,7 +90,7 @@ async function readSeedReferences(projectRoot: string, seedFile: InventoryFile, 
     return [];
   }
   try {
-    const text = await readFile(path.join(projectRoot, seedFile.path), 'utf8');
+    const text = await safeReadFileInsideProject(projectRoot, seedFile.path, 'utf8');
     return extractPathTokens(text)
       .map(token => resolveToken(token, seedFile.path, knownPaths))
       .filter((repoPath): repoPath is string => Boolean(repoPath));

@@ -1,7 +1,8 @@
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import { isGeneratedArtifactPath } from '../files/role-classifier.js';
+import { normalizeProjectRelativePath, resolveProjectReadPath, safeReadFileInsideProject, safeStatInsideProject } from '../safety/path-guard.js';
 
 export type OldTermHit = {
   path: string;
@@ -24,17 +25,18 @@ function isTextPath(repoPath: string): boolean {
 }
 
 async function expandChangedPath(projectRoot: string, repoPath: string): Promise<string[]> {
-  const normalized = normalizeRepoPath(repoPath);
-  const absolute = path.resolve(projectRoot, normalized);
-  const root = path.resolve(projectRoot);
-  const relative = path.relative(root, absolute);
-  if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
+  let normalized: string;
+  try {
+    normalized = normalizeProjectRelativePath(projectRoot, repoPath);
+  } catch {
     return [];
   }
+  const absolute = resolveProjectReadPath(projectRoot, normalized);
+  const root = path.resolve(projectRoot);
 
   let info;
   try {
-    info = await stat(absolute);
+    info = await safeStatInsideProject(projectRoot, normalized);
   } catch {
     return [];
   }
@@ -77,7 +79,7 @@ export async function sweepOldTerms(input: {
   for (const changedPath of expandedPaths) {
     let text = '';
     try {
-      text = await readFile(path.join(input.projectRoot, changedPath), 'utf8');
+      text = await safeReadFileInsideProject(input.projectRoot, changedPath, 'utf8');
     } catch {
       continue;
     }

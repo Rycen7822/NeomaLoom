@@ -1,5 +1,7 @@
-import { access, readFile } from 'node:fs/promises';
 import path from 'node:path';
+
+import { createGithubSlugger } from '../documents/github-slug.js';
+import { normalizeProjectRelativePath, safeReadFileInsideProject, safeStatInsideProject } from '../safety/path-guard.js';
 
 export type BrokenLink = {
   path: string;
@@ -15,36 +17,36 @@ export type StaleAnchor = {
 };
 
 function isExternal(target: string): boolean {
-  return /^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith('#');
+  return /^[a-z][a-z0-9+.-]*:/i.test(target);
 }
 
-function slug(heading: string): string {
-  return heading
-    .toLowerCase()
-    .replace(/`/g, '')
-    .replace(/[^a-z0-9\s-]/g, '')
-    .trim()
-    .replace(/\s+/g, '-');
-}
-
-async function exists(targetPath: string): Promise<boolean> {
+function normalizeAnchor(anchor: string): string {
   try {
-    await access(targetPath);
-    return true;
+    return decodeURIComponent(anchor.replace(/^#/, '')).toLowerCase();
+  } catch {
+    return anchor.replace(/^#/, '').toLowerCase();
+  }
+}
+
+async function exists(projectRoot: string, repoPath: string): Promise<boolean> {
+  try {
+    const info = await safeStatInsideProject(projectRoot, repoPath);
+    return info.isFile();
   } catch {
     return false;
   }
 }
 
-async function hasAnchor(targetPath: string, anchor: string): Promise<boolean> {
-  const text = await readFile(targetPath, 'utf8');
+async function hasAnchor(projectRoot: string, targetPath: string, anchor: string): Promise<boolean> {
+  const text = await safeReadFileInsideProject(projectRoot, targetPath, 'utf8');
+  const slugger = createGithubSlugger();
   const anchors = new Set(
     text
       .split(/\r?\n/)
       .filter(line => /^#{1,6}\s+/.test(line))
-      .map(line => slug(line.replace(/^#{1,6}\s+/, '')))
+      .map(line => slugger.slug(line.replace(/^#{1,6}\s+/, '')))
   );
-  return anchors.has(anchor.replace(/^#/, '').toLowerCase());
+  return anchors.has(normalizeAnchor(anchor));
 }
 
 export async function checkMarkdownLinks(input: {
@@ -57,7 +59,7 @@ export async function checkMarkdownLinks(input: {
   for (const changedPath of input.changedPaths.filter(file => /\.(md|mdx|rst)$/i.test(file))) {
     let text = '';
     try {
-      text = await readFile(path.join(input.projectRoot, changedPath), 'utf8');
+      text = await safeReadFileInsideProject(input.projectRoot, changedPath, 'utf8');
     } catch {
       continue;
     }
@@ -67,13 +69,23 @@ export async function checkMarkdownLinks(input: {
         continue;
       }
       const [targetPath, anchor] = rawTarget.split('#');
-      const resolvedPath = path.posix.normalize(path.posix.join(path.posix.dirname(changedPath), targetPath));
-      const absolute = path.join(input.projectRoot, resolvedPath);
-      if (!(await exists(absolute))) {
+      let resolvedPath: string;
+      try {
+        resolvedPath = normalizeProjectRelativePath(
+          input.projectRoot,
+          targetPath
+            ? path.posix.normalize(path.posix.join(path.posix.dirname(changedPath), targetPath))
+            : changedPath
+        );
+      } catch {
+        brokenLinks.push({ path: changedPath, target: rawTarget, resolvedPath: targetPath });
+        continue;
+      }
+      if (!(await exists(input.projectRoot, resolvedPath))) {
         brokenLinks.push({ path: changedPath, target: rawTarget, resolvedPath });
         continue;
       }
-      if (anchor && !(await hasAnchor(absolute, anchor))) {
+      if (anchor && !(await hasAnchor(input.projectRoot, resolvedPath, anchor))) {
         staleAnchors.push({ path: changedPath, target: rawTarget, anchor, resolvedPath });
       }
     }

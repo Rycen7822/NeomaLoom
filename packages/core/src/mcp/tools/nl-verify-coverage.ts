@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
-import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 
 import { verifyCoverage } from '../../verifier/coverage-verifier.js';
+import { normalizeProjectRelativePath, safeReadFileInsideProject, safeReaddirInsideProject, safeStatInsideProject } from '../../safety/path-guard.js';
 import { readInventorySnapshot } from '../../state/changed-detection.js';
 import { readLatestRevision } from '../../state/refresh-revision.js';
 import { createEnvelope, resolveProjectRootFromInput, type EnvelopeWarning, type GraphState, type NoemaLoomEnvelope } from '../envelope.js';
@@ -29,14 +29,13 @@ function sha1(data: string | Uint8Array): string {
 }
 
 async function collectFilesUnder(projectRoot: string, repoPath: string): Promise<string[]> {
-  const absolutePath = path.join(projectRoot, repoPath);
-  const entries = await readdir(absolutePath, { withFileTypes: true });
+  const entries = await safeReaddirInsideProject(projectRoot, repoPath, { withFileTypes: true });
   const files: string[] = [];
   for (const entry of entries) {
     if (entry.name === '.noemaloom') {
       continue;
     }
-    const childRepoPath = toRepoPath(path.posix.join(repoPath, entry.name));
+    const childRepoPath = normalizeProjectRelativePath(projectRoot, path.posix.join(repoPath, entry.name));
     if (entry.isDirectory()) {
       files.push(...(await collectFilesUnder(projectRoot, childRepoPath)));
     } else if (entry.isFile()) {
@@ -48,10 +47,15 @@ async function collectFilesUnder(projectRoot: string, repoPath: string): Promise
 
 async function expandChangedPaths(projectRoot: string, changedPaths: string[]): Promise<string[]> {
   const expanded = new Set<string>();
-  for (const changedPath of changedPaths.map(toRepoPath).filter(Boolean)) {
-    const absolutePath = path.join(projectRoot, changedPath);
+  for (const rawChangedPath of changedPaths.map(toRepoPath).filter(Boolean)) {
+    let changedPath: string;
     try {
-      const fileStat = await stat(absolutePath);
+      changedPath = normalizeProjectRelativePath(projectRoot, rawChangedPath);
+    } catch {
+      continue;
+    }
+    try {
+      const fileStat = await safeStatInsideProject(projectRoot, changedPath);
       if (fileStat.isDirectory()) {
         for (const childPath of await collectFilesUnder(projectRoot, changedPath)) {
           expanded.add(childPath);
@@ -68,15 +72,15 @@ async function expandChangedPaths(projectRoot: string, changedPaths: string[]): 
 
 async function currentHash(projectRoot: string, repoPath: string, expectedHash: string): Promise<string | undefined> {
   try {
-    const absolutePath = path.join(projectRoot, repoPath);
-    const fileStat = await stat(absolutePath);
+    const safeRepoPath = normalizeProjectRelativePath(projectRoot, repoPath);
+    const fileStat = await safeStatInsideProject(projectRoot, safeRepoPath);
     if (!fileStat.isFile()) {
       return undefined;
     }
     if (expectedHash.startsWith('oversized:')) {
       return `oversized:${fileStat.size}:${Math.floor(fileStat.mtimeMs)}`;
     }
-    return sha1(await readFile(absolutePath));
+    return sha1(await safeReadFileInsideProject(projectRoot, safeRepoPath));
   } catch {
     return undefined;
   }

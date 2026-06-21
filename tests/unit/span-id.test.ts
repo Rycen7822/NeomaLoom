@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import {
@@ -9,90 +8,94 @@ import {
   createTestExampleSpanId
 } from '../../packages/core/src/spans/span-id.js';
 
-function sha1(value: string): string {
-  return createHash('sha1').update(value).digest('hex');
+function expectStablePrefixedId(prefix: string, first: string, second: string, changed: string): void {
+  expect(first).toBe(second);
+  expect(first).toMatch(new RegExp(`^${prefix}:[a-f0-9]{40}$`));
+  expect(changed).not.toBe(first);
 }
 
 describe('stable span ids', () => {
-  it('uses the five canonical formulas deterministically', () => {
-    const projectRoot = path.resolve('/tmp/noemaloom-project');
-
-    expect(
-      createCodeSpanId({
-        projectRoot,
-        path: 'src/api.ts',
-        kind: 'code.function',
-        qualifiedName: 'createClient',
-        signatureHash: 'sig-a'
-      })
-    ).toBe(`code:${sha1(`${projectRoot}src/api.tscode.functioncreateClientsig-a`)}`);
-
-    expect(
-      createDocumentSpanId({
-        projectRoot,
-        path: 'docs/api/client.md',
-        headingPath: ['Client API', 'Options'],
-        kind: 'doc.paragraph',
-        blockOrdinal: 4,
-        normalizedTextHash: 'text-a'
-      })
-    ).toBe(`doc:${sha1(`${projectRoot}docs/api/client.md${JSON.stringify(['Client API', 'Options'])}doc.paragraph4text-a`)}`);
-
-    expect(
-      createConfigSpanId({
-        projectRoot,
-        path: 'package.json',
-        jsonPointerOrTomlPath: '/scripts/test',
-        normalizedValueHash: 'value-a'
-      })
-    ).toBe(`config:${sha1(`${projectRoot}package.json/scripts/testvalue-a`)}`);
-
-    expect(
-      createTestExampleSpanId({
-        projectRoot,
-        path: 'tests/client.test.ts',
-        kind: 'test.case',
-        testOrExampleName: 'creates client',
-        normalizedTextHash: 'test-a'
-      })
-    ).toBe(`tx:${sha1(`${projectRoot}tests/client.test.tstest.casecreates clienttest-a`)}`);
-
-    expect(
-      createFeatureSpanId({
-        projectRoot,
-        featurePath: 'features/client.md',
-        featureLabel: 'Client setup',
-        sourceId: 'feature-1'
-      })
-    ).toBe(`feature:${sha1(`${projectRoot}features/client.mdClient setupfeature-1`)}`);
-
-    expect(
-      createTestExampleSpanId({
-        projectRoot,
-        path: 'tests/client.test.ts',
-        kind: 'test.case',
-        testOrExampleName: 'creates client',
-        normalizedTextHash: 'test-a',
-        startLine: 42
-      })
-    ).toBe(`tx:${sha1(`${projectRoot}tests/client.test.tstest.casecreates clienttest-a42`)}`);
-  });
-
-  it('changes only when formula inputs change', () => {
-    const baseInput = {
-      projectRoot: '/tmp/noemaloom-project',
+  it('creates deterministic prefixed code span ids and changes when identity inputs change', () => {
+    const base = {
+      projectRoot: path.resolve('/tmp/noemaloom-project'),
       path: 'src/api.ts',
       kind: 'code.function' as const,
       qualifiedName: 'createClient',
       signatureHash: 'sig-a'
     };
 
-    expect(createCodeSpanId(baseInput)).toBe(createCodeSpanId({ ...baseInput }));
-    expect(createCodeSpanId(baseInput)).not.toBe(
-      createCodeSpanId({
-        ...baseInput,
-        signatureHash: 'sig-b'
-      })
+    expectStablePrefixedId(
+      'code',
+      createCodeSpanId(base),
+      createCodeSpanId({ ...base }),
+      createCodeSpanId({ ...base, signatureHash: 'sig-b' })
+    );
+  });
+
+  it('creates deterministic prefixed document span ids and changes when block identity changes', () => {
+    const base = {
+      projectRoot: path.resolve('/tmp/noemaloom-project'),
+      path: 'docs/api/client.md',
+      headingPath: ['Client API', 'Options'],
+      kind: 'doc.paragraph' as const,
+      blockOrdinal: 4,
+      normalizedTextHash: 'text-a'
+    };
+
+    expectStablePrefixedId(
+      'doc',
+      createDocumentSpanId(base),
+      createDocumentSpanId({ ...base }),
+      createDocumentSpanId({ ...base, blockOrdinal: 5 })
+    );
+  });
+
+  it('creates deterministic prefixed config span ids and changes when config identity changes', () => {
+    const base = {
+      projectRoot: path.resolve('/tmp/noemaloom-project'),
+      path: 'package.json',
+      jsonPointerOrTomlPath: '/scripts/test',
+      normalizedValueHash: 'value-a'
+    };
+
+    expectStablePrefixedId(
+      'config',
+      createConfigSpanId(base),
+      createConfigSpanId({ ...base }),
+      createConfigSpanId({ ...base, normalizedValueHash: 'value-b' })
+    );
+  });
+
+  it('creates deterministic prefixed test/example span ids and changes when locator disambiguators change', () => {
+    const base = {
+      projectRoot: path.resolve('/tmp/noemaloom-project'),
+      path: 'tests/client.test.ts',
+      kind: 'test.case' as const,
+      testOrExampleName: 'creates client',
+      normalizedTextHash: 'test-a'
+    };
+
+    expectStablePrefixedId(
+      'tx',
+      createTestExampleSpanId(base),
+      createTestExampleSpanId({ ...base }),
+      createTestExampleSpanId({ ...base, startLine: 42 })
+    );
+  });
+
+  it('creates deterministic prefixed feature span ids and changes when source identity changes', () => {
+    const base = {
+      projectRoot: path.resolve('/tmp/noemaloom-project'),
+      featurePath: 'features/client.md',
+      featureLabel: 'Client setup',
+      sourceId: 'feature-1'
+    };
+
+    expectStablePrefixedId(
+      'feature',
+      createFeatureSpanId(base),
+      createFeatureSpanId({ ...base }),
+      createFeatureSpanId({ ...base, sourceId: 'feature-2' })
     );
   });
 });

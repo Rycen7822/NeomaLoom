@@ -1,8 +1,12 @@
-import { access, mkdir, mkdtemp, readFile, symlink } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { writeFileInsideStateDir } from '../../packages/core/src/safety/path-guard.js';
+import {
+  safeReadFileInsideProject,
+  safeStatInsideProject,
+  writeFileInsideStateDir
+} from '../../packages/core/src/safety/path-guard.js';
 
 async function createTempProject(): Promise<string> {
   return mkdtemp(path.join(tmpdir(), 'noemaloom-guard-'));
@@ -43,5 +47,43 @@ describe('state write path guard', () => {
       path: escapedPath
     });
     await expect(access(path.join(outsideTarget, 'mcp.jsonl'))).rejects.toThrow();
+  });
+});
+
+describe('project read path guard', () => {
+  it('allows reads and stats for normal project-relative files', async () => {
+    const projectRoot = await createTempProject();
+    const readmePath = path.join(projectRoot, 'README.md');
+    await writeFileInsideStateDir(projectRoot, path.join(projectRoot, '.noemaloom', 'logs', 'touch.jsonl'), 'ok\n');
+    await mkdir(path.dirname(readmePath), { recursive: true });
+    await writeFile(readmePath, '# Demo\n', 'utf8');
+
+    await expect(safeReadFileInsideProject(projectRoot, 'README.md', 'utf8')).resolves.toBe('# Demo\n');
+    await expect(safeStatInsideProject(projectRoot, 'README.md')).resolves.toMatchObject({});
+  });
+
+  it('rejects traversal and absolute reads outside the project root', async () => {
+    const projectRoot = await createTempProject();
+    const outsidePath = path.join(path.dirname(projectRoot), 'outside.md');
+    await writeFile(outsidePath, 'secret\n', 'utf8');
+
+    await expect(safeReadFileInsideProject(projectRoot, '../outside.md', 'utf8')).rejects.toMatchObject({
+      code: 'read_outside_project_root'
+    });
+    await expect(safeReadFileInsideProject(projectRoot, outsidePath, 'utf8')).rejects.toMatchObject({
+      code: 'read_outside_project_root'
+    });
+  });
+
+  it('rejects symlinked read path escapes', async () => {
+    const projectRoot = await createTempProject();
+    const outsideTarget = await createTempProject();
+    await writeFile(path.join(outsideTarget, 'secret.md'), 'secret\n', 'utf8');
+    await mkdir(path.join(projectRoot, 'docs'), { recursive: true });
+    await symlink(outsideTarget, path.join(projectRoot, 'docs', 'external'));
+
+    await expect(safeReadFileInsideProject(projectRoot, 'docs/external/secret.md', 'utf8')).rejects.toMatchObject({
+      code: 'read_outside_project_root'
+    });
   });
 });

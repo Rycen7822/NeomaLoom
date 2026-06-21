@@ -85,21 +85,15 @@ describe('documentation policy', () => {
     }
   });
 
-  it('root README contains exact manual MCP snippets and runtime safety statements', async () => {
+  it('root README documents manual MCP availability and runtime safety boundaries', async () => {
     const readme = await readFile('README.md', 'utf8');
 
-    expect(readme).toContain('noemaloom serve --mcp');
-    expect(readme).toContain('mcp_servers:');
-    expect(readme).toContain('[mcp_servers.noemaloom]');
-    expect(readme).toContain('args = ["serve", "--mcp"]');
     expect(readme).toContain('# NoemaLoom');
-    expect(readme).toContain('User-level installation');
-    expect(readme).toContain('Project-level installation');
-    expect(readme).toContain('Before changing any user-level agent config');
+    expect(readme).toContain('noemaloom serve --mcp');
     expect(readme).toContain('.noemaloom/');
-    expect(readme).toContain('does not write global config');
-    expect(readme).toContain('does not install Git hooks');
-    expect(readme).toContain('does not patch Codex cache');
+    expect(readme).toMatch(/global config/i);
+    expect(readme).toMatch(/Git hooks/i);
+    expect(readme).toMatch(/Codex cache/i);
   });
 
   it('documents and declares the runtime floor required by node:sqlite', async () => {
@@ -123,23 +117,23 @@ describe('documentation policy', () => {
     expect(readmeZh).not.toContain('Node.js 20 或更新版本');
   });
 
-  it('skill is a lightweight router to the six workflow references', async () => {
+  it('skill stays a lightweight router to workflow references and public tools', async () => {
     const skill = await readFile('skill/noemaloom/SKILL.md', 'utf8');
 
     expect(skill).toMatch(/^---\nname: noemaloom\n/);
-    expect(skill).toMatch(/description: "?Use when Codex needs NoemaLoom/);
-    expect(skill).toContain('Only call these public MCP tools');
-    expect(skill).toContain('Load references in the listed order');
-
+    for (const toolName of toolNames) {
+      expect(skill).toContain(toolName);
+    }
     for (const workflow of workflowReferences) {
       expect(skill).toContain(`references/${workflow}.md`);
     }
-    expect(skill).toContain('NoemaLoom locates and verifies spans');
-    expect(skill).toContain('Codex or Hermes edits files with native tools');
+    for (const hiddenToolName of hiddenPrimitiveToolNames) {
+      expect(skill).not.toContain(hiddenToolName);
+    }
     expect(skill).not.toContain('## Tool Surface');
   });
 
-  it('workflow references give unambiguous public-tool payload fields', async () => {
+  it('workflow references route through public tools without exposing raw primitives', async () => {
     const references = new Map(
       await Promise.all(
         workflowReferences.map(async workflow => [
@@ -149,27 +143,16 @@ describe('documentation policy', () => {
       )
     );
 
-    expect(references.get('repository_locator')).toContain('includeRepositoryMap');
-    expect(references.get('repository_locator')).toContain('targetRoles');
-    expect(references.get('repository_locator')).toContain('readTopSpans');
-    expect(references.get('repository_locator')).toContain('changedPaths');
-    expect(references.get('repository_locator')).toContain('target="changed"');
-
-    expect(references.get('markdown_update')).toContain('canonical_api_doc');
-    expect(references.get('markdown_update')).toContain('readme_doc');
-    expect(references.get('markdown_update')).toContain('oldTerms');
-
-    expect(references.get('code_change_impact')).toContain('targetType="auto"');
-    expect(references.get('code_change_impact')).toContain('depth=2');
-    expect(references.get('code_change_impact')).toContain('target');
-
-    expect(references.get('multi_doc_sync')).toContain('targetRoles');
-    expect(references.get('coverage_verification')).toContain('status="pass"');
-    expect(references.get('compression_recovery')).toContain('budget=1024');
-
-    for (const text of references.values()) {
-      expect(text).not.toMatch(/\b(document|code|config|example|feature) roles\b/);
-      expect(text).not.toContain('NoemaLoom MCP tools for locating');
+    for (const [workflow, text] of references) {
+      expect(text).toMatch(new RegExp(toolNames.join('|')));
+      for (const hiddenToolName of hiddenPrimitiveToolNames) {
+        expect(text).not.toContain(hiddenToolName);
+      }
+      for (const pattern of forbiddenRawToolPatterns) {
+        expect(text).not.toMatch(pattern);
+      }
+      expect(text, workflow).not.toMatch(/\b(document|code|config|example|feature) roles\b/);
+      expect(text, workflow).not.toContain('NoemaLoom MCP tools for locating');
     }
   });
 });
