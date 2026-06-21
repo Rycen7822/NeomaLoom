@@ -119,13 +119,57 @@ function resolveAliasTarget(alias: ImportAliasMetadata, symbolsByFqn: Map<string
   return undefined;
 }
 
+function bySpanOrder(left: RepoSpan, right: RepoSpan): number {
+  return left.path.localeCompare(right.path) || left.startLine - right.startLine || left.endLine - right.endLine || left.spanId.localeCompare(right.spanId);
+}
+
+function duplicateAwareMetadata(span: RepoSpan, baseFqn: string, overloadOrdinal: number, overloadCount: number): Record<string, unknown> {
+  if (overloadCount <= 1) {
+    return span.metadata;
+  }
+  return {
+    ...span.metadata,
+    baseSymbolFqn: baseFqn,
+    overloadOrdinal,
+    overloadCount
+  };
+}
+
+function duplicateAwareSymbolFqn(baseFqn: string, overloadOrdinal: number, overloadCount: number): string {
+  if (overloadCount <= 1 || overloadOrdinal === 1) {
+    return baseFqn;
+  }
+  return `${baseFqn}#overload${overloadOrdinal}`;
+}
+
+function firstValueMap<K, V>(entries: Array<[K, V]>): Map<K, V> {
+  const map = new Map<K, V>();
+  for (const [key, value] of entries) {
+    if (!map.has(key)) {
+      map.set(key, value);
+    }
+  }
+  return map;
+}
+
 export function buildRetrievalCoreRecords(spans: RepoSpan[]): RetrievalCoreRecords {
-  const symbols: RepoSymbolRecord[] = spans
-    .filter(isCodeSymbol)
+  const codeSymbols = spans.filter(isCodeSymbol).sort(bySpanOrder);
+  const duplicateCounts = new Map<string, number>();
+  for (const span of codeSymbols) {
+    const baseFqn = symbolFqn(span);
+    duplicateCounts.set(baseFqn, (duplicateCounts.get(baseFqn) ?? 0) + 1);
+  }
+
+  const seenByBaseFqn = new Map<string, number>();
+  const symbols: RepoSymbolRecord[] = codeSymbols
     .map(span => {
+      const baseFqn = symbolFqn(span);
+      const overloadCount = duplicateCounts.get(baseFqn) ?? 1;
+      const overloadOrdinal = (seenByBaseFqn.get(baseFqn) ?? 0) + 1;
+      seenByBaseFqn.set(baseFqn, overloadOrdinal);
       const deprecated = deprecatedState(span);
       return {
-        symbolFqn: symbolFqn(span),
+        symbolFqn: duplicateAwareSymbolFqn(baseFqn, overloadOrdinal, overloadCount),
         spanId: span.spanId,
         path: span.path,
         language: span.language,
@@ -136,13 +180,13 @@ export function buildRetrievalCoreRecords(spans: RepoSpan[]): RetrievalCoreRecor
         signature: String(span.metadata.signature ?? span.label),
         exported: span.metadata.exported === true || /^\s*export\b/.test(span.indexedText),
         ...deprecated,
-        metadata: span.metadata
+        metadata: duplicateAwareMetadata(span, baseFqn, overloadOrdinal, overloadCount)
       };
     })
-    .sort((left, right) => left.symbolFqn.localeCompare(right.symbolFqn));
+    .sort((left, right) => left.symbolFqn.localeCompare(right.symbolFqn) || left.spanId.localeCompare(right.spanId));
 
   const symbolsByFqn = new Map(symbols.map(symbol => [symbol.symbolFqn, symbol]));
-  const symbolsByPathAndName = new Map(symbols.map(symbol => [`${symbol.path}:${symbol.symbolName}`, symbol]));
+  const symbolsByPathAndName = firstValueMap(symbols.map(symbol => [`${symbol.path}:${symbol.symbolName}`, symbol]));
   const aliasesByFqn = new Map<string, RepoSymbolAliasRecord>();
 
   for (const span of spans.filter(candidate => candidate.kind === 'code.import')) {

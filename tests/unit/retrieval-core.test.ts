@@ -43,4 +43,20 @@ describe('retrieval core symbol records', () => {
       expect.objectContaining({ aliasFqn: 'src/use.ts:LocalApi', targetFqn: 'src/api.ts:Api', aliasKind: 'named' })
     ]);
   });
+
+  it('disambiguates duplicate symbol FQNs from overload-like declarations', () => {
+    const records = buildRetrievalCoreRecords([
+      repoSpan({ spanId: 'foo-1', path: 'src/over.ts', kind: 'code.function', label: 'foo', startLine: 1, metadata: { qualifiedName: 'src/over.ts:foo', signature: 'foo(value: string): string' } }),
+      repoSpan({ spanId: 'foo-2', path: 'src/over.ts', kind: 'code.function', label: 'foo', startLine: 2, metadata: { qualifiedName: 'src/over.ts:foo', signature: 'foo(value: number): number' } }),
+      repoSpan({ spanId: 'foo-3', path: 'src/over.ts', kind: 'code.function', label: 'foo', startLine: 3, metadata: { qualifiedName: 'src/over.ts:foo', signature: 'foo(value: string | number)' } })
+    ]);
+
+    expect(new Set(records.symbols.map(symbol => symbol.symbolFqn)).size).toBe(3);
+    expect(records.symbols.map(symbol => symbol.symbolFqn)).toEqual([
+      'src/over.ts:foo',
+      'src/over.ts:foo#overload2',
+      'src/over.ts:foo#overload3'
+    ]);
+    expect(records.symbols[1].metadata).toMatchObject({ baseSymbolFqn: 'src/over.ts:foo', overloadOrdinal: 2, overloadCount: 3 });
+  });
 });

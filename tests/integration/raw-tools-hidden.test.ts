@@ -1,4 +1,5 @@
 import { access, mkdir, readFile, writeFile, mkdtemp } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -8,6 +9,16 @@ import {
   createToolRegistry,
   NOEMALOOM_TOOL_NAMES
 } from '../../packages/core/src/mcp/tool-registry.js';
+
+type SQLiteDatabase = {
+  exec: (sql: string) => void;
+  close: () => void;
+};
+
+const require = createRequire(import.meta.url);
+const { DatabaseSync } = require('node:sqlite') as {
+  DatabaseSync: new (filename: string) => SQLiteDatabase;
+};
 
 async function createTempProject(): Promise<string> {
   return mkdtemp(path.join(tmpdir(), 'noemaloom-phase3-'));
@@ -186,6 +197,35 @@ describe('safe tool surface', () => {
     expect(result.warnings).toEqual(
       expect.arrayContaining([expect.objectContaining({ code: 'span_index_unreadable', severity: 'error' })])
     );
+  });
+
+  it('treats pre-retrieval-core span databases as refreshable instead of corrupt', async () => {
+    const projectRoot = await createTempProject();
+    const spansDir = path.join(projectRoot, '.noemaloom', 'spans');
+    await mkdir(spansDir, { recursive: true });
+    const db = new DatabaseSync(path.join(spansDir, 'spans.db'));
+    try {
+      const initialSql = await readFile(path.join(process.cwd(), 'packages/core/src/spans/migrations/001_initial.sql'), 'utf8');
+      db.exec(initialSql);
+    } finally {
+      db.close();
+    }
+
+    const result = await callRegisteredTool('nl_status', {
+      projectPath: projectRoot,
+      includeRepositoryMap: false
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.graphState).toBe('partial');
+    expect(result.data).toMatchObject({
+      spanIndex: { state: 'ready', spans: 0, edges: 0 },
+      retrievalCore: { state: 'missing', symbols: 0, aliases: 0 }
+    });
+    expect(result.warnings).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'span_index_unreadable' })])
+    );
+    expect(result.nextActions).toEqual(expect.arrayContaining(['call nl_refresh with target="changed" and mode="safe"']));
   });
 
   it('reports stale refresh locks and the last refresh failure from nl_status', async () => {

@@ -172,6 +172,51 @@ async function readSqliteCounts(input: {
   }
 }
 
+function sqliteTableExists(db: Database, tableName: string): boolean {
+  const row = db
+    .prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?")
+    .get(tableName) as { name?: string } | undefined;
+  return row?.name === tableName;
+}
+
+async function readRetrievalCoreCounts(targetPath: string): Promise<{ state: IndexState; counts: { symbols: number; aliases: number }; warning?: EnvelopeWarning }> {
+  const counts = { symbols: 0, aliases: 0 };
+  const size = await fileSize(targetPath);
+  if (size === undefined) {
+    return { state: 'missing', counts };
+  }
+  if (size === 0) {
+    return {
+      state: 'error',
+      counts,
+      warning: { code: 'retrieval_core_unreadable', severity: 'error', message: `${targetPath} is empty or corrupt.` }
+    };
+  }
+
+  let db: Database | undefined;
+  try {
+    db = openDatabase(targetPath);
+    if (!sqliteTableExists(db, 'repo_symbols') || !sqliteTableExists(db, 'repo_symbol_aliases')) {
+      return { state: 'missing', counts };
+    }
+    const symbols = db.prepare('SELECT COUNT(*) AS value FROM repo_symbols').get() as { value?: number } | undefined;
+    const aliases = db.prepare('SELECT COUNT(*) AS value FROM repo_symbol_aliases').get() as { value?: number } | undefined;
+    return { state: 'ready', counts: { symbols: Number(symbols?.value ?? 0), aliases: Number(aliases?.value ?? 0) } };
+  } catch (error) {
+    return {
+      state: 'error',
+      counts,
+      warning: {
+        code: 'retrieval_core_unreadable',
+        severity: 'error',
+        message: error instanceof Error ? error.message : `${targetPath} retrieval-core tables are not readable.`
+      }
+    };
+  } finally {
+    db?.close();
+  }
+}
+
 function collectWarnings(...items: Array<{ warning?: EnvelopeWarning }>): EnvelopeWarning[] {
   return items.flatMap(item => (item.warning ? [item.warning] : []));
 }
@@ -243,19 +288,19 @@ export async function handleNlStatus(input: unknown): Promise<NoemaLoomEnvelope>
   }
 
   const paths = resolveNoemaLoomPaths(projectRoot);
-  const [fileInventory, spanIndex, factIndex, documentIndex, featureProjection, derivedMap, refreshLock, lastRefreshFailure, coverageMetadata, graphRevision] = await Promise.all([
+  const spanDbPath = path.join(paths.spansDir, 'spans.db');
+  const [fileInventory, spanIndex, retrievalCore, factIndex, documentIndex, featureProjection, derivedMap, refreshLock, lastRefreshFailure, coverageMetadata, graphRevision] = await Promise.all([
     countInventoryFiles(path.join(paths.filesDir, 'inventory.json')),
     readSqliteCounts({
-      targetPath: path.join(paths.spansDir, 'spans.db'),
+      targetPath: spanDbPath,
       unreadableCode: 'span_index_unreadable',
       queries: {
         spans: 'SELECT COUNT(*) AS value FROM repo_spans',
         edges: 'SELECT COUNT(*) AS value FROM repo_edges',
-        revisions: 'SELECT COUNT(*) AS value FROM refresh_revisions',
-        symbols: 'SELECT COUNT(*) AS value FROM repo_symbols',
-        aliases: 'SELECT COUNT(*) AS value FROM repo_symbol_aliases'
+        revisions: 'SELECT COUNT(*) AS value FROM refresh_revisions'
       }
     }),
+    readRetrievalCoreCounts(spanDbPath),
     readSqliteCounts({
       targetPath: path.join(paths.factDir, 'codegraph.db'),
       unreadableCode: 'fact_index_unreadable',
@@ -274,7 +319,7 @@ export async function handleNlStatus(input: unknown): Promise<NoemaLoomEnvelope>
   ]);
 
   const warnings = [
-    ...collectWarnings(fileInventory, spanIndex, factIndex, documentIndex, featureProjection, derivedMap),
+    ...collectWarnings(fileInventory, spanIndex, retrievalCore, factIndex, documentIndex, featureProjection, derivedMap),
     ...(await detectProjectBoundaryWarnings(projectRoot))
   ];
   if (refreshLock.state === 'stale') {
@@ -303,12 +348,13 @@ export async function handleNlStatus(input: unknown): Promise<NoemaLoomEnvelope>
       message: `${lastRefreshFailure.tool}${lastRefreshFailure.target ? ` target=${lastRefreshFailure.target}` : ''} failed at ${lastRefreshFailure.failedAt}: ${lastRefreshFailure.message}`
     });
   }
-  const states = [fileInventory.state, spanIndex.state, factIndex.state, documentIndex.state, featureProjection.state, derivedMap.state];
+  const states = [fileInventory.state, spanIndex.state, retrievalCore.state, factIndex.state, documentIndex.state, featureProjection.state, derivedMap.state];
   const hasReady = states.includes('ready');
   const hasError = states.includes('error') || warnings.some(warning => warning.severity === 'error');
   const graphReady =
     fileInventory.state === 'ready' &&
     spanIndex.state === 'ready' &&
+    retrievalCore.state === 'ready' &&
     factIndex.state === 'ready' &&
     derivedMap.state === 'ready';
   const coverage = statusCoverage({ fileInventory, spanIndex, metadata: coverageMetadata });
@@ -319,6 +365,9 @@ export async function handleNlStatus(input: unknown): Promise<NoemaLoomEnvelope>
         'if retry cannot run, delete .noemaloom/locks/refresh.lock after confirming no NoemaLoom refresh process is active'
       ]
     : [];
+  if (!hasError && spanIndex.state === 'ready' && retrievalCore.state === 'missing') {
+    nextActions.push('call nl_refresh with target="changed" and mode="safe"');
+  }
 
   const anchorWorkset = parsed.includeAnchors
     ? anchorStatusData(await readWorksetManifest(projectRoot), parsed.includeRetiredAnchors, parsed.includeAnchorText)
@@ -336,7 +385,7 @@ export async function handleNlStatus(input: unknown): Promise<NoemaLoomEnvelope>
       stateDir: '.noemaloom',
       fileInventory: { state: fileInventory.state, files: fileInventory.files },
       spanIndex: { state: spanIndex.state, spans: spanIndex.counts.spans, edges: spanIndex.counts.edges },
-      retrievalCore: { state: spanIndex.state, symbols: spanIndex.counts.symbols, aliases: spanIndex.counts.aliases },
+      retrievalCore: { state: retrievalCore.state, symbols: retrievalCore.counts.symbols, aliases: retrievalCore.counts.aliases },
       coverage,
       factIndex: { state: factIndex.state, symbols: factIndex.counts.symbols, edges: factIndex.counts.edges },
       documentIndex: { state: documentIndex.state, blocks: documentIndex.blocks, parseErrors: documentIndex.parseErrors },

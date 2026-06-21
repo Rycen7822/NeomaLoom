@@ -52,4 +52,15 @@ describe('redaction safety helper', () => {
     expect(second.redactedKinds).toEqual(['api_key']);
     expect(second.redactedText).toContain('[REDACTED:api_key]');
   });
+
+  it('redacts quoted JSON and object-style secret keys', () => {
+    const input = '{"api_key": "abcdefghijklmnop1234567890", "password": "hunter2secure"}';
+
+    const result = redactText(input);
+
+    expect(result.hasSensitiveContent).toBe(true);
+    expect(result.redactedKinds).toEqual(['api_key', 'password']);
+    expect(result.redactedText).not.toContain('abcdefghijklmnop1234567890');
+    expect(result.redactedText).not.toContain('hunter2secure');
+  });
 });
