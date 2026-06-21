@@ -252,6 +252,12 @@ function projectFeature(projectRoot: string, feature: FeatureProjectionRecord): 
   });
 }
 
+function codeSymbolPath(span: CodeFactSpan): string[] {
+  const qualifiedName = typeof span.metadata.qualifiedName === 'string' ? span.metadata.qualifiedName : `${span.path}:${span.label}`;
+  const local = qualifiedName.includes(':') ? qualifiedName.split(':').at(-1) ?? span.label : qualifiedName;
+  return local.split('.').filter(Boolean);
+}
+
 function bySpanOrder(left: RepoSpan, right: RepoSpan): number {
   const group = (span: RepoSpan): number => {
     if (span.kind.startsWith('feature.')) return 0;
@@ -285,7 +291,7 @@ export function buildProjectionGraph(input: BuildProjectionGraphInput): Projecti
         startColumn: span.startColumn,
         endColumn: span.endColumn,
         language: languageForPath(span.path),
-        symbolPath: [span.label],
+        symbolPath: codeSymbolPath(span),
         indexedText: span.text,
         metadata: span.metadata,
         source: 'code-fact-indexer'

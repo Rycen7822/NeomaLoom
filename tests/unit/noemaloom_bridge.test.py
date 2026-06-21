@@ -5,7 +5,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hermes-plugin" / "noemaloom"))
 
 import noemaloom_bridge
-from noemaloom_bridge import _contains_timeout, _default_build_dir, _format_exception, _runtime_metadata, _timeout_envelope
+from noemaloom_bridge import (
+    _contains_timeout,
+    _copy_runtime_migrations,
+    _default_build_dir,
+    _format_exception,
+    _runtime_metadata,
+    _runtime_migrations_ready,
+    _source_mtime,
+    _timeout_envelope,
+)
 
 
 def test_bridge_formats_nested_exception_groups():
@@ -66,3 +75,19 @@ def test_bridge_copy_install_builds_under_plugin_root(tmp_path, monkeypatch):
 
     assert build_dir == plugin_root / ".noemaloom-hermes-build"
     assert runtime["buildRootInsidePlugin"] is True
+
+
+def test_bridge_copies_all_runtime_migrations(tmp_path):
+    repo = tmp_path / "repo"
+    migrations = repo / "packages" / "core" / "src" / "spans" / "migrations"
+    migrations.mkdir(parents=True)
+    (migrations / "001_initial.sql").write_text("CREATE TABLE first(id TEXT);\n", encoding="utf-8")
+    (migrations / "002_retrieval_core.sql").write_text("CREATE TABLE second(id TEXT);\n", encoding="utf-8")
+    build_dir = tmp_path / "build"
+
+    _copy_runtime_migrations(repo, build_dir)
+
+    assert _runtime_migrations_ready(repo, build_dir) is True
+    assert (build_dir / "spans" / "migrations" / "001_initial.sql").exists()
+    assert (build_dir / "spans" / "migrations" / "002_retrieval_core.sql").exists()
+    assert _source_mtime(repo) >= (migrations / "002_retrieval_core.sql").stat().st_mtime

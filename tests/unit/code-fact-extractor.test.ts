@@ -35,7 +35,9 @@ describe('code fact extractor', () => {
       metadata: {
         qualifiedName: 'v2h/models/h1_rectifier.py:H1SpectralMoERectifier._route_weights',
         className: 'H1SpectralMoERectifier',
-        signature: expect.stringContaining('_route_weights(')
+        signature: expect.stringContaining('_route_weights('),
+        boundaryMethod: 'python_indent',
+        boundaryComplete: true
       }
     });
     expect(method?.text).toContain('topk: int');
@@ -43,5 +45,47 @@ describe('code fact extractor', () => {
 
     const functionSpan = result.spans.find(span => span.kind === 'code.function' && span.label === 'evaluate_loader_ddp');
     expect(functionSpan).toMatchObject({ startLine: 11, endLine: 14 });
+  });
+
+  it('indexes TypeScript declarations with full block boundaries and boundary metadata', () => {
+    const text = [
+      'export function runTask(task: Task) {',
+      '  const object = { value: "}" };',
+      '  return schedule(task);',
+      '}',
+      '',
+      'export class Scheduler {',
+      '  schedule(task: Task): string {',
+      '    return runTask(task);',
+      '  }',
+      '}',
+      '',
+      'export function afterClass() {',
+      '  return "after";',
+      '}'
+    ].join('\n');
+
+    const result = extractCodeFacts({ projectRoot: '/repo', path: 'src/scheduler.ts', language: 'typescript', text });
+    const functionSpan = result.spans.find(span => span.kind === 'code.function' && span.label === 'runTask');
+    expect(functionSpan).toMatchObject({
+      startLine: 1,
+      endLine: 4,
+      metadata: {
+        boundaryMethod: 'typescript_brace',
+        boundaryComplete: true,
+        boundaryReason: 'balanced_braces'
+      }
+    });
+    expect(functionSpan?.text).toContain('return schedule(task);');
+
+    const method = result.spans.find(span => span.kind === 'code.method' && span.label === 'schedule');
+    expect(method).toMatchObject({
+      startLine: 7,
+      endLine: 9,
+      metadata: { className: 'Scheduler', qualifiedName: 'src/scheduler.ts:Scheduler.schedule' }
+    });
+
+    const afterClass = result.spans.find(span => span.kind === 'code.function' && span.label === 'afterClass');
+    expect(afterClass).toMatchObject({ startLine: 12, endLine: 14, metadata: { qualifiedName: 'src/scheduler.ts:afterClass' } });
   });
 });

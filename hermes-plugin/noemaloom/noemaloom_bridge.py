@@ -203,13 +203,40 @@ def resolve_repo_root() -> Path:
     )
 
 
+def _migration_dir(repo: Path) -> Path:
+    return repo / "packages" / "core" / "src" / "spans" / "migrations"
+
+
+def _migration_sources(repo: Path) -> list[Path]:
+    migration_dir = _migration_dir(repo)
+    if not migration_dir.exists():
+        return []
+    return sorted(path for path in migration_dir.glob("*.sql") if path.is_file())
+
+
+def _runtime_migrations_ready(repo: Path, build_dir: Path) -> bool:
+    migrations = _migration_sources(repo)
+    if not migrations:
+        return False
+    output_dir = build_dir / "spans" / "migrations"
+    return all((output_dir / migration.name).exists() for migration in migrations)
+
+
+def _copy_runtime_migrations(repo: Path, build_dir: Path) -> None:
+    output_dir = build_dir / "spans" / "migrations"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for stale in output_dir.glob("*.sql"):
+        stale.unlink()
+    for migration in _migration_sources(repo):
+        shutil.copy2(migration, output_dir / migration.name)
+
+
 def _source_mtime(repo: Path) -> float:
     newest = 0.0
     for base in [repo / "packages" / "core" / "src"]:
         for path in base.rglob("*.ts"):
             newest = max(newest, path.stat().st_mtime)
-    migration = repo / "packages" / "core" / "src" / "spans" / "migrations" / "001_initial.sql"
-    if migration.exists():
+    for migration in _migration_sources(repo):
         newest = max(newest, migration.stat().st_mtime)
     return newest
 
@@ -255,15 +282,16 @@ def _ensure_build_runtime_layout(repo: Path, build_dir: Path) -> None:
 def ensure_runtime_build(repo: Path) -> Path:
     build_dir = Path(os.environ.get("NOEMALOOM_BUILD_DIR", _default_build_dir(repo))).expanduser().resolve()
     main_js = build_dir / "cli" / "main.js"
-    migration_out = build_dir / "spans" / "migrations" / "001_initial.sql"
     source_mtime = _source_mtime(repo)
+    migrations_ready = _runtime_migrations_ready(repo, build_dir)
 
-    if main_js.exists() and migration_out.exists() and main_js.stat().st_mtime >= source_mtime:
+    if main_js.exists() and migrations_ready and main_js.stat().st_mtime >= source_mtime:
         _ensure_build_runtime_layout(repo, build_dir)
         return build_dir
 
     with _BUILD_LOCK:
-        if main_js.exists() and migration_out.exists() and main_js.stat().st_mtime >= source_mtime:
+        migrations_ready = _runtime_migrations_ready(repo, build_dir)
+        if main_js.exists() and migrations_ready and main_js.stat().st_mtime >= source_mtime:
             _ensure_build_runtime_layout(repo, build_dir)
             return build_dir
         tsc = _find_tsc(repo)
@@ -294,9 +322,7 @@ def ensure_runtime_build(repo: Path) -> Path:
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "TypeScript build failed").strip()
             raise RuntimeError(f"NoemaLoom TypeScript build failed: {detail[:4000]}")
-        migration_src = repo / "packages" / "core" / "src" / "spans" / "migrations" / "001_initial.sql"
-        migration_out.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(migration_src, migration_out)
+        _copy_runtime_migrations(repo, build_dir)
         _ensure_build_runtime_layout(repo, build_dir)
         return build_dir
 

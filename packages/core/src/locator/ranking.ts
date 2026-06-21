@@ -1,4 +1,5 @@
 import type { FileRole, SpanKind } from '../spans/enums.js';
+import { weightedReciprocalRankScore, type WeightedRoute } from './rrf.js';
 import type { BoundaryValidation } from './boundary-validation.js';
 import type { NormalizedQuery } from './query-normalizer.js';
 
@@ -43,11 +44,14 @@ export type ScoreBreakdown = {
   canonicalityScore: number;
   coverageDiversityScore: number;
   kindPrecisionScore: number;
+  routeFusionScore: number;
   freshnessScore: number;
   generatedFilePenalty: number;
   vendorFilePenalty: number;
   boundaryRiskPenalty: number;
   staleIndexPenalty: number;
+  deprecatedSymbolPenalty: number;
+  redactionPenalty: number;
 };
 
 export type RankedCandidate = LocatorCandidate & {
@@ -212,6 +216,40 @@ function contentSpecificTerms(query: NormalizedQuery): string[] {
     .filter(term => term.length >= 4 && !CONTENT_INTENT_NOISE.has(term) && !term.includes('.') && !term.endsWith('_'));
 }
 
+function routeWeight(source: string): number {
+  switch (source) {
+    case 'code_symbol_name_signature':
+      return 8;
+    case 'fts_lexical':
+      return 4;
+    case 'markdown_heading_anchor_inline_code':
+    case 'config_cli_env_schema':
+    case 'old_term_sweep':
+      return 3;
+    case 'path_role_expansion':
+    case 'test_example_import_call':
+    case 'feature_projection':
+      return 2;
+    case 'cross_reference_edge':
+      return 1;
+    default:
+      return 1;
+  }
+}
+
+function routeFusionScore(candidate: LocatorCandidate): number {
+  const routes: WeightedRoute[] = candidate.sourcePlanSources.map((source, index) => ({
+    route: source,
+    rank: index + 1,
+    weight: routeWeight(source)
+  }));
+  return weightedReciprocalRankScore(routes, { cap: 24 });
+}
+
+function metadataFlag(candidate: LocatorCandidate, key: string): boolean {
+  return candidate.metadata?.[key] === true;
+}
+
 function kindPrecisionScore(candidate: LocatorCandidate, query: NormalizedQuery): number {
   const kind = String(candidate.kind);
   if (kind.startsWith('code.') && exactSymbolLabel(candidate, query)) {
@@ -262,11 +300,14 @@ function scoreCandidate(candidate: LocatorCandidate, query: NormalizedQuery): Sc
     : 0;
   const coverageDiversityScore = candidate.coverageRole || query.targetRoles.includes(candidate.role as FileRole) ? 4 : 0;
   const precisionScore = kindPrecisionScore(candidate, query);
+  const routeScore = routeFusionScore(candidate);
   const freshnessScore = candidate.boundary.stale ? 0 : 5;
   const generatedFilePenalty = candidate.file.generated || candidate.role === 'generated_file' ? 15 : 0;
   const vendorFilePenalty = candidate.file.vendor || candidate.role === 'vendor_file' ? 15 : 0;
   const boundaryRiskPenalty = candidate.boundary.risk === 'high' ? 20 : candidate.boundary.risk === 'medium' ? 10 : 0;
   const staleIndexPenalty = candidate.boundary.stale ? 15 : 0;
+  const deprecatedSymbolPenalty = metadataFlag(candidate, 'deprecated') ? 16 : 0;
+  const redactionPenalty = metadataFlag(candidate, 'redactedAtIndexWrite') ? 4 : 0;
 
   return {
     exactTermScore,
@@ -279,11 +320,14 @@ function scoreCandidate(candidate: LocatorCandidate, query: NormalizedQuery): Sc
     canonicalityScore,
     coverageDiversityScore,
     kindPrecisionScore: precisionScore,
+    routeFusionScore: routeScore,
     freshnessScore,
     generatedFilePenalty,
     vendorFilePenalty,
     boundaryRiskPenalty,
-    staleIndexPenalty
+    staleIndexPenalty,
+    deprecatedSymbolPenalty,
+    redactionPenalty
   };
 }
 
@@ -299,11 +343,14 @@ function sumBreakdown(breakdown: ScoreBreakdown): number {
     breakdown.canonicalityScore +
     breakdown.coverageDiversityScore +
     breakdown.kindPrecisionScore +
+    breakdown.routeFusionScore +
     breakdown.freshnessScore -
     breakdown.generatedFilePenalty -
     breakdown.vendorFilePenalty -
     breakdown.boundaryRiskPenalty -
-    breakdown.staleIndexPenalty
+    breakdown.staleIndexPenalty -
+    breakdown.deprecatedSymbolPenalty -
+    breakdown.redactionPenalty
   );
 }
 

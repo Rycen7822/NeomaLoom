@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 
-import { applySpanMigrations, INITIAL_MIGRATION_SQL } from '../../packages/core/src/spans/db.js';
+import { applySpanMigrations, INITIAL_MIGRATION_SQL, RETRIEVAL_CORE_MIGRATION_SQL } from '../../packages/core/src/spans/db.js';
 import { assertEdgeRelation, assertFileRole, assertSpanKind } from '../../packages/core/src/spans/enums.js';
 
 type SQLiteStatement = {
@@ -31,7 +31,9 @@ describe('span schema migration', () => {
         'repo_evidence',
         'repo_files',
         'repo_spans',
-        'repo_spans_fts'
+        'repo_spans_fts',
+        'repo_symbol_aliases',
+        'repo_symbols'
       ].sort();
 
       const rows = db
@@ -48,6 +50,10 @@ describe('span schema migration', () => {
       expect(INITIAL_MIGRATION_SQL).toContain('CREATE TABLE repo_files');
       expect(INITIAL_MIGRATION_SQL).toContain('CREATE TABLE index_metadata');
       expect(INITIAL_MIGRATION_SQL).toContain('CREATE VIRTUAL TABLE repo_spans_fts');
+      expect(RETRIEVAL_CORE_MIGRATION_SQL).toContain('CREATE TABLE repo_symbols');
+      expect(RETRIEVAL_CORE_MIGRATION_SQL).toContain('CREATE TABLE repo_symbol_aliases');
+      expect(RETRIEVAL_CORE_MIGRATION_SQL).not.toContain('retrieval_sessions');
+      expect(RETRIEVAL_CORE_MIGRATION_SQL).not.toContain('evidence_cache');
     } finally {
       db.close();
     }

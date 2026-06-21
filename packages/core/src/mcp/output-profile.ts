@@ -1,3 +1,5 @@
+import { buildEvidenceBundle, type EvidenceBundleInput } from '../locator/evidence-bundle.js';
+
 export type ResponseProfile = 'compact' | 'standard' | 'debug' | 'navigation';
 
 export const RESPONSE_PROFILES = ['compact', 'standard', 'debug', 'navigation'] as const;
@@ -47,8 +49,7 @@ function slimTarget(target: unknown, profile: Exclude<ResponseProfile, 'debug'>)
   if (profile === 'standard') {
     shaped.score = target.score;
     shaped.scoreReasons = compactScoreBreakdown(target.scoreBreakdown, 5);
-    shaped.evidencePreview = firstItems(target.evidence, 3);
-    shaped.linkedSpanPreview = firstItems(target.linkedSpans, 3);
+    shaped.evidenceBundle = buildEvidenceBundle(target as EvidenceBundleInput, { maxEvidence: 3, maxLinkedSpans: 3 });
   }
   return Object.fromEntries(Object.entries(shaped).filter(([, value]) => value !== undefined));
 }

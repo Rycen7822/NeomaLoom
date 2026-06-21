@@ -435,11 +435,26 @@ function selectSpanRowsByIds(db: Database, ids: string[]): SpanRow[] {
     .all(...ids) as SpanRow[];
 }
 
-function addSpanIdsFromRows(target: string[], rows: Array<{ span_id: string }>, cap: number): void {
+function addRouteSource(routeSourcesBySpanId: Map<string, Set<PlanSource>>, spanId: string, source: PlanSource): void {
+  const sources = routeSourcesBySpanId.get(spanId) ?? new Set<PlanSource>();
+  sources.add(source);
+  routeSourcesBySpanId.set(spanId, sources);
+}
+
+function addSpanIdsFromRows(
+  target: string[],
+  rows: Array<{ span_id: string }>,
+  cap: number,
+  routeSourcesBySpanId?: Map<string, Set<PlanSource>>,
+  routeSource?: PlanSource
+): void {
   const seen = new Set(target);
   for (const row of rows) {
+    if (routeSourcesBySpanId && routeSource) {
+      addRouteSource(routeSourcesBySpanId, row.span_id, routeSource);
+    }
     if (target.length >= cap) {
-      break;
+      continue;
     }
     if (!seen.has(row.span_id)) {
       seen.add(row.span_id);
@@ -456,10 +471,40 @@ function safeFtsQuery(term: string): string | undefined {
   return `"${cleaned}"`;
 }
 
-function selectSpanCandidateIds(db: Database, query: NormalizedQuery, cap: number): string[] {
+function selectSpanCandidateIds(db: Database, query: NormalizedQuery, cap: number): { ids: string[]; routeSourcesBySpanId: Map<string, Set<PlanSource>> } {
   const ids: string[] = [];
+  const routeSourcesBySpanId = new Map<string, Set<PlanSource>>();
   const terms = searchTerms(query);
   const pathTerms = unique([...query.pathTerms, ...terms.filter(term => term.includes('.') || term.includes('/') || term.includes('_'))]);
+
+  for (const symbol of query.symbolTerms) {
+    if (ids.length >= cap) break;
+    const pattern = likePattern(symbol);
+    try {
+      addSpanIdsFromRows(
+        ids,
+        db
+          .prepare(`SELECT DISTINCT rs.span_id
+            FROM repo_symbols rs
+            LEFT JOIN repo_symbol_aliases rsa ON rsa.target_fqn = rs.symbol_fqn
+            WHERE rs.symbol_name = ?
+               OR rs.symbol_fqn = ?
+               OR lower(rs.symbol_fqn) LIKE ? ESCAPE '\\'
+               OR lower(rs.signature) LIKE ? ESCAPE '\\'
+               OR lower(rsa.alias_fqn) LIKE ? ESCAPE '\\'
+               OR lower(rsa.metadata_json) LIKE ? ESCAPE '\\'
+            ORDER BY CASE WHEN rs.symbol_name = ? OR rs.symbol_fqn = ? THEN 0 ELSE 1 END,
+                     length(rs.path) ASC, rs.path ASC, rs.symbol_fqn ASC
+            LIMIT ?`)
+          .all(symbol, symbol, pattern, pattern, pattern, pattern, symbol, symbol, Math.max(10, Math.min(cap - ids.length, 80))) as Array<{ span_id: string }>,
+        cap,
+        routeSourcesBySpanId,
+        'code_symbol_name_signature'
+      );
+    } catch {
+      // Older ad-hoc databases may not have retrieval-core rows populated yet.
+    }
+  }
 
   for (const symbol of query.symbolTerms) {
     if (ids.length >= cap) break;
@@ -482,7 +527,9 @@ function selectSpanCandidateIds(db: Database, query: NormalizedQuery, cap: numbe
                    length(path) ASC, path ASC, start_line ASC
           LIMIT ?`)
         .all(symbol, `%"${symbol}"%`, `%${symbol}%`, symbol, Math.max(10, Math.min(cap - ids.length, 50))) as Array<{ span_id: string }>,
-      cap
+      cap,
+      routeSourcesBySpanId,
+      'code_symbol_name_signature'
     );
   }
 
@@ -501,7 +548,9 @@ function selectSpanCandidateIds(db: Database, query: NormalizedQuery, cap: numbe
                    length(path) ASC, path ASC, start_line ASC
           LIMIT ?`)
         .all(likePattern(term), term.toLowerCase(), `%/${term.toLowerCase()}`, limitForTerm) as Array<{ span_id: string }>,
-      cap
+      cap,
+      routeSourcesBySpanId,
+      'path_role_expansion'
     );
   }
 
@@ -515,7 +564,9 @@ function selectSpanCandidateIds(db: Database, query: NormalizedQuery, cap: numbe
           ORDER BY path ASC, start_line ASC, span_id ASC
           LIMIT ?`)
         .all(role, Math.max(10, Math.min(cap - ids.length, 50))) as Array<{ span_id: string }>,
-      cap
+      cap,
+      routeSourcesBySpanId,
+      'path_role_expansion'
     );
   }
 
@@ -531,7 +582,9 @@ function selectSpanCandidateIds(db: Database, query: NormalizedQuery, cap: numbe
               WHERE repo_spans_fts MATCH ?
               LIMIT ?`)
             .all(ftsQuery, Math.max(25, Math.min(cap - ids.length, 100))) as Array<{ span_id: string }>,
-          cap
+          cap,
+          routeSourcesBySpanId,
+          'fts_lexical'
         );
       } catch {
         // Some ad-hoc test databases may not populate FTS or may reject punctuation-heavy terms.
@@ -555,11 +608,13 @@ function selectSpanCandidateIds(db: Database, query: NormalizedQuery, cap: numbe
           ORDER BY path ASC, start_line ASC, span_id ASC
           LIMIT ?`)
         .all(pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, Math.max(25, Math.min(cap - ids.length, 100))) as Array<{ span_id: string }>,
-      cap
+      cap,
+      routeSourcesBySpanId,
+      'fts_lexical'
     );
   }
 
-  return ids;
+  return { ids, routeSourcesBySpanId };
 }
 
 function selectNeighborEdges(db: Database, spanIds: string[], edgeCap: number): EdgeRow[] {
@@ -664,11 +719,17 @@ function coverageFromDb(db: Database): IndexCoverage | undefined {
   }
 }
 
-function rowsFromDb(dbPath: string, query: NormalizedQuery, limit?: number): { spans: SpanRow[]; edges: EdgeRow[]; files: FileRow[]; coverage?: IndexCoverage } {
+function rowsFromDb(
+  dbPath: string,
+  query: NormalizedQuery,
+  limit?: number
+): { spans: SpanRow[]; edges: EdgeRow[]; files: FileRow[]; coverage?: IndexCoverage; routeSourcesBySpanId: Map<string, Set<PlanSource>> } {
   const db = openDatabase(dbPath);
   try {
     const caps = candidateCaps(limit, query);
-    const initialSpanIds = selectSpanCandidateIds(db, query, caps.spanCap);
+    const selection = selectSpanCandidateIds(db, query, caps.spanCap);
+    const initialSpanIds = selection.ids;
+    const routeSourcesBySpanId = selection.routeSourcesBySpanId;
     const initialEdges = selectNeighborEdges(db, initialSpanIds, caps.edgeCap);
     const spanIds = [...initialSpanIds];
     addSpanIdsFromRows(
@@ -676,12 +737,14 @@ function rowsFromDb(dbPath: string, query: NormalizedQuery, limit?: number): { s
       initialEdges
         .filter(edge => edge.confidence >= 0.6)
         .flatMap(edge => [{ span_id: edge.source_span_id }, { span_id: edge.target_span_id }]),
-      caps.spanCap
+      caps.spanCap,
+      routeSourcesBySpanId,
+      'cross_reference_edge'
     );
     const edges = selectNeighborEdges(db, spanIds, caps.edgeCap);
     const spans = selectSpanRowsByIds(db, spanIds);
     const files = selectFileRows(db, query, caps.fileCap);
-    return { spans, edges, files, coverage: coverageFromDb(db) };
+    return { spans, edges, files, coverage: coverageFromDb(db), routeSourcesBySpanId };
   } finally {
     db.close();
   }
@@ -729,6 +792,7 @@ export async function generateCandidates(input: {
   let edges: EdgeRow[] = [];
   let files: FileRow[] = [];
   let dbCoverage: IndexCoverage | undefined;
+  let routeSourcesBySpanId = new Map<string, Set<PlanSource>>();
   const warnings: EnvelopeWarning[] = [];
   warnings.push(...(await detectProjectBoundaryWarnings(input.projectRoot)));
 
@@ -738,6 +802,7 @@ export async function generateCandidates(input: {
     edges = rows.edges;
     files = rows.files;
     dbCoverage = rows.coverage;
+    routeSourcesBySpanId = rows.routeSourcesBySpanId;
   } catch (error) {
     files = await filesFromInventorySnapshot(input.projectRoot);
     warnings.push({
@@ -764,7 +829,10 @@ export async function generateCandidates(input: {
 
   const sourceBySpanId = new Map<string, Set<PlanSource>>();
   for (const row of spans) {
-    const sources = classifySources(row, normalizedQuery);
+    const sources = new Set<PlanSource>(routeSourcesBySpanId.get(row.span_id));
+    for (const source of classifySources(row, normalizedQuery)) {
+      sources.add(source);
+    }
     if (sources.size > 0) {
       sourceBySpanId.set(row.span_id, sources);
     }

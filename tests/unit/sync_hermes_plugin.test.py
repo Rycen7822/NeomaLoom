@@ -25,6 +25,10 @@ def make_source(root: Path) -> Path:
     plugin_dir.mkdir(parents=True)
     (source / "package.json").write_text('{"name":"fake-noemaloom"}\n', encoding="utf-8")
     (source / "packages" / "core" / "src" / "cli" / "main.ts").write_text("export {};\n", encoding="utf-8")
+    migrations = source / "packages" / "core" / "src" / "spans" / "migrations"
+    migrations.mkdir(parents=True)
+    (migrations / "001_initial.sql").write_text("CREATE TABLE first(id TEXT);\n", encoding="utf-8")
+    (migrations / "002_retrieval_core.sql").write_text("CREATE TABLE second(id TEXT);\n", encoding="utf-8")
     (plugin_dir / "noemaloom_bridge.py").write_text("# bridge\n", encoding="utf-8")
     (plugin_dir / "schemas.py").write_text("SCHEMA = {}\n", encoding="utf-8")
     (source / ".noemaloom-hermes-build" / "cli").mkdir(parents=True)

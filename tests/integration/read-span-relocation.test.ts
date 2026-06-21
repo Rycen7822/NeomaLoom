@@ -50,6 +50,16 @@ async function createProject(): Promise<string> {
       ''
     ].join('\n')
   );
+  await writeProjectFile(
+    projectRoot,
+    'docs/secrets.md',
+    [
+      '# Secrets',
+      '',
+      'The fake fixture api_key = "abcdefghijklmnop1234567890" must be redacted from tool output.',
+      ''
+    ].join('\n')
+  );
   return projectRoot;
 }
 
@@ -327,5 +337,42 @@ describe('nl_read_span relocation and block sizing', () => {
     expect(readData.startLine).toBeLessThanOrEqual(readData.spanStartLine);
     expect(readData.endLine).toBeGreaterThanOrEqual(readData.spanEndLine);
     expect(readData.content).toContain('The stable paragraph mentions `createClient` and timeout options.');
+  });
+
+  it('redacts sensitive-looking current file content while preserving original hashes', async () => {
+    const projectRoot = await createProject();
+    await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'all',
+      mode: 'safe'
+    });
+    const locate = await callInternalTool('nl_locate', {
+      projectPath: projectRoot,
+      goal: 'Read Secrets fixture paragraph',
+      targetRoles: ['canonical_api_doc'],
+      limit: 5
+    });
+    const locateData = locate.data as {
+      targets: Array<{ spanId: string; path: string; kind: string; label: string }>;
+    };
+    const target = locateData.targets.find(item => item.path === 'docs/secrets.md' && item.kind === 'doc.paragraph');
+    expect(target).toBeTruthy();
+    if (!target) {
+      throw new Error('secret paragraph was not located');
+    }
+
+    const read = await callInternalTool('nl_read_span', {
+      projectPath: projectRoot,
+      spanId: target.spanId,
+      contextLines: 0
+    });
+
+    expect(read.ok).toBe(true);
+    const readData = read.data as { content: string; redaction?: { hasSensitiveContent: boolean; redactedKinds: string[] }; spanTextHash: string; fileContentHash: string };
+    expect(readData.content).toContain('[REDACTED:api_key]');
+    expect(readData.content).not.toContain('abcdefghijklmnop1234567890');
+    expect(readData.redaction).toEqual({ hasSensitiveContent: true, redactedKinds: ['api_key'] });
+    expect(readData.spanTextHash).toMatch(/^[0-9a-f]{40}$/);
+    expect(readData.fileContentHash).toMatch(/^[0-9a-f]{40}$/);
   });
 });

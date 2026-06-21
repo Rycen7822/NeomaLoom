@@ -8,6 +8,10 @@ const assets = [
   {
     source: 'packages/core/src/spans/migrations/001_initial.sql',
     destination: 'packages/core/dist/spans/migrations/001_initial.sql'
+  },
+  {
+    source: 'packages/core/src/spans/migrations/002_retrieval_core.sql',
+    destination: 'packages/core/dist/spans/migrations/002_retrieval_core.sql'
   }
 ];
 

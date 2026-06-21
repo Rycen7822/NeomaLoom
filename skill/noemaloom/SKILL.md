@@ -35,7 +35,7 @@ Read only the references that match the active task. If the task changes, load t
 
 ## Execution Rules
 
-1. Start with `nl_status`; refresh with `nl_refresh` only when indexes are missing, stale, or after verification passes.
+1. Start with `nl_status`; refresh with `nl_refresh` only when indexes are missing, stale, or after verification passes. Treat `retrievalCore.state="ready"` with nonzero `symbols` as the normal code-localization baseline after a deep refresh.
 2. Use `nl_prepare_context` before selecting files or spans to inspect.
 3. Use `nl_plan_change` before code, API, config, or symbol changes.
 4. Edit only with native Codex or Hermes file tools.

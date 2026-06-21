@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 import { indexDocumentSpans } from '../../documents/document-span-indexer.js';
 import { safeReadFileInsideProject } from '../../safety/path-guard.js';
+import { redactText } from '../../safety/redaction.js';
 import { relocateSpan, type RelocatableSpan } from '../../spans/relocation.js';
 import type { SpanKind } from '../../spans/enums.js';
 import { readLatestRevision } from '../../state/refresh-revision.js';
@@ -101,6 +102,16 @@ function segmentRanges(startLine: number, endLine: number, maxLines: number): Ar
     ranges.push({ startLine: line, endLine: Math.min(endLine, line + maxLines - 1) });
   }
   return ranges;
+}
+
+function redactedContentPayload(content: string): { content: string; redaction?: { hasSensitiveContent: boolean; redactedKinds: string[] } } {
+  const redaction = redactText(content);
+  return {
+    content: redaction.redactedText,
+    ...(redaction.hasSensitiveContent
+      ? { redaction: { hasSensitiveContent: true, redactedKinds: redaction.redactedKinds } }
+      : {})
+  };
 }
 
 function boundedReadRange(input: {
@@ -295,6 +306,7 @@ export async function handleNlReadSpan(input: unknown): Promise<NoemaLoomEnvelop
   if (blockTooLarge) {
     const ranges = segmentRanges(relocated.startLine, relocated.endLine, parsed.maxLines);
     const previewRange = ranges[0] ?? { startLine: relocated.startLine, endLine: Math.min(relocated.endLine, relocated.startLine + parsed.maxLines - 1) };
+    const previewPayload = redactedContentPayload(sliceLines(currentText, previewRange.startLine, previewRange.endLine));
     return createEnvelope({
       ok: true,
       tool: 'nl_read_span',
@@ -308,7 +320,8 @@ export async function handleNlReadSpan(input: unknown): Promise<NoemaLoomEnvelop
         endLine: previewRange.endLine,
         spanStartLine: relocated.startLine,
         spanEndLine: relocated.endLine,
-        content: sliceLines(currentText, previewRange.startLine, previewRange.endLine),
+        content: previewPayload.content,
+        redaction: previewPayload.redaction,
         contentStatus: 'preview',
         spanTextHash: sha1(relocated.spanText),
         fileContentHash: sha1(currentText),
@@ -327,6 +340,8 @@ export async function handleNlReadSpan(input: unknown): Promise<NoemaLoomEnvelop
     maxLines: parsed.maxLines
   });
 
+  const readPayload = redactedContentPayload(sliceLines(currentText, startLine, endLine));
+
   return createEnvelope({
     ok: true,
     tool: 'nl_read_span',
@@ -340,7 +355,8 @@ export async function handleNlReadSpan(input: unknown): Promise<NoemaLoomEnvelop
       endLine,
       spanStartLine: relocated.startLine,
       spanEndLine: relocated.endLine,
-      content: sliceLines(currentText, startLine, endLine),
+      content: readPayload.content,
+      redaction: readPayload.redaction,
       spanTextHash: sha1(relocated.spanText),
       fileContentHash: sha1(currentText),
       relocation: relocated.relocation

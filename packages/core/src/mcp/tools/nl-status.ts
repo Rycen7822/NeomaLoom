@@ -251,7 +251,9 @@ export async function handleNlStatus(input: unknown): Promise<NoemaLoomEnvelope>
       queries: {
         spans: 'SELECT COUNT(*) AS value FROM repo_spans',
         edges: 'SELECT COUNT(*) AS value FROM repo_edges',
-        revisions: 'SELECT COUNT(*) AS value FROM refresh_revisions'
+        revisions: 'SELECT COUNT(*) AS value FROM refresh_revisions',
+        symbols: 'SELECT COUNT(*) AS value FROM repo_symbols',
+        aliases: 'SELECT COUNT(*) AS value FROM repo_symbol_aliases'
       }
     }),
     readSqliteCounts({
@@ -334,6 +336,7 @@ export async function handleNlStatus(input: unknown): Promise<NoemaLoomEnvelope>
       stateDir: '.noemaloom',
       fileInventory: { state: fileInventory.state, files: fileInventory.files },
       spanIndex: { state: spanIndex.state, spans: spanIndex.counts.spans, edges: spanIndex.counts.edges },
+      retrievalCore: { state: spanIndex.state, symbols: spanIndex.counts.symbols, aliases: spanIndex.counts.aliases },
       coverage,
       factIndex: { state: factIndex.state, symbols: factIndex.counts.symbols, edges: factIndex.counts.edges },
       documentIndex: { state: documentIndex.state, blocks: documentIndex.blocks, parseErrors: documentIndex.parseErrors },

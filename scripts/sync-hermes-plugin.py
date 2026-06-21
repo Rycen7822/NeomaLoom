@@ -87,6 +87,19 @@ def copy_plugin(source: Path, dest: Path) -> None:
     )
 
 
+def copy_runtime_migrations(source: Path, build_dest: Path) -> None:
+    migration_src = source / "packages" / "core" / "src" / "spans" / "migrations"
+    if not migration_src.exists():
+        return
+    migration_dest = build_dest / "spans" / "migrations"
+    migration_dest.mkdir(parents=True, exist_ok=True)
+    for stale in migration_dest.glob("*.sql"):
+        stale.unlink()
+    for migration in sorted(migration_src.glob("*.sql")):
+        if migration.is_file():
+            shutil.copy2(migration, migration_dest / migration.name)
+
+
 def copy_runtime_build_if_present(source: Path, dest: Path) -> None:
     build_src = source / ".noemaloom-hermes-build"
     if not (build_src / "cli" / "main.js").exists():
@@ -95,6 +108,7 @@ def copy_runtime_build_if_present(source: Path, dest: Path) -> None:
     if build_dest.exists():
         shutil.rmtree(build_dest)
     shutil.copytree(build_src, build_dest, symlinks=True, ignore=shutil.ignore_patterns("*.map", "node_modules"))
+    copy_runtime_migrations(source, build_dest)
 
 
 def symlink_plugin(source: Path, dest: Path) -> None:

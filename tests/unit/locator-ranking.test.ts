@@ -71,13 +71,16 @@ describe('locator query normalization and ranking', () => {
       canonicalityScore: 6,
       coverageDiversityScore: 4,
       kindPrecisionScore: 38,
+      routeFusionScore: 11,
       freshnessScore: 5,
       generatedFilePenalty: 0,
       vendorFilePenalty: 0,
       boundaryRiskPenalty: 0,
-      staleIndexPenalty: 0
+      staleIndexPenalty: 0,
+      deprecatedSymbolPenalty: 0,
+      redactionPenalty: 0
     });
-    expect(ranked.score).toBe(170);
+    expect(ranked.score).toBe(181);
     expect(decideCandidate(ranked)).toMatchObject({
       decision: 'must_edit',
       reason: expect.stringContaining('score >= 85')

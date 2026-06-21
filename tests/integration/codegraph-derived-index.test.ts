@@ -127,13 +127,13 @@ describe('CodeGraph-derived code fact indexer', () => {
           relation: 'imports',
           sourceLabel: './math',
           targetLabel: 'add',
-          confidence: 0.9
+          confidence: 0.94
         }),
         expect.objectContaining({
           relation: 'calls',
           sourceLabel: 'run',
           targetLabel: 'add',
-          confidence: 0.92
+          confidence: 0.96
         })
       ])
     );

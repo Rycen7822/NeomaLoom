@@ -5,7 +5,9 @@ import path from 'node:path';
 
 import type { InventoryFile } from '../files/file-inventory.js';
 import { assertWritableStatePath, appendFileInsideStateDir, writeFileInsideStateDir } from '../safety/path-guard.js';
+import { redactText } from '../safety/redaction.js';
 import { applySpanMigrations } from '../spans/db.js';
+import { buildRetrievalCoreRecords } from '../spans/retrieval-core.js';
 import type { RepoEdge, RepoSpan } from '../spans/types.js';
 import { ensureStateDir } from './state-dir.js';
 import { resolveNoemaLoomPaths } from './paths.js';
@@ -80,23 +82,28 @@ function truncateUtf8(value: string, maxBytes: number): string {
 }
 
 function boundedIndexedText(span: RepoSpan): { indexedText: string; metadata: Record<string, unknown> } {
-  const originalBytes = byteLength(span.indexedText);
+  const redaction = redactText(span.indexedText);
+  const metadata: Record<string, unknown> = redaction.hasSensitiveContent
+    ? { ...span.metadata, redactedAtIndexWrite: true, redactedKinds: redaction.redactedKinds }
+    : span.metadata;
+  const originalBytes = byteLength(redaction.redactedText);
   if (originalBytes <= MAX_REPO_SPAN_INDEXED_TEXT_BYTES) {
-    return { indexedText: span.indexedText, metadata: span.metadata };
+    return { indexedText: redaction.redactedText, metadata };
   }
   return {
-    indexedText: truncateUtf8(span.indexedText, MAX_REPO_SPAN_INDEXED_TEXT_BYTES),
+    indexedText: truncateUtf8(redaction.redactedText, MAX_REPO_SPAN_INDEXED_TEXT_BYTES),
     metadata: {
-      ...span.metadata,
+      ...metadata,
       indexedTextTruncatedAtWrite: true,
-      originalIndexedTextBytes: originalBytes,
+      originalIndexedTextBytes: byteLength(span.indexedText),
       originalIndexedTextHash: sha1(span.indexedText)
     }
   };
 }
 
 function boundedField(value: string, maxBytes: number): string {
-  return byteLength(value) <= maxBytes ? value : truncateUtf8(value, maxBytes);
+  const redacted = redactText(value).redactedText;
+  return byteLength(redacted) <= maxBytes ? redacted : truncateUtf8(redacted, maxBytes);
 }
 
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
@@ -133,6 +140,8 @@ function resetSchema(db: Database): void {
     DROP TABLE IF EXISTS repo_spans;
     DROP TABLE IF EXISTS repo_edges;
     DROP TABLE IF EXISTS repo_evidence;
+    DROP TABLE IF EXISTS repo_symbols;
+    DROP TABLE IF EXISTS repo_symbol_aliases;
     DROP TABLE IF EXISTS refresh_revisions;
     DROP TABLE IF EXISTS index_metadata;
     DROP TABLE IF EXISTS repo_spans_fts;
@@ -301,6 +310,17 @@ export async function writeRefreshRevision(input: {
         (edge_id, source_span_id, target_span_id, relation, confidence, source, evidence_json, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     );
+    const insertSymbol = db.prepare(
+      `INSERT INTO repo_symbols
+        (symbol_fqn, span_id, path, language, symbol_name, symbol_kind, parent_symbol_fqn, module_path, signature,
+         exported, deprecated, deprecated_message, superseded_by, metadata_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    const insertSymbolAlias = db.prepare(
+      `INSERT INTO repo_symbol_aliases
+        (alias_fqn, target_fqn, alias_kind, path, line, metadata_json)
+        VALUES (?, ?, ?, ?, ?, ?)`
+    );
     const insertRevision = db.prepare(
       `INSERT INTO refresh_revisions
         (graph_revision, project_root, target, started_at, finished_at, file_count, span_count, edge_count, warnings_json)
@@ -311,6 +331,7 @@ export async function writeRefreshRevision(input: {
         VALUES (?, ?, ?)
         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`
     );
+    const retrievalCore = buildRetrievalCoreRecords(input.spans);
 
     for (const file of input.files) {
       insertFile.run(
@@ -378,6 +399,34 @@ export async function writeRefreshRevision(input: {
         edge.updatedAt
       );
     }
+    for (const symbol of retrievalCore.symbols) {
+      insertSymbol.run(
+        symbol.symbolFqn,
+        symbol.spanId,
+        symbol.path,
+        symbol.language,
+        symbol.symbolName,
+        symbol.symbolKind,
+        symbol.parentSymbolFqn ?? null,
+        symbol.modulePath,
+        symbol.signature,
+        symbol.exported ? 1 : 0,
+        symbol.deprecated ? 1 : 0,
+        symbol.deprecatedMessage ?? null,
+        symbol.supersededBy ?? null,
+        JSON.stringify(symbol.metadata)
+      );
+    }
+    for (const alias of retrievalCore.aliases) {
+      insertSymbolAlias.run(
+        alias.aliasFqn,
+        alias.targetFqn,
+        alias.aliasKind,
+        alias.path,
+        alias.line,
+        JSON.stringify(alias.metadata)
+      );
+    }
     for (const revision of existingRevisions) {
       insertRevision.run(
         revision.graph_revision,
@@ -406,6 +455,17 @@ export async function writeRefreshRevision(input: {
       const updatedAt = input.coverage.updatedAt ?? input.finishedAt;
       upsertMetadata.run('coverage', JSON.stringify({ ...input.coverage, updatedAt }), updatedAt);
     }
+    upsertMetadata.run(
+      'retrievalCore',
+      JSON.stringify({
+        state: 'ready',
+        symbols: retrievalCore.symbols.length,
+        aliases: retrievalCore.aliases.length,
+        revision: sha1(`${input.graphRevision}:${retrievalCore.symbols.length}:${retrievalCore.aliases.length}`),
+        updatedAt: input.finishedAt
+      }),
+      input.finishedAt
+    );
     db.exec('COMMIT');
     transactionActive = false;
     wroteSuccessfully = true;

@@ -6,10 +6,16 @@ export const INITIAL_MIGRATION_SQL = readFileSync(
   'utf8'
 );
 
+export const RETRIEVAL_CORE_MIGRATION_SQL = readFileSync(
+  fileURLToPath(new URL('./migrations/002_retrieval_core.sql', import.meta.url)),
+  'utf8'
+);
+
 export type SqlExecutor = {
   exec: (sql: string) => void;
 };
 
 export function applySpanMigrations(db: SqlExecutor): void {
   db.exec(INITIAL_MIGRATION_SQL);
+  db.exec(RETRIEVAL_CORE_MIGRATION_SQL);
 }

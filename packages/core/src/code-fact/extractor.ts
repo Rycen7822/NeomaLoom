@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import type { EdgeRelation, SpanKind } from '../spans/enums.js';
 import { createCodeSpanId } from '../spans/span-id.js';
+import { detectFallbackBoundary, detectTypescriptBlockBoundary, wrapPythonBlockBoundary, type CodeBoundary } from './boundary-parser.js';
 
 export type CodeFactSpan = {
   spanId: string;
@@ -89,6 +90,18 @@ function signatureForFunction(name: string, params: string, returnType?: string)
   return `${name}(${params.trim()})${returnType ? `: ${returnType.trim()}` : ''}`;
 }
 
+function spanText(lines: string[], startLine: number, endLine: number): string {
+  return lines.slice(startLine - 1, endLine).join('\n');
+}
+
+function boundaryMetadata(boundary: CodeBoundary): Record<string, unknown> {
+  return {
+    boundaryMethod: boundary.method,
+    boundaryComplete: boundary.complete,
+    boundaryReason: boundary.reason
+  };
+}
+
 function extractImportSource(repoPath: string, source: string): string {
   if (!source.startsWith('.')) {
     return source;
@@ -98,13 +111,37 @@ function extractImportSource(repoPath: string, source: string): string {
   return joined;
 }
 
-function importedNamesFromClause(clause: string): string[] {
+type ImportAliasRecord = {
+  importedName: string;
+  localName: string;
+  source: string;
+  resolvedSource: string;
+  aliasKind: 'named' | 'default' | 'namespace';
+};
+
+function importAliasesFromClause(clause: string, source: string, resolvedSource: string): ImportAliasRecord[] {
+  const aliases: ImportAliasRecord[] = [];
+  const namespace = clause.match(/\*\s+as\s+([A-Za-z_][A-Za-z0-9_]*)/);
+  if (namespace) {
+    aliases.push({ importedName: '*', localName: namespace[1], source, resolvedSource, aliasKind: 'namespace' });
+  }
   const named = clause.match(/\{([^}]+)\}/);
   if (named) {
-    return named[1].split(',').map(name => name.trim().split(/\s+as\s+/)[0].trim()).filter(Boolean);
+    for (const rawPart of named[1].split(',')) {
+      const part = rawPart.trim();
+      if (!part) continue;
+      const [importedName, localName = importedName] = part.split(/\s+as\s+/).map(value => value.trim()).filter(Boolean);
+      if (importedName) {
+        aliases.push({ importedName, localName, source, resolvedSource, aliasKind: 'named' });
+      }
+    }
   }
-  const defaultName = clause.trim().split(/\s+/)[0];
-  return defaultName ? [defaultName] : [];
+  const defaultClause = clause.split(',')[0]?.trim();
+  if (defaultClause && !defaultClause.startsWith('{') && !defaultClause.startsWith('*')) {
+    const defaultName = defaultClause.split(/\s+/)[0];
+    if (defaultName) aliases.push({ importedName: defaultName, localName: defaultName, source, resolvedSource, aliasKind: 'default' });
+  }
+  return aliases;
 }
 
 function addCallsiteSpans(input: {
@@ -152,14 +189,21 @@ function addCallsiteSpans(input: {
 
 function addJavascriptTypescriptSpans(input: ExtractCodeFactsInput, lines: string[], spans: CodeFactSpan[]): void {
   let currentClass: string | undefined;
+  let currentClassEndLine: number | undefined;
   let currentCallable: string | undefined;
 
   lines.forEach((line, index) => {
     const lineNumber = index + 1;
+    if (currentClassEndLine !== undefined && lineNumber > currentClassEndLine) {
+      currentClass = undefined;
+      currentClassEndLine = undefined;
+    }
     let declarationName: string | undefined;
     const importMatch = line.match(/^\s*import\s+(.+?)\s+from\s+['"]([^'"]+)['"]/);
     if (importMatch) {
-      const importedNames = importedNamesFromClause(importMatch[1]);
+      const resolvedSource = extractImportSource(input.path, importMatch[2]);
+      const aliases = importAliasesFromClause(importMatch[1], importMatch[2], resolvedSource);
+      const importedNames = [...new Set(aliases.filter(alias => alias.importedName !== '*').map(alias => alias.importedName))];
       spans.push(
         createSpan({
           projectRoot: input.projectRoot,
@@ -170,8 +214,9 @@ function addJavascriptTypescriptSpans(input: ExtractCodeFactsInput, lines: strin
           text: line,
           metadata: {
             importedNames,
+            aliases,
             source: importMatch[2],
-            resolvedSource: extractImportSource(input.path, importMatch[2])
+            resolvedSource
           }
         })
       );
@@ -179,7 +224,9 @@ function addJavascriptTypescriptSpans(input: ExtractCodeFactsInput, lines: strin
 
     const classMatch = line.match(/^\s*export\s+class\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+extends\s+([A-Za-z_][A-Za-z0-9_]*))?/);
     if (classMatch) {
+      const boundary = detectTypescriptBlockBoundary({ lines, declarationLineIndex: index, filePath: input.path });
       currentClass = classMatch[1];
+      currentClassEndLine = boundary.endLine;
       currentCallable = undefined;
       spans.push(
         createSpan({
@@ -188,11 +235,13 @@ function addJavascriptTypescriptSpans(input: ExtractCodeFactsInput, lines: strin
           path: input.path,
           label: classMatch[1],
           startLine: lineNumber,
-          text: line,
+          endLine: boundary.endLine,
+          text: spanText(lines, lineNumber, boundary.endLine),
           metadata: {
             qualifiedName: `${input.path}:${classMatch[1]}`,
             signature: classMatch[1],
-            extends: classMatch[2]
+            extends: classMatch[2],
+            ...boundaryMetadata(boundary)
           }
         })
       );
@@ -201,6 +250,7 @@ function addJavascriptTypescriptSpans(input: ExtractCodeFactsInput, lines: strin
 
     const functionMatch = line.match(/^\s*export\s+function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?::\s*([^{]+))?/);
     if (functionMatch) {
+      const boundary = detectTypescriptBlockBoundary({ lines, declarationLineIndex: index, filePath: input.path });
       currentCallable = functionMatch[1];
       declarationName = functionMatch[1];
       const isComponent = /^[A-Z]/.test(functionMatch[1]) && input.path.endsWith('.tsx');
@@ -211,10 +261,12 @@ function addJavascriptTypescriptSpans(input: ExtractCodeFactsInput, lines: strin
           path: input.path,
           label: functionMatch[1],
           startLine: lineNumber,
-          text: line,
+          endLine: boundary.endLine,
+          text: spanText(lines, lineNumber, boundary.endLine),
           metadata: {
             qualifiedName: `${input.path}:${functionMatch[1]}`,
-            signature: signatureForFunction(functionMatch[1], functionMatch[2], functionMatch[3])
+            signature: signatureForFunction(functionMatch[1], functionMatch[2], functionMatch[3]),
+            ...boundaryMetadata(boundary)
           }
         })
       );
@@ -224,6 +276,7 @@ function addJavascriptTypescriptSpans(input: ExtractCodeFactsInput, lines: strin
       ? line.match(/^\s{2,}([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?::\s*([^{]+))?/)
       : undefined;
     if (methodMatch) {
+      const boundary = detectTypescriptBlockBoundary({ lines, declarationLineIndex: index, filePath: input.path });
       currentCallable = `${currentClass}.${methodMatch[1]}`;
       declarationName = methodMatch[1];
       spans.push(
@@ -233,11 +286,13 @@ function addJavascriptTypescriptSpans(input: ExtractCodeFactsInput, lines: strin
           path: input.path,
           label: methodMatch[1],
           startLine: lineNumber,
-          text: line,
+          endLine: boundary.endLine,
+          text: spanText(lines, lineNumber, boundary.endLine),
           metadata: {
             qualifiedName: `${input.path}:${currentClass}.${methodMatch[1]}`,
             signature: signatureForFunction(methodMatch[1], methodMatch[2], methodMatch[3]),
-            className: currentClass
+            className: currentClass,
+            ...boundaryMetadata(boundary)
           }
         })
       );
@@ -362,6 +417,7 @@ function addPythonSpans(input: ExtractCodeFactsInput, lines: string[], spans: Co
     if (classMatch) {
       const classIndent = indentation(classMatch[1]);
       const endLine = pythonBlockEndLine(lines, index, index, classIndent);
+      const boundary = wrapPythonBlockBoundary({ endLine });
       classStack.push({ name: classMatch[2], indent: classIndent });
       spans.push(
         createSpan({
@@ -374,7 +430,8 @@ function addPythonSpans(input: ExtractCodeFactsInput, lines: string[], spans: Co
           text: lines.slice(index, endLine).join('\n'),
           metadata: {
             qualifiedName: `${input.path}:${classMatch[2]}`,
-            signature: classMatch[2]
+            signature: classMatch[2],
+            ...boundaryMetadata(boundary)
           }
         })
       );
@@ -386,6 +443,7 @@ function addPythonSpans(input: ExtractCodeFactsInput, lines: string[], spans: Co
       const classFrame = [...classStack].reverse().find(frame => defIndent > frame.indent);
       const qualifiedLabel = classFrame ? `${classFrame.name}.${signature.name}` : signature.name;
       const endLine = pythonBlockEndLine(lines, index, signature.signatureEndIndex, defIndent);
+      const boundary = wrapPythonBlockBoundary({ endLine });
       spans.push(
         createSpan({
           projectRoot: input.projectRoot,
@@ -398,7 +456,8 @@ function addPythonSpans(input: ExtractCodeFactsInput, lines: string[], spans: Co
           metadata: {
             qualifiedName: `${input.path}:${qualifiedLabel}`,
             signature: signatureForFunction(signature.name, signature.params, signature.returnType),
-            ...(classFrame ? { className: classFrame.name } : {})
+            ...(classFrame ? { className: classFrame.name } : {}),
+            ...boundaryMetadata(boundary)
           }
         })
       );

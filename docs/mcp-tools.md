@@ -1,6 +1,6 @@
 # MCP Tools
 
-- `nl_status`: reports index state and safety flags. Pass `includeAnchors: true` when an agent needs project-local navigation anchor workset status.
+- `nl_status`: reports index state, retrieval-core counts, and safety flags. Pass `includeAnchors: true` when an agent needs project-local navigation anchor workset status.
 - `nl_refresh`: rebuilds derived indexes.
 - `nl_prepare_context`: prepares task context by combining discovery, target ranking, context assembly, and optional top-span reads. It also supports `responseProfile: "navigation"` for short anchor-card output.
 - `nl_plan_change`: combines target ranking, relation tracing, and impact grouping before code or API changes.

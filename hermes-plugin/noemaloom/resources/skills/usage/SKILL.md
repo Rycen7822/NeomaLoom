@@ -37,7 +37,7 @@ Read only the references that match the active task. If the task changes, load t
 
 ## Execution Rules
 
-1. Start with `nl_status`; refresh with `nl_refresh` only when indexes are missing, stale, or after verification passes.
+1. Start with `nl_status`; refresh with `nl_refresh` only when indexes are missing, stale, or after verification passes. Treat `retrievalCore.state="ready"` with nonzero `symbols` as the normal code-localization baseline after a deep refresh.
    - Use `target="files"` for inventory-only state.
    - Use `target="paths"` with `paths=[...]` to promote exact cold/unindexed files into the scoped hotset before relying on span reads or final impact claims.
    - Use `target="hotset"` to refresh the existing scoped hotset; use `target="all"` only when a full deep index is needed.
