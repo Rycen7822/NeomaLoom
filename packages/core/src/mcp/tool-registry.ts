@@ -21,18 +21,8 @@ import { handleNlVerifyTask, nlVerifyTaskInputSchema } from './tools/nl-verify-t
 import { handleNlVerifyCoverage, nlVerifyCoverageInputSchema } from './tools/nl-verify-coverage.js';
 import { isBlockedToolName } from './validation.js';
 import {
-  handleNlAnchorCheckpoint,
-  handleNlAnchorDemote,
-  handleNlAnchorPromote,
-  handleNlAnchorRepair,
-  handleNlAnchorRetire,
-  handleNlAnchorStatus,
-  nlAnchorCheckpointInputSchema,
-  nlAnchorDemoteInputSchema,
-  nlAnchorPromoteInputSchema,
-  nlAnchorRepairInputSchema,
-  nlAnchorRetireInputSchema,
-  nlAnchorStatusInputSchema
+  handleNlAnchorManage,
+  nlAnchorManageInputSchema
 } from './tools/nl-anchor.js';
 
 export const NOEMALOOM_TOOL_NAMES = [
@@ -41,12 +31,7 @@ export const NOEMALOOM_TOOL_NAMES = [
   'nl_prepare_context',
   'nl_plan_change',
   'nl_verify_task',
-  'nl_anchor_status',
-  'nl_anchor_promote',
-  'nl_anchor_demote',
-  'nl_anchor_repair',
-  'nl_anchor_retire',
-  'nl_anchor_checkpoint'
+  'nl_anchor_manage'
 ] as const;
 
 export const NOEMALOOM_HIDDEN_TOOL_NAMES = [
@@ -150,57 +135,12 @@ function createToolDefinition(name: NoemaLoomToolName): NoemaLoomToolDefinition 
     };
   }
 
-  if (name === 'nl_anchor_status') {
+  if (name === 'nl_anchor_manage') {
     return {
       name,
-      description: 'Inspect project-local NoemaLoom navigation anchors and lifecycle counters.',
-      inputSchema: nlAnchorStatusInputSchema,
-      handler: wrapHandler(name, handleNlAnchorStatus)
-    };
-  }
-
-  if (name === 'nl_anchor_promote') {
-    return {
-      name,
-      description: 'Promote a path or span into the project-local navigation anchor pool through a controlled curation operation.',
-      inputSchema: nlAnchorPromoteInputSchema,
-      handler: wrapHandler(name, handleNlAnchorPromote)
-    };
-  }
-
-  if (name === 'nl_anchor_demote') {
-    return {
-      name,
-      description: 'Demote an existing navigation anchor to dormant or archived using activity-count lifecycle state.',
-      inputSchema: nlAnchorDemoteInputSchema,
-      handler: wrapHandler(name, handleNlAnchorDemote)
-    };
-  }
-
-  if (name === 'nl_anchor_repair') {
-    return {
-      name,
-      description: 'Repair an existing navigation anchor path, label, kind, role, or line range without raw JSON edits.',
-      inputSchema: nlAnchorRepairInputSchema,
-      handler: wrapHandler(name, handleNlAnchorRepair)
-    };
-  }
-
-  if (name === 'nl_anchor_retire') {
-    return {
-      name,
-      description: 'Retire an obsolete navigation anchor and write a tombstone so future locator hits do not revive it.',
-      inputSchema: nlAnchorRetireInputSchema,
-      handler: wrapHandler(name, handleNlAnchorRetire)
-    };
-  }
-
-  if (name === 'nl_anchor_checkpoint') {
-    return {
-      name,
-      description: 'Update project-local navigation-anchor checkpoint metadata such as opt-in enablement.',
-      inputSchema: nlAnchorCheckpointInputSchema,
-      handler: wrapHandler(name, handleNlAnchorCheckpoint)
+      description: 'Promote or demote project-local navigation anchors through a compact controlled curation operation.',
+      inputSchema: nlAnchorManageInputSchema,
+      handler: wrapHandler(name, handleNlAnchorManage)
     };
   }
 

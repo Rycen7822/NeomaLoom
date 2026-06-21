@@ -108,7 +108,15 @@ def test_register_adds_tools_skills_and_optional_hooks():
     ctx = FakeCtx()
     register(ctx)
 
-    assert "nl_anchor_status" in ctx.tools
-    assert "nl_anchor_checkpoint" in ctx.tools
+    assert set(ctx.tools) == {
+        "nl_status",
+        "nl_refresh",
+        "nl_prepare_context",
+        "nl_plan_change",
+        "nl_verify_task",
+        "nl_anchor_manage",
+    }
+    assert "nl_anchor_status" not in ctx.tools
+    assert "nl_anchor_checkpoint" not in ctx.tools
     assert "usage" in ctx.skills
     assert {"pre_llm_call", "post_tool_call"}.issubset(ctx.hooks)

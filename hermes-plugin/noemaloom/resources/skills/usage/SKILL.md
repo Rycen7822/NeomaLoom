@@ -18,12 +18,7 @@ Only call these public Hermes tools:
 - `nl_prepare_context`
 - `nl_plan_change`
 - `nl_verify_task`
-- `nl_anchor_status`
-- `nl_anchor_promote`
-- `nl_anchor_demote`
-- `nl_anchor_repair`
-- `nl_anchor_retire`
-- `nl_anchor_checkpoint`
+- `nl_anchor_manage`
 
 Do not call fine-grained internal primitives or raw backend tools. They are not part of the public Hermes plugin surface.
 
@@ -51,4 +46,4 @@ Read only the references that match the active task. If the task changes, load t
 4. Edit only with native Hermes file tools.
 5. Use `nl_verify_task` after edits and continue only when it returns `status="pass"`.
 6. Call `nl_refresh` with `target="changed"` and `mode="safe"` after coverage passes.
-7. Use `nl_anchor_status` to inspect project-local navigation anchors. Use only `nl_anchor_promote`, `nl_anchor_demote`, `nl_anchor_repair`, `nl_anchor_retire`, and `nl_anchor_checkpoint` for anchor maintenance; never edit `.noemaloom/workset/*.json` by hand.
+7. Use `nl_status` with `includeAnchors=true` to inspect project-local navigation anchors. Use `nl_anchor_manage` only for common `promote`/`demote` curation; use `noemaloom anchor repair|retire|checkpoint` CLI for low-frequency maintenance. Never edit `.noemaloom/workset/*.json` by hand.

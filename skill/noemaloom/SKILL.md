@@ -1,6 +1,6 @@
 ---
 name: noemaloom
-description: "Use when Codex needs NoemaLoom repository modification support to prepare context, plan code or documentation impact, synchronize documents, recover after context compression, or verify edits. Read before repository-wide localization, Markdown updates, code or API changes, multi-document sync, or post-edit coverage checks; load the routed references and call only curated public tools such as nl_status, nl_refresh, nl_prepare_context, nl_plan_change, nl_verify_task, and nl_anchor_* curation tools."
+description: "Use when Codex needs NoemaLoom repository modification support to prepare context, plan code or documentation impact, synchronize documents, recover after context compression, or verify edits. Read before repository-wide localization, Markdown updates, code or API changes, multi-document sync, or post-edit coverage checks; load the routed references and call only curated public tools such as nl_status, nl_refresh, nl_prepare_context, nl_plan_change, nl_verify_task, and nl_anchor_manage."
 ---
 
 # NoemaLoom
@@ -16,12 +16,7 @@ Only call these public MCP tools:
 - `nl_prepare_context`
 - `nl_plan_change`
 - `nl_verify_task`
-- `nl_anchor_status`
-- `nl_anchor_promote`
-- `nl_anchor_demote`
-- `nl_anchor_repair`
-- `nl_anchor_retire`
-- `nl_anchor_checkpoint`
+- `nl_anchor_manage`
 
 Do not call fine-grained internal primitives or raw backend tools. They are not part of the MCP surface.
 
@@ -46,4 +41,4 @@ Read only the references that match the active task. If the task changes, load t
 4. Edit only with native Codex or Hermes file tools.
 5. Use `nl_verify_task` after edits and continue only when it returns `status="pass"`.
 6. Call `nl_refresh` with `target="changed"` and `mode="safe"` after coverage passes.
-7. Use `nl_anchor_status` and the controlled `nl_anchor_*` curation tools for project-local navigation anchor maintenance; never edit `.noemaloom/workset/*.json` by hand.
+7. Use `nl_status` with `includeAnchors=true` to inspect project-local navigation anchors. Use `nl_anchor_manage` only for common `promote`/`demote` curation; use `noemaloom anchor repair|retire|checkpoint` CLI for low-frequency maintenance. Never edit `.noemaloom/workset/*.json` by hand.

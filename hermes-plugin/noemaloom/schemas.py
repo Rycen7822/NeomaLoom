@@ -28,12 +28,7 @@ PUBLIC_TOOL_NAMES = [
     "nl_prepare_context",
     "nl_plan_change",
     "nl_verify_task",
-    "nl_anchor_status",
-    "nl_anchor_promote",
-    "nl_anchor_demote",
-    "nl_anchor_repair",
-    "nl_anchor_retire",
-    "nl_anchor_checkpoint",
+    "nl_anchor_manage",
 ]
 
 NL_STATUS_SCHEMA = {
@@ -50,6 +45,21 @@ NL_STATUS_SCHEMA = {
                 "type": "boolean",
                 "description": "Whether status should include repository-map summary data when available.",
                 "default": False,
+            },
+            "includeAnchors": {
+                "type": "boolean",
+                "description": "Whether status should include project-local navigation-anchor workset state.",
+                "default": False,
+            },
+            "includeRetiredAnchors": {
+                "type": "boolean",
+                "description": "When includeAnchors is true, include retired/tombstoned anchors in the workset view.",
+                "default": False,
+            },
+            "includeAnchorText": {
+                "type": "boolean",
+                "description": "When includeAnchors is true, include rendered anchor hint text in addition to cards.",
+                "default": True,
             },
         },
     },
@@ -176,97 +186,33 @@ NL_VERIFY_TASK_SCHEMA = {
     },
 }
 
-ANCHOR_SELECTOR_PROPERTIES = {
-    "projectPath": PROJECT_PATH,
-    "anchorId": {"type": "string", "description": "Exact navigation anchor id from nl_anchor_status."},
-    "path": {"type": "string", "description": "Repository-relative anchor path when anchorId is not provided."},
-    "reason": {"type": "string", "default": "agent curation", "description": "Audit reason for the controlled curation action."},
-}
-
-NL_ANCHOR_STATUS_SCHEMA = {
-    "name": "nl_anchor_status",
-    "description": "Inspect project-local NoemaLoom navigation anchors, lifecycle counters, budgets, and rendered cards.",
+NL_ANCHOR_MANAGE_SCHEMA = {
+    "name": "nl_anchor_manage",
+    "description": (
+        "Compact controlled curation tool for common project-local navigation anchor maintenance. "
+        "Supports only action=promote or action=demote; use the NoemaLoom CLI for repair, retire, or checkpoint."
+    ),
     "parameters": {
         "type": "object",
         "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["promote", "demote"],
+                "description": "Controlled curation action. promote requires path; demote requires anchorId or path.",
+            },
             "projectPath": PROJECT_PATH,
-            "includeRetired": {"type": "boolean", "default": False},
-            "includeText": {"type": "boolean", "default": True},
-            "responseProfile": {"type": "string", "enum": ["compact", "standard", "debug"], "default": "compact"},
-        },
-    },
-}
-
-NL_ANCHOR_PROMOTE_SCHEMA = {
-    "name": "nl_anchor_promote",
-    "description": "Promote a path/span into the project-local navigation anchor pool through a controlled operation, not raw JSON writes.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "projectPath": PROJECT_PATH,
-            "path": {"type": "string", "description": "Repository-relative path to promote."},
-            "label": {"type": "string"},
+            "anchorId": {"type": "string", "description": "Exact navigation anchor id from nl_status(includeAnchors=true)."},
+            "path": {"type": "string", "description": "Repository-relative anchor path for promote, or selector path for demote."},
+            "label": {"type": "string", "description": "Optional label for promote."},
             "kind": {"type": "string", "default": "file"},
             "role": {"type": "string", "default": "source_file"},
             "startLine": {"type": "integer", "minimum": 1},
             "endLine": {"type": "integer", "minimum": 1},
-            "reason": {"type": "string", "default": "agent promoted anchor"},
+            "reason": {"type": "string", "description": "Audit reason for the controlled curation action."},
             "pinned": {"type": "boolean", "default": False},
-            "enableNavigation": {"type": "boolean", "description": "Optional explicit project-local injection opt-in/out."},
-        },
-        "required": ["path"],
-    },
-}
-
-NL_ANCHOR_DEMOTE_SCHEMA = {
-    "name": "nl_anchor_demote",
-    "description": "Demote an existing navigation anchor to dormant or archived using activity-count lifecycle state.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            **ANCHOR_SELECTOR_PROPERTIES,
             "state": {"type": "string", "enum": ["dormant", "archived"], "default": "dormant"},
         },
-    },
-}
-
-NL_ANCHOR_REPAIR_SCHEMA = {
-    "name": "nl_anchor_repair",
-    "description": "Repair an existing navigation anchor path, label, kind, role, or line range without raw JSON edits.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            **ANCHOR_SELECTOR_PROPERTIES,
-            "newPath": {"type": "string"},
-            "label": {"type": "string"},
-            "startLine": {"type": "integer", "minimum": 1},
-            "endLine": {"type": "integer", "minimum": 1},
-            "kind": {"type": "string"},
-            "role": {"type": "string"},
-        },
-    },
-}
-
-NL_ANCHOR_RETIRE_SCHEMA = {
-    "name": "nl_anchor_retire",
-    "description": "Retire an obsolete navigation anchor and write a tombstone so later locator hits do not revive it.",
-    "parameters": {
-        "type": "object",
-        "properties": ANCHOR_SELECTOR_PROPERTIES,
-    },
-}
-
-NL_ANCHOR_CHECKPOINT_SCHEMA = {
-    "name": "nl_anchor_checkpoint",
-    "description": "Update project-local navigation-anchor checkpoint metadata, including explicit injection enablement.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "projectPath": PROJECT_PATH,
-            "enabled": {"type": "boolean", "description": "Enable/disable project-local pre-LLM navigation injection."},
-            "mode": {"type": "string", "enum": ["silent", "inject"]},
-            "reason": {"type": "string", "default": "agent checkpoint"},
-        },
+        "required": ["action"],
     },
 }
 
@@ -276,10 +222,5 @@ SCHEMAS = {
     "nl_prepare_context": NL_PREPARE_CONTEXT_SCHEMA,
     "nl_plan_change": NL_PLAN_CHANGE_SCHEMA,
     "nl_verify_task": NL_VERIFY_TASK_SCHEMA,
-    "nl_anchor_status": NL_ANCHOR_STATUS_SCHEMA,
-    "nl_anchor_promote": NL_ANCHOR_PROMOTE_SCHEMA,
-    "nl_anchor_demote": NL_ANCHOR_DEMOTE_SCHEMA,
-    "nl_anchor_repair": NL_ANCHOR_REPAIR_SCHEMA,
-    "nl_anchor_retire": NL_ANCHOR_RETIRE_SCHEMA,
-    "nl_anchor_checkpoint": NL_ANCHOR_CHECKPOINT_SCHEMA,
+    "nl_anchor_manage": NL_ANCHOR_MANAGE_SCHEMA,
 }

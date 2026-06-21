@@ -9,12 +9,7 @@ describe('empty NoemaLoom MCP server', () => {
       'nl_prepare_context',
       'nl_plan_change',
       'nl_verify_task',
-      'nl_anchor_status',
-      'nl_anchor_promote',
-      'nl_anchor_demote',
-      'nl_anchor_repair',
-      'nl_anchor_retire',
-      'nl_anchor_checkpoint'
+      'nl_anchor_manage'
     ]);
 
     expect(createToolRegistry().map(tool => tool.name)).toEqual(NOEMALOOM_TOOL_NAMES);

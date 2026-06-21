@@ -8,12 +8,17 @@ import { readRefreshFailure } from '../../state/refresh-failure.js';
 import { inspectRefreshLock } from '../../state/refresh-lock.js';
 import { readIndexCoverage, readLatestRevision, type IndexCoverage } from '../../state/refresh-revision.js';
 import { resolveNoemaLoomPaths } from '../../state/paths.js';
+import { readWorksetManifest } from '../../state/workset.js';
 import { createEnvelope, resolveProjectRootFromInput, type EnvelopeWarning, type NoemaLoomEnvelope } from '../envelope.js';
+import { anchorStatusData } from './nl-anchor.js';
 
 export const nlStatusInputSchema = z
   .object({
     projectPath: z.string().optional(),
-    includeRepositoryMap: z.boolean().default(false)
+    includeRepositoryMap: z.boolean().default(false),
+    includeAnchors: z.boolean().default(false),
+    includeRetiredAnchors: z.boolean().default(false),
+    includeAnchorText: z.boolean().default(true)
   })
   .passthrough();
 
@@ -309,6 +314,10 @@ export async function handleNlStatus(input: unknown): Promise<NoemaLoomEnvelope>
       ]
     : [];
 
+  const anchorWorkset = parsed.includeAnchors
+    ? anchorStatusData(await readWorksetManifest(projectRoot), parsed.includeRetiredAnchors, parsed.includeAnchorText)
+    : undefined;
+
   return createEnvelope({
     ok: !hasError,
     tool: 'nl_status',
@@ -330,7 +339,8 @@ export async function handleNlStatus(input: unknown): Promise<NoemaLoomEnvelope>
       refreshLock,
       lastRefreshFailure: lastRefreshFailure ?? null,
       rawToolExposure: false,
-      writerEnabled: false
+      writerEnabled: false,
+      ...(anchorWorkset ? { anchorWorkset } : {})
     }
   });
 }

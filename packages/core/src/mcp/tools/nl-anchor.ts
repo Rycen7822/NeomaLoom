@@ -30,6 +30,21 @@ export const nlAnchorStatusInputSchema = z.object({
   responseProfile: z.enum(['compact', 'standard', 'debug']).default('compact')
 }).passthrough();
 
+export const nlAnchorManageInputSchema = z.object({
+  action: z.enum(['promote', 'demote']),
+  projectPath: z.string().optional(),
+  anchorId: z.string().optional(),
+  path: z.string().optional(),
+  label: z.string().optional(),
+  kind: z.string().optional(),
+  role: z.string().optional(),
+  startLine: z.number().int().positive().optional(),
+  endLine: z.number().int().positive().optional(),
+  reason: z.string().optional(),
+  pinned: z.boolean().optional(),
+  state: z.enum(['dormant', 'archived']).optional()
+}).passthrough();
+
 export const nlAnchorPromoteInputSchema = z.object({
   projectPath: z.string().optional(),
   path: z.string().min(1),
@@ -71,7 +86,7 @@ function publicAnchors(manifest: WorksetManifest, includeRetired: boolean): Navi
     .map(anchor => ({ ...anchor, tombstoneReason: anchor.tombstoneReason }));
 }
 
-function graphStateFor(manifest: WorksetManifest): 'empty' | 'ready' {
+export function anchorGraphStateFor(manifest: WorksetManifest): 'empty' | 'ready' {
   return manifest.anchors.length > 0 || manifest.tombstones.length > 0 ? 'ready' : 'empty';
 }
 
@@ -89,7 +104,7 @@ function selectorWarning(selector: { anchorId?: string; path?: string }) {
   };
 }
 
-function statusData(manifest: WorksetManifest, includeRetired: boolean, includeText: boolean): Record<string, unknown> {
+export function anchorStatusData(manifest: WorksetManifest, includeRetired: boolean, includeText: boolean): Record<string, unknown> {
   const rendered = renderNavigationCards(manifest, { includeDisabled: true });
   return {
     revision: worksetRevision(manifest),
@@ -122,8 +137,8 @@ async function writeAndReturn(tool: string, projectRoot: string, manifest: Works
     tool,
     projectRoot,
     graphRevision: worksetRevision(manifest),
-    graphState: graphStateFor(manifest),
-    data: statusData(manifest, includeRetired, true)
+    graphState: anchorGraphStateFor(manifest),
+    data: anchorStatusData(manifest, includeRetired, true)
   });
 }
 
@@ -136,8 +151,8 @@ export async function handleNlAnchorStatus(input: unknown): Promise<NoemaLoomEnv
     tool: 'nl_anchor_status',
     projectRoot,
     graphRevision: worksetRevision(manifest),
-    graphState: graphStateFor(manifest),
-    data: statusData(manifest, parsed.includeRetired, parsed.includeText)
+    graphState: anchorGraphStateFor(manifest),
+    data: anchorStatusData(manifest, parsed.includeRetired, parsed.includeText)
   });
 }
 
@@ -187,12 +202,30 @@ export async function handleNlAnchorDemote(input: unknown): Promise<NoemaLoomEnv
       tool: 'nl_anchor_demote',
       projectRoot,
       graphRevision: worksetRevision(manifest),
-      graphState: graphStateFor(manifest),
+      graphState: anchorGraphStateFor(manifest),
       warnings: [selectorWarning(parsed)],
-      data: statusData(manifest, true, true)
+      data: anchorStatusData(manifest, true, true)
     });
   }
   return writeAndReturn('nl_anchor_demote', projectRoot, updateAnchorState(manifest, anchor.id, parsed.state, parsed.reason));
+}
+
+export async function handleNlAnchorManage(input: unknown): Promise<NoemaLoomEnvelope> {
+  const parsed = nlAnchorManageInputSchema.parse(input ?? {});
+  const result = parsed.action === 'promote'
+    ? await handleNlAnchorPromote({
+        ...parsed,
+        reason: parsed.reason ?? 'agent promoted anchor'
+      })
+    : await handleNlAnchorDemote({
+        ...parsed,
+        state: parsed.state ?? 'dormant',
+        reason: parsed.reason ?? 'agent curation'
+      });
+  return {
+    ...result,
+    tool: 'nl_anchor_manage'
+  };
 }
 
 export async function handleNlAnchorRetire(input: unknown): Promise<NoemaLoomEnvelope> {
@@ -206,9 +239,9 @@ export async function handleNlAnchorRetire(input: unknown): Promise<NoemaLoomEnv
       tool: 'nl_anchor_retire',
       projectRoot,
       graphRevision: worksetRevision(manifest),
-      graphState: graphStateFor(manifest),
+      graphState: anchorGraphStateFor(manifest),
       warnings: [selectorWarning(parsed)],
-      data: statusData(manifest, true, true)
+      data: anchorStatusData(manifest, true, true)
     });
   }
   return writeAndReturn('nl_anchor_retire', projectRoot, retireAnchor(manifest, anchor.id, parsed.reason), true);
@@ -225,9 +258,9 @@ export async function handleNlAnchorRepair(input: unknown): Promise<NoemaLoomEnv
       tool: 'nl_anchor_repair',
       projectRoot,
       graphRevision: worksetRevision(manifest),
-      graphState: graphStateFor(manifest),
+      graphState: anchorGraphStateFor(manifest),
       warnings: [selectorWarning(parsed)],
-      data: statusData(manifest, true, true)
+      data: anchorStatusData(manifest, true, true)
     });
   }
   const nextCounters = {

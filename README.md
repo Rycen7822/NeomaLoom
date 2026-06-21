@@ -32,14 +32,9 @@ The Hermes plugin and MCP server expose these curated agent-facing tools:
 - `nl_prepare_context`
 - `nl_plan_change`
 - `nl_verify_task`
-- `nl_anchor_status`
-- `nl_anchor_promote`
-- `nl_anchor_demote`
-- `nl_anchor_repair`
-- `nl_anchor_retire`
-- `nl_anchor_checkpoint`
+- `nl_anchor_manage`
 
-`nl_refresh` writes derived cache files under `.noemaloom/`. The `nl_anchor_*` tools write only controlled project-local navigation state under `.noemaloom/workset/`. No tool writes project source files.
+`nl_refresh` writes derived cache files under `.noemaloom/`. `nl_anchor_manage` writes only controlled project-local navigation state under `.noemaloom/workset/` and supports only `promote`/`demote`; use `noemaloom anchor repair|retire|checkpoint` for low-frequency anchor maintenance. No tool writes project source files.
 
 ## Hermes Plugin
 

@@ -18,12 +18,7 @@ _TOOL_DESCRIPTIONS = {
     "nl_prepare_context": "Prepare compact repository context and ranked edit targets for a user goal.",
     "nl_plan_change": "Plan cross-surface impact before code, API, config, documentation, or test changes.",
     "nl_verify_task": "Verify task coverage after native Hermes/Codex file edits before refreshing changed indexes.",
-    "nl_anchor_status": "Inspect project-local NoemaLoom navigation anchors and lifecycle counters.",
-    "nl_anchor_promote": "Promote a project-local navigation anchor through a controlled curation tool.",
-    "nl_anchor_demote": "Demote a project-local navigation anchor to dormant or archived.",
-    "nl_anchor_repair": "Repair a project-local navigation anchor path, label, or line range.",
-    "nl_anchor_retire": "Retire a project-local navigation anchor and write a tombstone.",
-    "nl_anchor_checkpoint": "Update project-local navigation-anchor checkpoint metadata and explicit enablement.",
+    "nl_anchor_manage": "Promote or demote project-local navigation anchors through a compact controlled curation tool.",
 }
 
 

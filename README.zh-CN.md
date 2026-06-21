@@ -33,14 +33,9 @@ Hermes plugin 和 MCP server 暴露以下受控的面向智能体工具：
 - `nl_prepare_context`
 - `nl_plan_change`
 - `nl_verify_task`
-- `nl_anchor_status`
-- `nl_anchor_promote`
-- `nl_anchor_demote`
-- `nl_anchor_repair`
-- `nl_anchor_retire`
-- `nl_anchor_checkpoint`
+- `nl_anchor_manage`
 
-其中 `nl_refresh` 会在 `.noemaloom/` 下写入派生缓存文件。`nl_anchor_*` 只通过受控操作写入项目本地导航状态 `.noemaloom/workset/`。所有工具都不写项目源码文件。
+其中 `nl_refresh` 会在 `.noemaloom/` 下写入派生缓存文件。`nl_anchor_manage` 只通过受控操作写入项目本地导航状态 `.noemaloom/workset/`，且只支持 `promote`/`demote`；低频的 repair/retire/checkpoint 维护使用 `noemaloom anchor repair|retire|checkpoint` CLI。所有工具都不写项目源码文件。
 
 ## Hermes Plugin
 
