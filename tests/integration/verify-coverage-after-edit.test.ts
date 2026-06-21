@@ -75,6 +75,44 @@ describe('aggregated impact planning and coverage verification after edits', () 
     });
   });
 
+  it('normalizes source and test filename prefixes before heuristic linked-test matching', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-verify-prefixed-tests-'));
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({ name: 'verify-prefixed-tests' }, null, 2));
+    await writeProjectFile(projectRoot, 'v2/tools/check_g8_init_equivalence.py', 'def check_missing_key_policy():\n    return True\n');
+    await writeProjectFile(
+      projectRoot,
+      'v2/tests/test_g8_init_equivalence.py',
+      'from v2.tools.check_g8_init_equivalence import check_missing_key_policy\n\ndef test_g8_init_equivalence():\n    assert check_missing_key_policy()\n'
+    );
+    await writeProjectFile(
+      projectRoot,
+      'v2h/tests/test_g8_init_equivalence.py',
+      'from v2.tools.check_g8_init_equivalence import check_missing_key_policy\n\ndef test_g8_init_equivalence_handoff():\n    assert check_missing_key_policy()\n'
+    );
+    const refresh = await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'files',
+      mode: 'safe'
+    });
+    expect(refresh.ok).toBe(true);
+
+    const result = await callRegisteredTool('nl_verify_task', {
+      projectPath: projectRoot,
+      goal: 'Update G8 initialization equivalence checker',
+      changedPaths: ['v2/tools/check_g8_init_equivalence.py'],
+      oldTerms: [],
+      newTerms: [],
+      includeImpact: false
+    });
+
+    expect(result.ok).toBe(false);
+    const coverage = (result.data as { coverage: { unverifiedLinkedTests: Array<{ path: string; sourcePath: string; source: string }> } }).coverage;
+    expect(coverage.unverifiedLinkedTests).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'v2/tests/test_g8_init_equivalence.py', sourcePath: 'v2/tools/check_g8_init_equivalence.py', source: 'heuristic' }),
+      expect.objectContaining({ path: 'v2h/tests/test_g8_init_equivalence.py', sourcePath: 'v2/tools/check_g8_init_equivalence.py', source: 'heuristic' })
+    ]));
+  });
+
   it('traces cross-surface edges, groups impact, and verifies current changed file contents', async () => {
     const projectRoot = await createProject();
     const refresh = await callRegisteredTool('nl_refresh', {

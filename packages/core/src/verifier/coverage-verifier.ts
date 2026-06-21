@@ -152,11 +152,15 @@ function readInventoryTestPaths(projectRoot: string): string[] {
   }
 }
 
+const TEST_STEM_PREFIXES = ['test_', 'test-', 'spec_', 'spec-'];
+const SOURCE_STEM_PREFIXES = ['check_', 'check-', 'verify_', 'verify-', 'validate_', 'validate-', 'run_', 'run-'];
+const STEM_SUFFIXES = ['.test', '.spec', '_test', '-test', '_spec', '-spec'];
+
 function stem(repoPath: string): string {
   let value = path.posix.basename(repoPath);
   const extension = path.posix.extname(value);
   if (extension) value = value.slice(0, -extension.length);
-  for (const suffix of ['.test', '.spec', '_test', '-test', '_spec', '-spec']) {
+  for (const suffix of STEM_SUFFIXES) {
     if (value.endsWith(suffix)) {
       return value.slice(0, -suffix.length);
     }
@@ -164,10 +168,42 @@ function stem(repoPath: string): string {
   return value;
 }
 
+function addStemAliases(value: string, prefixes: string[], aliases: Set<string>): void {
+  const queue = [value.toLowerCase()];
+  while (queue.length > 0) {
+    const current = queue.shift() ?? '';
+    if (!current || aliases.has(current)) continue;
+    aliases.add(current);
+    for (const prefix of prefixes) {
+      if (current.startsWith(prefix) && current.length > prefix.length + 1) {
+        queue.push(current.slice(prefix.length));
+      }
+    }
+    const tokens = current.split(/[_\-.]+/).filter(Boolean);
+    for (let index = 1; index < tokens.length - 1; index += 1) {
+      aliases.add(tokens.slice(index).join('_'));
+    }
+  }
+}
+
+function stemAliases(repoPath: string, prefixes: string[]): Set<string> {
+  const aliases = new Set<string>();
+  addStemAliases(stem(repoPath), prefixes, aliases);
+  return aliases;
+}
+
 function likelyTestForSource(sourcePath: string, testPath: string): boolean {
-  const sourceStem = stem(sourcePath).toLowerCase();
-  const testStem = stem(testPath).toLowerCase();
-  return sourceStem.length > 0 && (testStem === sourceStem || testStem.includes(sourceStem) || testPath.toLowerCase().includes(`/${sourceStem}.`));
+  const sourceAliases = stemAliases(sourcePath, SOURCE_STEM_PREFIXES);
+  const testAliases = stemAliases(testPath, TEST_STEM_PREFIXES);
+  for (const sourceStem of sourceAliases) {
+    if (sourceStem.length === 0) continue;
+    for (const testStem of testAliases) {
+      if (testStem === sourceStem) return true;
+      if (sourceStem.length >= 8 && testStem.includes(sourceStem)) return true;
+    }
+    if (sourceStem.length >= 8 && testPath.toLowerCase().includes(`/${sourceStem}.`)) return true;
+  }
+  return false;
 }
 
 function findHeuristicLinkedTests(input: {
