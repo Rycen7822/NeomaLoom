@@ -58,21 +58,22 @@ function isSymbolLike(term: string): boolean {
   );
 }
 
+function hasKnownFileExtension(term: string): boolean {
+  const match = term.match(/\.([A-Za-z0-9]+)$/);
+  return Boolean(match && FILE_EXTENSION_TERMS.has(match[1].toLowerCase()));
+}
+
+function hasOnlyAsciiPathSegments(term: string): boolean {
+  return term.split('/').filter(Boolean).every(segment => /^[A-Za-z0-9._@~+\-]+$/.test(segment));
+}
+
 function isPathLike(term: string): boolean {
-  return term.includes('/') || /\.[A-Za-z0-9]+$/.test(term);
-}
-
-function compactIdentifier(value: string): string {
-  return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
-}
-
-function compactPathIntentTerms(terms: string[]): string[] {
-  const compactTerms = terms.map(compactIdentifier).filter(term => term.length >= 4);
-  const adjacent = terms.flatMap((term, index) => {
-    const next = terms[index + 1];
-    return next ? [compactIdentifier(`${term}${next}`)] : [];
-  }).filter(term => term.length >= 4);
-  return unique([...compactTerms, ...adjacent]);
+  if (/\.[A-Za-z0-9]+$/.test(term)) return true;
+  if (!term.includes('/')) return false;
+  if (/^(?:\.{1,2}|~)?\//.test(term)) return true;
+  if (hasKnownFileExtension(term)) return true;
+  const parts = term.split('/').filter(Boolean);
+  return parts.length >= 2 && hasOnlyAsciiPathSegments(term);
 }
 
 function rawPathLikeTerms(query: string): string[] {
@@ -159,8 +160,7 @@ export function normalizeQuery(input: { query: string; targetRoles?: string[] })
   const configTerms = unique(terms.filter(isConfigLike));
   const pathTerms = unique([
     ...rawPathLikeTerms(raw),
-    ...terms.filter(isPathLike),
-    ...compactPathIntentTerms(cleanedTerms)
+    ...terms.filter(isPathLike)
   ]).filter(term => !isFileExtensionOnly(term));
   const symbolTerms = unique([
     ...terms.filter(isSymbolLike),

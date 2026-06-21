@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { createEnvelope, resolveProjectRootFromInput, type EnvelopeWarning, type NoemaLoomEnvelope } from '../envelope.js';
 import { planExactRoute, applyExactRoute } from '../exact-route.js';
 import { RESPONSE_PROFILES, shapeEvidence, shapePrepareContextData, type ResponseProfile } from '../output-profile.js';
+import { estimateEnvelopeTokenBudget } from '../token-budget.js';
 import {
   combineEvidence,
   combineWarnings
@@ -23,6 +24,7 @@ type LocateData = {
     endLine: number;
     headingPath: string[];
     score: number;
+    confidence: number;
     scoreBreakdown: unknown;
     evidence: Array<Record<string, unknown>>;
     linkedSpans: Array<Record<string, unknown>>;
@@ -68,20 +70,118 @@ function queryTargetCard(target: LocateData['targets'][number]): Record<string, 
   };
 }
 
-function estimateOutputTokenBudget(input: {
-  requested: number;
-  data: Record<string, unknown>;
-  evidence: unknown[];
-  warnings: EnvelopeWarning[];
-  nextActions: string[];
-  truncated: boolean;
-}) {
-  const used = Math.ceil(JSON.stringify({ data: input.data, evidence: input.evidence, warnings: input.warnings, nextActions: input.nextActions }).length / 4);
+function readPriority(decision: string): number {
+  if (decision === 'must_edit') return 0;
+  if (decision === 'maybe_edit') return 1;
+  if (decision === 'inspect_only') return 2;
+  if (decision === 'verify_only') return 3;
+  return 4;
+}
+
+function shouldReadTarget(target: LocateData['targets'][number]): boolean {
+  if (target.indexed === false) return false;
+  if (['must_edit', 'maybe_edit'].includes(target.decision)) return true;
+  if (['inspect_only', 'verify_only'].includes(target.decision)) return Number(target.confidence ?? 0) >= 0.45;
+  return false;
+}
+
+function selectReadTargets(input: {
+  targets: LocateData['targets'];
+  enabled: boolean;
+  hasUnindexedCandidates: boolean;
+  maxReadSpans: number;
+}): { readTargets: LocateData['targets']; readSkipReasons: Array<Record<string, unknown>> } {
+  if (!input.enabled) return { readTargets: [], readSkipReasons: [] };
+  if (input.hasUnindexedCandidates) {
+    return {
+      readTargets: [],
+      readSkipReasons: input.targets
+        .filter(target => target.indexed === false)
+        .map(target => ({ spanId: target.spanId, path: target.path, reason: 'unindexed_candidate_requires_promotion' }))
+    };
+  }
+  const ordered = input.targets
+    .map((target, index) => ({ target, index }))
+    .sort((left, right) => readPriority(left.target.decision) - readPriority(right.target.decision) || left.index - right.index);
+  const readTargets = ordered.filter(item => shouldReadTarget(item.target)).slice(0, input.maxReadSpans).map(item => item.target);
+  const selected = new Set(readTargets.map(target => target.spanId));
+  const readSkipReasons = ordered
+    .filter(item => !selected.has(item.target.spanId))
+    .map(item => ({
+      spanId: item.target.spanId,
+      path: item.target.path,
+      decision: item.target.decision,
+      confidence: item.target.confidence,
+      reason: item.target.indexed === false
+        ? 'unindexed_candidate_requires_promotion'
+        : shouldReadTarget(item.target)
+          ? 'maxReadSpans_exceeded'
+          : 'decision_or_confidence_below_read_threshold'
+    }))
+    .slice(0, 20);
+  return { readTargets, readSkipReasons };
+}
+
+function navigationStateEffectDetail(input: {
+  beforeCounters: Record<string, number>;
+  afterCounters: Record<string, number>;
+  mode: string;
+  enabled: boolean;
+  targetCount: number;
+}): Record<string, unknown> {
+  const changedCounters = Object.entries(input.afterCounters)
+    .filter(([key, value]) => value !== input.beforeCounters[key])
+    .reduce<Record<string, { before: number; after: number }>>((acc, [key, after]) => {
+      acc[key] = { before: input.beforeCounters[key] ?? 0, after };
+      return acc;
+    }, {});
   return {
-    requested: input.requested,
-    used,
-    truncated: input.truncated
+    effect: 'workset.navigation_query_recorded',
+    sourceWrites: false,
+    derivedIndexWrites: false,
+    worksetWrites: true,
+    counterWrites: Object.keys(changedCounters),
+    counterDelta: changedCounters,
+    navigationMode: input.mode,
+    navigationEnabled: input.enabled,
+    targetCount: input.targetCount
   };
+}
+
+function navigationCapWarnings(input: {
+  targets: LocateData['targets'];
+  maxTargets: number;
+  perPathMax: number;
+  renderedTruncated: boolean;
+}): EnvelopeWarning[] {
+  const warnings: EnvelopeWarning[] = [];
+  if (input.targets.length > input.maxTargets) {
+    warnings.push({
+      code: 'navigation_targets_capped',
+      severity: 'info',
+      message: `Navigation workset records at most ${input.maxTargets} targets for this call; ${input.targets.length - input.maxTargets} query targets were not recorded.`
+    });
+  }
+  const perPath = new Map<string, number>();
+  for (const target of input.targets.slice(0, input.maxTargets)) {
+    perPath.set(target.path, (perPath.get(target.path) ?? 0) + 1);
+  }
+  const cappedPaths = [...perPath.entries()].filter(([, count]) => count > input.perPathMax).map(([repoPath]) => repoPath);
+  if (cappedPaths.length > 0) {
+    warnings.push({
+      code: 'navigation_per_path_cap_applied',
+      severity: 'info',
+      message: `Navigation workset per-path cap may demote duplicate anchors for: ${cappedPaths.slice(0, 5).join(', ')}${cappedPaths.length > 5 ? '…' : ''}.`
+    });
+  }
+  if (input.renderedTruncated) {
+    warnings.push({
+      code: 'navigation_workset_text_truncated',
+      severity: 'info',
+      message: 'Navigation workset text exceeded its injection character budget; use responseProfile="debug" or nl_status(includeAnchors=true) for the full workset.'
+    });
+  }
+  return warnings;
 }
 
 export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomEnvelope> {
@@ -112,17 +212,21 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
     located: routedLocated,
     includeSnippets: parsed.includeSnippets
   });
-  const readTargets = parsed.readTopSpans && locateData.unindexedCandidates?.length === 0
-    ? locateData.targets
-      .filter(target => target.indexed !== false && ['must_edit', 'maybe_edit'].includes(target.decision))
-        .slice(0, parsed.maxReadSpans)
-    : [];
+  const readSelection = selectReadTargets({
+    targets: locateData.targets,
+    enabled: parsed.readTopSpans,
+    hasUnindexedCandidates: (locateData.unindexedCandidates?.length ?? 0) > 0,
+    maxReadSpans: parsed.maxReadSpans
+  });
+  const readTargets = readSelection.readTargets;
   const readResults = await Promise.all(
     readTargets.map(target =>
       handleNlReadSpan({
         projectPath: parsed.projectPath,
         spanId: target.spanId,
-        contextLines: parsed.contextLines
+        contextLines: parsed.contextLines,
+        focusStartLine: target.startLine,
+        focusEndLine: target.endLine
       })
     )
   );
@@ -156,6 +260,7 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
   const responseProfile = parsed.responseProfile as ResponseProfile;
   const worksetWarnings: EnvelopeWarning[] = [];
   const stateEffects: string[] = [];
+  const stateEffectsDetailed: Array<Record<string, unknown>> = [];
   let navigation: Record<string, unknown> = {
     revision: null,
     cards: [],
@@ -172,12 +277,13 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
     const navigationEnabled = currentWorkset.options.navigation.enabled;
     const activateObservedTargets = navigationEnabled && currentWorkset.options.navigation.mode === 'inject';
     const shouldRecordNavigation = parsed.recordNavigation && navigationEnabled;
+    const maxNavigationTargets = Math.min(parsed.limit, 10);
     const workset = shouldRecordNavigation
       ? await recordNavigationTargets({
           projectRoot,
           targets: locateData.targets,
           reason: 'nl_prepare_context target',
-          maxTargets: Math.min(parsed.limit, 10),
+          maxTargets: maxNavigationTargets,
           defaultState: activateObservedTargets ? 'active' : 'dormant',
           reviveDormant: activateObservedTargets,
           preserveCurated: true
@@ -185,8 +291,28 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
       : currentWorkset;
     if (shouldRecordNavigation) {
       stateEffects.push('workset.navigation_query_recorded');
+      stateEffectsDetailed.push(navigationStateEffectDetail({
+        beforeCounters: currentWorkset.counters as unknown as Record<string, number>,
+        afterCounters: workset.counters as unknown as Record<string, number>,
+        mode: currentWorkset.options.navigation.mode,
+        enabled: navigationEnabled,
+        targetCount: Math.min(locateData.targets.length, maxNavigationTargets)
+      }));
+      if (currentWorkset.options.navigation.mode === 'silent') {
+        worksetWarnings.push({
+          code: 'navigation_silent_state_effect',
+          severity: 'info',
+          message: 'recordNavigation=true with navigation mode=silent records dormant workset/query counters but performs no source writes or injection.'
+        });
+      }
     }
     const rendered = renderNavigationCards(workset, { includeDisabled: responseProfile === 'navigation' });
+    worksetWarnings.push(...navigationCapWarnings({
+      targets: locateData.targets,
+      maxTargets: maxNavigationTargets,
+      perPathMax: workset.budgets.perPathMax,
+      renderedTruncated: rendered.truncated
+    }));
     const queryTargetCards = locateData.targets.slice(0, Math.min(parsed.limit, 10)).map(queryTargetCard);
     navigation = {
       revision: worksetRevision(workset),
@@ -218,15 +344,17 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
     navigation,
     context: contextData,
     readSpans: readResults.map(result => result.data),
+    readSkipReasons: readSelection.readSkipReasons,
     requiredActions: nextActions,
     stateEffects,
+    stateEffectsDetailed,
     steps: ['nl_locate', 'nl_context_from_located', ...readResults.map(result => result.tool)]
   };
   const evidence = [...routedLocated.targets.flatMap(target => target.evidence), ...combineEvidence(readResults)];
   const shapedData = shapePrepareContextData(data, responseProfile) as Record<string, unknown>;
   const shapedEvidence = shapeEvidence(evidence, responseProfile);
   const warnings = [...located.warnings, ...readWarnings, ...worksetWarnings];
-  const tokenBudget = estimateOutputTokenBudget({
+  const finalizedBudget = estimateEnvelopeTokenBudget({
     requested: located.tokenBudget.requested,
     data: shapedData,
     evidence: shapedEvidence,
@@ -241,8 +369,8 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
     projectRoot,
     graphRevision: located.graphRevision,
     graphState,
-    tokenBudget,
-    warnings,
+    tokenBudget: finalizedBudget.tokenBudget,
+    warnings: finalizedBudget.warnings,
     data: shapedData,
     evidence: shapedEvidence,
     nextActions

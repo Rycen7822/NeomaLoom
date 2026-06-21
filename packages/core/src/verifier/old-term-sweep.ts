@@ -2,6 +2,7 @@ import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import { isGeneratedArtifactPath } from '../files/role-classifier.js';
+import { classifyPathLayer } from '../files/path-layer.js';
 import { normalizeProjectRelativePath, resolveProjectReadPath, safeReadFileInsideProject, safeStatInsideProject } from '../safety/path-guard.js';
 
 export type OldTermHit = {
@@ -9,6 +10,8 @@ export type OldTermHit = {
   line: number;
   term: string;
   text: string;
+  pathLayer: string;
+  severity: 'fail';
 };
 
 const TEXT_EXTENSIONS = new Set([
@@ -87,7 +90,7 @@ export async function sweepOldTerms(input: {
     lines.forEach((line, index) => {
       for (const term of input.oldTerms) {
         if (term && line.includes(term)) {
-          hits.push({ path: changedPath, line: index + 1, term, text: line.trim() });
+          hits.push({ path: changedPath, line: index + 1, term, text: line.trim(), pathLayer: classifyPathLayer(changedPath), severity: 'fail' });
         }
       }
     });

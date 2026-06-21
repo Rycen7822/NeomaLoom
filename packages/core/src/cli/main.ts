@@ -96,7 +96,6 @@ async function runAnchorCommand(argv: string[], io: CliIo): Promise<number> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     io.stdout.write(`${JSON.stringify(cliValidationEnvelope('noemaloom_anchor_cli', projectPathFromArgv(argv), message), null, 2)}\n`);
-    io.stderr.write(`${getHelpText()}\n`);
     return 1;
   }
 
@@ -141,7 +140,6 @@ export async function runCli(argv = process.argv.slice(2), io = defaultIo): Prom
   }
 
   io.stdout.write(`${JSON.stringify(cliValidationEnvelope('noemaloom_cli', undefined, 'Unknown command.'), null, 2)}\n`);
-  io.stderr.write(`${getHelpText()}\n`);
   return 1;
 }
 

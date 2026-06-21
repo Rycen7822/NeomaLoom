@@ -76,3 +76,36 @@ export function applyLocatorTokenBudget<T extends BudgetedTarget>(input: {
     }
   };
 }
+
+export function estimateEnvelopeTokenBudget(input: {
+  requested: number;
+  data: unknown;
+  evidence?: unknown[];
+  warnings?: EnvelopeWarning[];
+  nextActions?: string[];
+  truncated?: boolean;
+}): { tokenBudget: TokenBudget; warnings: EnvelopeWarning[] } {
+  const requested = Math.max(0, Math.floor(input.requested));
+  const warnings = [...(input.warnings ?? [])];
+  const used = Math.ceil(JSON.stringify({
+    data: input.data,
+    evidence: input.evidence ?? [],
+    warnings,
+    nextActions: input.nextActions ?? []
+  }).length / 4);
+  if (used > requested) {
+    warnings.push({
+      code: 'output_budget_exceeded',
+      severity: 'warning',
+      message: `final shaped output estimate ${used} exceeds requested budget ${requested}`
+    });
+  }
+  return {
+    tokenBudget: {
+      requested,
+      used,
+      truncated: Boolean(input.truncated) || used > requested
+    },
+    warnings
+  };
+}

@@ -1,4 +1,5 @@
 import type { FileRole, SpanKind } from '../spans/enums.js';
+import { classifyPathLayer, isBusinessPathLayer } from '../files/path-layer.js';
 import { weightedReciprocalRankScore, type WeightedRoute } from './rrf.js';
 import type { BoundaryValidation } from './boundary-validation.js';
 import type { NormalizedQuery } from './query-normalizer.js';
@@ -181,6 +182,23 @@ function exactPathOrBasenameMatch(candidate: LocatorCandidate, query: Normalized
   return pathMatchStrength(candidate, query) >= 24;
 }
 
+function exactPathRequested(candidate: LocatorCandidate, query: NormalizedQuery): boolean {
+  const candidatePath = candidate.path.toLowerCase();
+  return query.pathTerms.some(term => {
+    const normalized = normalizedPathTerm(term).toLowerCase();
+    return candidatePath === normalized || candidatePath.endsWith(`/${normalized}`);
+  });
+}
+
+function pathLayerAllowed(candidate: LocatorCandidate, query: NormalizedQuery, options: { includeGeneratedVendor?: boolean }): boolean {
+  const layer = classifyPathLayer(candidate.path);
+  if (isBusinessPathLayer(layer)) return true;
+  if (exactPathRequested(candidate, query)) return true;
+  if (candidate.role === 'feature_plan' && query.targetRoles.includes('feature_plan')) return true;
+  if (options.includeGeneratedVendor && ['generated', 'vendor'].includes(layer)) return true;
+  return false;
+}
+
 function pathContainsTerm(candidate: LocatorCandidate, query: NormalizedQuery): boolean {
   return pathMatchStrength(candidate, query) > 0;
 }
@@ -361,6 +379,7 @@ export function rankCandidates(
 ): RankedCandidate[] {
   return candidates
     .filter(candidate => options.includeGeneratedVendor || (!candidate.file.generated && !candidate.file.vendor && !['generated_file', 'vendor_file'].includes(candidate.role)))
+    .filter(candidate => pathLayerAllowed(candidate, query, options))
     .filter(candidate => !isFeatureCandidate(candidate) || queryAllowsFeatureCandidate(query, candidate))
     .map(candidate => {
       const scoreBreakdown = scoreCandidate(candidate, query);

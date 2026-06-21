@@ -14,7 +14,8 @@ export const nlVerifyCoverageInputSchema = z
     goal: z.string().min(1),
     changedPaths: z.array(z.string()).default([]),
     oldTerms: z.array(z.string()).default([]),
-    newTerms: z.array(z.string()).default([])
+    newTerms: z.array(z.string()).default([]),
+    oldTermPolicy: z.enum(['changed_paths', 'changed_paths_plus_advisory_docs', 'strict_global']).default('changed_paths_plus_advisory_docs')
   })
   .passthrough();
 
@@ -140,7 +141,8 @@ export async function handleNlVerifyCoverage(input: unknown): Promise<NoemaLoomE
     goal: parsed.goal,
     changedPaths: parsed.changedPaths,
     oldTerms: parsed.oldTerms,
-    newTerms: parsed.newTerms
+    newTerms: parsed.newTerms,
+    oldTermPolicy: parsed.oldTermPolicy
   });
 
   const graphState = await graphStateForChangedPaths(projectRoot, parsed.changedPaths);

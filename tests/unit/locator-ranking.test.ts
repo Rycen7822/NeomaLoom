@@ -143,6 +143,37 @@ describe('locator query normalization and ranking', () => {
     expect(normalized.docTerms).toEqual(expect.arrayContaining(['table', 'row']));
   });
 
+  it('does not treat descriptive CJK slash phrases as repo paths', () => {
+    const normalized = normalizeQuery({
+      query: '精确英文/代码 path v2/models/protocsr_g8.py docs/中文说明.md'
+    });
+
+    expect(normalized.pathTerms).toEqual(expect.arrayContaining(['v2/models/protocsr_g8.py', 'docs/中文说明.md']));
+    expect(normalized.pathTerms).not.toContain('精确英文/代码');
+  });
+
+  it('filters non-business tooling and artifact layers from default ranking', () => {
+    const normalized = normalizeQuery({ query: 'update createClient documentation', targetRoles: ['document'] });
+    const toolingDoc = {
+      ...baseCandidate,
+      spanId: 'span-agent-skill',
+      path: '.agents/skills/create-client/SKILL.md',
+      role: 'design_doc',
+      indexedText: 'createClient documentation'
+    };
+    const artifactDoc = {
+      ...baseCandidate,
+      spanId: 'span-artifact-doc',
+      path: 'artifacts/daily/create-client.md',
+      role: 'design_doc',
+      indexedText: 'createClient documentation'
+    };
+
+    expect(rankCandidates([toolingDoc, artifactDoc, baseCandidate], normalized).map(candidate => candidate.spanId)).toEqual([
+      'span-doc-client'
+    ]);
+  });
+
   it('ranks table rows above whole tables for table-row intent', () => {
     const normalized = normalizeQuery({ query: 'Find Gate-4 claim alignment table row' });
     const table = {

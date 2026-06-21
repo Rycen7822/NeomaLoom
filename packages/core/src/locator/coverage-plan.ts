@@ -1,4 +1,5 @@
 import type { EnvelopeWarning } from '../mcp/envelope.js';
+import { isDefaultBusinessPath } from '../files/path-layer.js';
 import { expandRoleAliases, roleMatchesRequest } from '../spans/role-groups.js';
 import type { NormalizedQuery } from './query-normalizer.js';
 import type { RankedCandidate } from './ranking.js';
@@ -50,8 +51,8 @@ export function buildCoveragePlan(input: {
   const missingRequestedRoles = [...new Set(rawRequests)]
     .filter(requested => !roles.some(role => role === requested || roleMatchesRequest(role, [requested])))
     .sort();
-  const linkedDocs = cappedPaths(input.targets.filter(target => DOC_ROLES.has(String(target.role))).map(target => target.path));
-  const linkedTests = cappedPaths(input.targets.filter(target => target.role === 'test_file').map(target => target.path));
+  const linkedDocs = cappedPaths(input.targets.filter(target => DOC_ROLES.has(String(target.role)) && isDefaultBusinessPath(target.path)).map(target => target.path));
+  const linkedTests = cappedPaths(input.targets.filter(target => target.role === 'test_file' && isDefaultBusinessPath(target.path)).map(target => target.path));
 
   return {
     exactSweeps: [...new Set([...input.query.oldTerms, ...input.query.newTerms, ...input.query.symbolTerms, ...input.query.configTerms])],

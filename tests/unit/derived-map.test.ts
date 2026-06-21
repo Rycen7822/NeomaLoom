@@ -185,6 +185,8 @@ describe('derived repository map', () => {
       span({ spanId: 'test:client', path: 'tests/client.test.ts', kind: 'test.case', role: 'test_file', label: 'creates client' }),
       span({ spanId: 'config:pkg', path: 'package.json', kind: 'config.entry', role: 'package_metadata', label: 'scripts.test' }),
       span({ spanId: 'feature:client', path: '.noemaloom/planning/features.json', kind: 'feature.node', role: 'feature_plan', label: 'Client API' }),
+      span({ spanId: 'agent:skill', path: '.agents/skills/client/SKILL.md', kind: 'doc.heading', role: 'design_doc', label: 'Client Skill' }),
+      span({ spanId: 'artifact:run', path: 'artifacts/daily/client.md', kind: 'doc.heading', role: 'design_doc', label: 'Client Artifact' }),
       span({
         spanId: 'doc:forbidden',
         path: 'notes/chat.md',
@@ -239,6 +241,6 @@ describe('derived repository map', () => {
     await writeRepositoryMap({ projectRoot, map });
     expect(await readFile(path.join(projectRoot, '.noemaloom', 'derived-map', 'repository-map.md'), 'utf8')).toBe(rendered);
     expect(JSON.parse(await readFile(path.join(projectRoot, '.noemaloom', 'derived-map', 'repository-map.json'), 'utf8'))).toEqual(map);
-    expect(`${JSON.stringify(map)}\n${rendered}`).not.toMatch(/chat summary|user preference|full code snippet|console\.log/);
+    expect(`${JSON.stringify(map)}\n${rendered}`).not.toMatch(/chat summary|user preference|full code snippet|console\.log|\.agents\/skills|artifacts\/daily/);
   });
 });

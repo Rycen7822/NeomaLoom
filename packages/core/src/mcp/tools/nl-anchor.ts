@@ -180,6 +180,22 @@ export function anchorStatusData(manifest: WorksetManifest, includeRetired: bool
   };
 }
 
+function anchorErrorData(manifest: WorksetManifest, extras: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    status: 'error',
+    revision: worksetRevision(manifest),
+    counts: {
+      anchors: manifest.anchors.length,
+      active: manifest.anchors.filter(anchor => anchor.state === 'active').length,
+      dormant: manifest.anchors.filter(anchor => anchor.state === 'dormant').length,
+      archived: manifest.anchors.filter(anchor => anchor.state === 'archived').length,
+      tombstones: manifest.tombstones.length
+    },
+    anchors: [],
+    ...extras
+  };
+}
+
 function anchorEnvelope(tool: string, projectRoot: string, manifest: WorksetManifest, includeRetired = false): NoemaLoomEnvelope {
   return createEnvelope({
     ok: true,
@@ -231,7 +247,7 @@ export async function handleNlAnchorPromote(input: unknown): Promise<NoemaLoomEn
       graphRevision: worksetRevision(manifest),
       graphState: anchorGraphStateFor(manifest),
       warnings: [validationWarning],
-      data: anchorStatusData(manifest, true, true)
+      data: anchorErrorData(manifest, { path: parsed.path })
     });
   }
 
@@ -284,7 +300,7 @@ export async function handleNlAnchorDemote(input: unknown): Promise<NoemaLoomEnv
       graphRevision: worksetRevision(manifest),
       graphState: anchorGraphStateFor(manifest),
       warnings: [selectorWarning(parsed)],
-      data: anchorStatusData(manifest, true, true)
+      data: anchorErrorData(manifest, { anchorId: parsed.anchorId, path: parsed.path })
     });
   }
   return updateAndReturn('nl_anchor_demote', projectRoot, current => {
@@ -324,7 +340,7 @@ export async function handleNlAnchorRetire(input: unknown): Promise<NoemaLoomEnv
       graphRevision: worksetRevision(manifest),
       graphState: anchorGraphStateFor(manifest),
       warnings: [selectorWarning(parsed)],
-      data: anchorStatusData(manifest, true, true)
+      data: anchorErrorData(manifest, { anchorId: parsed.anchorId, path: parsed.path })
     });
   }
   return updateAndReturn('nl_anchor_retire', projectRoot, current => {
@@ -346,7 +362,7 @@ export async function handleNlAnchorRepair(input: unknown): Promise<NoemaLoomEnv
       graphRevision: worksetRevision(manifest),
       graphState: anchorGraphStateFor(manifest),
       warnings: [selectorWarning(parsed)],
-      data: anchorStatusData(manifest, true, true)
+      data: anchorErrorData(manifest, { anchorId: parsed.anchorId, path: parsed.path })
     });
   }
   if (parsed.newPath) {
@@ -359,7 +375,7 @@ export async function handleNlAnchorRepair(input: unknown): Promise<NoemaLoomEnv
         graphRevision: worksetRevision(manifest),
         graphState: anchorGraphStateFor(manifest),
         warnings: [validationWarning],
-        data: anchorStatusData(manifest, true, true)
+        data: anchorErrorData(manifest, { anchorId: parsed.anchorId, path: parsed.path, newPath: parsed.newPath })
       });
     }
   }
@@ -398,10 +414,35 @@ export async function handleNlAnchorRepair(input: unknown): Promise<NoemaLoomEnv
 export async function handleNlAnchorCheckpoint(input: unknown): Promise<NoemaLoomEnvelope> {
   const parsed = nlAnchorCheckpointInputSchema.parse(input ?? {});
   const projectRoot = resolveProjectRootFromInput(parsed);
+  const hasRequestedChange = typeof parsed.enabled === 'boolean' || typeof parsed.mode === 'string';
+  if (!hasRequestedChange) {
+    const manifest = await readWorksetManifest(projectRoot);
+    return createEnvelope({
+      ok: true,
+      tool: 'nl_anchor_checkpoint',
+      projectRoot,
+      graphRevision: worksetRevision(manifest),
+      graphState: anchorGraphStateFor(manifest),
+      data: {
+        ...anchorStatusData(manifest, false, true),
+        status: 'noop',
+        stateEffects: [],
+        stateEffectsDetailed: []
+      },
+      nextActions: ['pass enabled or mode to update navigation checkpoint/options']
+    });
+  }
+
   return updateAndReturn('nl_anchor_checkpoint', projectRoot, current => {
     let next = current.version === 1 ? current : createEmptyWorksetManifest(projectRoot);
-    if (typeof parsed.enabled === 'boolean' || parsed.mode) {
-      next = setNavigationEnabled(next, parsed.enabled ?? next.options.navigation.enabled, parsed.mode ?? next.options.navigation.mode);
+    const nextEnabled = parsed.enabled ?? next.options.navigation.enabled;
+    const nextMode = parsed.mode ?? next.options.navigation.mode;
+    const optionsChanged = nextEnabled !== next.options.navigation.enabled || nextMode !== next.options.navigation.mode;
+    if (optionsChanged) {
+      next = setNavigationEnabled(next, nextEnabled, nextMode);
+    }
+    if (!optionsChanged) {
+      return next;
     }
     return {
       ...next,

@@ -7,6 +7,7 @@ import { checkAnchorsAndLinks } from './anchor-checker.js';
 import { checkCodeDocMismatch, type CodeDocMismatch } from './code-doc-mismatch.js';
 import type { BrokenLink, StaleAnchor } from './link-checker.js';
 import { classifyFileRole, isGeneratedArtifactPath } from '../files/role-classifier.js';
+import { classifyPathLayer, isDefaultBusinessPath } from '../files/path-layer.js';
 import { safeReadFileInsideProjectSync } from '../safety/path-guard.js';
 
 type Statement = {
@@ -25,6 +26,8 @@ function openDatabase(filename: string): Database {
   return new sqlite.DatabaseSync(filename);
 }
 
+export type OldTermPolicy = 'changed_paths' | 'changed_paths_plus_advisory_docs' | 'strict_global';
+
 export type UnverifiedLinkedTest = {
   path: string;
   sourcePath: string;
@@ -37,6 +40,8 @@ export type UnsyncedDocRole = {
   role: string;
   term: string;
   indexed?: boolean;
+  pathLayer: string;
+  severity: 'needs_attention' | 'fail';
 };
 
 export type CoverageVerificationResult = {
@@ -51,15 +56,15 @@ export type CoverageVerificationResult = {
 };
 
 function statusFor(result: Omit<CoverageVerificationResult, 'status'>): CoverageVerificationResult['status'] {
-  const coldUnsyncedDocs = result.unsyncedDocRoles.filter(doc => doc.indexed === false).length;
+  const hardUnsyncedDocs = result.unsyncedDocRoles.filter(doc => doc.severity === 'fail').length;
   const hardFailures =
     result.remainingOldTermHits.length +
     result.staleAnchors.length +
     result.brokenLinks.length +
-    coldUnsyncedDocs +
+    hardUnsyncedDocs +
     result.codeDocMismatches.length;
   const attention =
-    result.unsyncedDocRoles.length - coldUnsyncedDocs +
+    result.unsyncedDocRoles.length - hardUnsyncedDocs +
     result.unverifiedLinkedTests.length +
     result.unreadMustEditTargets.length;
   if (hardFailures > 0) return 'fail';
@@ -82,7 +87,7 @@ function inventoryDocRolesFromSnapshot(input: {
     const changed = new Set(input.changedPaths);
     return Array.isArray(parsed.files)
       ? parsed.files
-          .filter(file => typeof file.path === 'string' && !changed.has(file.path) && !isGeneratedArtifactPath(file.path))
+          .filter(file => typeof file.path === 'string' && !changed.has(file.path) && !isGeneratedArtifactPath(file.path) && isDefaultBusinessPath(file.path))
           .map(file => ({ path: file.path, role: classifyFileRole(file.path), indexed: false }))
           .filter(file => file.role.endsWith('_doc'))
           .sort((left, right) => left.role.localeCompare(right.role) || left.path.localeCompare(right.path))
@@ -110,6 +115,12 @@ function readInventoryDocRoles(input: {
            AND f.path NOT LIKE '%/__pycache__/%'
            AND f.path NOT LIKE '%.pyc'
            AND f.path NOT LIKE '%.pyo'
+           AND f.path NOT LIKE '.agents/%'
+           AND f.path NOT LIKE 'artifacts/%'
+           AND f.path NOT LIKE 'runs/%'
+           AND f.path NOT LIKE 'outputs/%'
+           AND f.path NOT LIKE 'checkpoints/%'
+           AND f.path NOT LIKE 'hermes-plugin-backups/%'
          ORDER BY f.role ASC, f.path ASC`
       )
       .all(...(input.changedPaths.length > 0 ? input.changedPaths : ['']))
@@ -231,8 +242,9 @@ function findUnsyncedDocRoles(input: {
   projectRoot: string;
   changedPaths: string[];
   oldTerms: string[];
+  oldTermPolicy: OldTermPolicy;
 }): UnsyncedDocRole[] {
-  if (input.oldTerms.length === 0) {
+  if (input.oldTerms.length === 0 || input.oldTermPolicy === 'changed_paths') {
     return [];
   }
   const hits: UnsyncedDocRole[] = [];
@@ -244,8 +256,9 @@ function findUnsyncedDocRoles(input: {
       continue;
     }
     for (const term of input.oldTerms) {
-      if (!isGeneratedArtifactPath(doc.path) && term && text.includes(term)) {
-        hits.push({ path: doc.path, role: doc.role, term, indexed: doc.indexed });
+      if (!isGeneratedArtifactPath(doc.path) && isDefaultBusinessPath(doc.path) && term && text.includes(term)) {
+        const severity = input.oldTermPolicy === 'strict_global' ? 'fail' : 'needs_attention';
+        hits.push({ path: doc.path, role: doc.role, term, indexed: doc.indexed, pathLayer: classifyPathLayer(doc.path), severity });
       }
     }
   }
@@ -289,9 +302,11 @@ export async function verifyCoverage(input: {
   changedPaths: string[];
   oldTerms?: string[];
   newTerms?: string[];
+  oldTermPolicy?: OldTermPolicy;
 }): Promise<CoverageVerificationResult> {
   const oldTerms = input.oldTerms ?? [];
   const newTerms = input.newTerms ?? [];
+  const oldTermPolicy = input.oldTermPolicy ?? 'changed_paths_plus_advisory_docs';
   const remainingOldTermHits = await sweepOldTerms({
     projectRoot: input.projectRoot,
     changedPaths: input.changedPaths,
@@ -321,7 +336,8 @@ export async function verifyCoverage(input: {
   const unsyncedDocRoles = findUnsyncedDocRoles({
     projectRoot: input.projectRoot,
     changedPaths: input.changedPaths,
-    oldTerms
+    oldTerms,
+    oldTermPolicy
   });
   const withoutStatus = {
     remainingOldTermHits,

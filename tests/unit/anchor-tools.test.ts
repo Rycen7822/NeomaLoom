@@ -74,6 +74,9 @@ describe('NoemaLoom compressed navigation anchor tool surface', () => {
     expect(result.ok).toBe(false);
     expect(result.tool).toBe('nl_anchor_manage');
     expect(result.warnings[0]).toMatchObject({ code: 'anchor_not_found', severity: 'warning' });
+    expect((result.data as { status: string; anchors: unknown[]; navigation?: unknown }).status).toBe('error');
+    expect((result.data as { status: string; anchors: unknown[]; navigation?: unknown }).anchors).toEqual([]);
+    expect((result.data as { status: string; anchors: unknown[]; navigation?: unknown }).navigation).toBeUndefined();
   });
 
   it('rejects unsafe or missing promote paths before they become active anchors', async () => {

@@ -2,6 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { EdgeRelation, FileRole, SpanKind } from '../spans/enums.js';
+import { isDefaultBusinessPath } from '../files/path-layer.js';
 import type { RepoEdge, RepoSpan } from '../spans/types.js';
 import { renderRepositoryMapMarkdown } from './repository-map-markdown.js';
 
@@ -41,7 +42,15 @@ const FORBIDDEN_TERMS = [
   'unanchored judgment'
 ];
 
+function isRepositoryMapBusinessSpan(span: RepoSpan): boolean {
+  if (span.role === 'feature_plan' && span.kind === 'feature.node') return true;
+  return isDefaultBusinessPath(span.path);
+}
+
 function hasForbiddenContent(span: RepoSpan): boolean {
+  if (!isRepositoryMapBusinessSpan(span)) {
+    return true;
+  }
   if (span.role === 'experiment_note_doc') {
     return true;
   }

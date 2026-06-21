@@ -129,7 +129,7 @@ describe('coverage verifier', () => {
     });
   });
 
-  it('fails when a cold inventory doc still contains an old term outside the scoped span set', async () => {
+  it('treats old terms in cold inventory docs as advisory by default and fail under strict global policy', async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-coverage-scoped-'));
     await writeProjectFile(projectRoot, 'docs/api/client.md', '# Client API\n\nThe `timeoutMs` option is documented here.\n');
     await writeProjectFile(projectRoot, 'README.md', '# Demo\n\nStill references `legacyTimeout`.\n');
@@ -143,9 +143,22 @@ describe('coverage verifier', () => {
       newTerms: ['timeoutMs']
     });
 
-    expect(result.status).toBe('fail');
+    expect(result.status).toBe('needs_attention');
     expect(result.unsyncedDocRoles).toEqual([
-      expect.objectContaining({ path: 'README.md', role: 'readme_doc', term: 'legacyTimeout' })
+      expect.objectContaining({ path: 'README.md', role: 'readme_doc', term: 'legacyTimeout', severity: 'needs_attention', pathLayer: 'business' })
+    ]);
+
+    const strict = await verifyCoverage({
+      projectRoot,
+      goal: 'Rename legacyTimeout to timeoutMs in docs',
+      changedPaths: ['docs/api/client.md'],
+      oldTerms: ['legacyTimeout'],
+      newTerms: ['timeoutMs'],
+      oldTermPolicy: 'strict_global'
+    });
+    expect(strict.status).toBe('fail');
+    expect(strict.unsyncedDocRoles).toEqual([
+      expect.objectContaining({ path: 'README.md', role: 'readme_doc', term: 'legacyTimeout', severity: 'fail' })
     ]);
   });
 

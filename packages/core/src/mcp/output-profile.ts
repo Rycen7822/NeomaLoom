@@ -173,6 +173,7 @@ function shapeImpact(value: unknown, profile: Exclude<ResponseProfile, 'debug'>)
     missingUnindexedPaths: value.missingUnindexedPaths,
     riskLevel: value.riskLevel,
     requiredVerification: value.requiredVerification,
+    requiredVerificationDetails: value.requiredVerificationDetails,
     requiredActions: value.requiredActions,
     omitted: {
       codeImpact: Math.max(0, countArray(value.codeImpact) - limit),
@@ -216,8 +217,10 @@ function shapeNavigationPrepareContextData(value: unknown): unknown {
     coverage: value.coverage,
     coveragePlan: value.coveragePlan,
     readSpans: asArray(value.readSpans).slice(0, 3).map(shapeReadSpan),
+    readSkipReasons: asArray(value.readSkipReasons).slice(0, 10),
     requiredActions: value.requiredActions,
     stateEffects: value.stateEffects,
+    stateEffectsDetailed: value.stateEffectsDetailed,
     steps: value.steps
   };
 }
@@ -235,7 +238,9 @@ export function shapePrepareContextData(value: unknown, profile: ResponseProfile
     ...(profile === 'standard' ? { normalizedQuery: value.normalizedQuery } : {}),
     context: shapeContextData(value.context, profile),
     readSpans: asArray(value.readSpans).map(shapeReadSpan),
+    readSkipReasons: asArray(value.readSkipReasons).slice(0, 20),
     stateEffects: value.stateEffects,
+    stateEffectsDetailed: value.stateEffectsDetailed,
     steps: value.steps
   };
 }
@@ -253,6 +258,7 @@ export function shapePlanChangeData(value: unknown, profile: ResponseProfile): u
     impact: shapeImpact(value.impact, profile),
     impactSummary,
     requiredVerification: value.requiredVerification,
+    requiredVerificationDetails: value.requiredVerificationDetails,
     requiredActions: value.requiredActions,
     steps: value.steps
   };

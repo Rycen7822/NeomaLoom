@@ -1,6 +1,7 @@
 import path from 'node:path';
 
 import type { FileRole } from '../spans/enums.js';
+import { classifyPathLayer } from './path-layer.js';
 
 function normalize(repoPath: string): string {
   return repoPath.replaceAll('\\', '/').replace(/^\/+/, '');
@@ -13,7 +14,9 @@ const CODE_EXTENSIONS = new Set([
 export function isGeneratedArtifactPath(repoPath: string): boolean {
   const normalized = normalize(repoPath);
   const extension = path.posix.extname(normalized).toLowerCase();
+  const layer = classifyPathLayer(normalized);
   return (
+    layer === 'generated' ||
     normalized.startsWith('dist/') ||
     normalized.startsWith('build/') ||
     normalized.startsWith('coverage/') ||

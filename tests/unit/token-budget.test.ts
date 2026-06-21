@@ -1,4 +1,4 @@
-import { applyLocatorTokenBudget } from '../../packages/core/src/mcp/token-budget.js';
+import { applyLocatorTokenBudget, estimateEnvelopeTokenBudget } from '../../packages/core/src/mcp/token-budget.js';
 
 describe('locator token budget', () => {
   it('preserves must_edit targets and coverage warnings while truncating inspect_only targets first', () => {
@@ -58,5 +58,22 @@ describe('locator token budget', () => {
         })
       ])
     );
+  });
+
+  it('marks final shaped output over-budget instead of reporting a false non-truncated envelope', () => {
+    const result = estimateEnvelopeTokenBudget({
+      requested: 10,
+      data: { payload: 'x'.repeat(200) },
+      evidence: [],
+      warnings: [],
+      nextActions: ['inspect the compact warning']
+    });
+
+    expect(result.tokenBudget.requested).toBe(10);
+    expect(result.tokenBudget.used).toBeGreaterThan(10);
+    expect(result.tokenBudget.truncated).toBe(true);
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'output_budget_exceeded' })
+    ]));
   });
 });

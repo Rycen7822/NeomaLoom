@@ -97,6 +97,13 @@ describe('noemaloom CLI help', () => {
     expect((checkpoint.json?.data as { enabled: boolean; mode: string }).enabled).toBe(true);
     expect((checkpoint.json?.data as { mode: string }).mode).toBe('inject');
 
+    const beforeNoopSeq = ((checkpoint.json?.data as { counters: { projectActivitySeq: number } }).counters).projectActivitySeq;
+    const noopCheckpoint = await runJson(['anchor', 'checkpoint', '--project', projectRoot, '--json', JSON.stringify({})]);
+    expect(noopCheckpoint.code).toBe(0);
+    expect((noopCheckpoint.json?.data as { status: string }).status).toBe('noop');
+    expect(((noopCheckpoint.json?.data as { counters: { projectActivitySeq: number } }).counters).projectActivitySeq).toBe(beforeNoopSeq);
+    expect((noopCheckpoint.json?.data as { stateEffectsDetailed: unknown[] }).stateEffectsDetailed).toEqual([]);
+
     const retired = await runJson([
       'anchor',
       'retire',
@@ -129,7 +136,7 @@ describe('noemaloom CLI help', () => {
 
     expect(result.code).toBe(1);
     expect(result.stderr).not.toContain('ZodError');
-    expect(result.stderr).not.toContain('invalid_type');
+    expect(result.stderr).toBe('');
     expect(result.json?.ok).toBe(false);
     expect((result.json?.data as { status: string }).status).toBe('validation_error');
     expect((result.json?.warnings as Array<{ code: string }>)[0].code).toBe('validation_error');
@@ -144,15 +151,18 @@ describe('noemaloom CLI help', () => {
       code: 'validation_error',
       message: 'Unknown anchor action: unknown-action'
     });
+    expect(unknownAction.stderr).toBe('');
 
     const badJson = await runJson(['anchor', 'status', '--json', '{']);
     expect(badJson.code).toBe(1);
     expect(badJson.json?.ok).toBe(false);
     expect((badJson.json?.data as { status: string }).status).toBe('validation_error');
+    expect(badJson.stderr).toBe('');
 
     const unknownCommand = await runJson(['frobnicate']);
     expect(unknownCommand.code).toBe(1);
     expect(unknownCommand.json?.ok).toBe(false);
     expect(unknownCommand.json?.tool).toBe('noemaloom_cli');
+    expect(unknownCommand.stderr).toBe('');
   });
 });

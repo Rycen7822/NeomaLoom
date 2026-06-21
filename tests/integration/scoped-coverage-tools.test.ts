@@ -245,11 +245,27 @@ describe('scoped coverage tool semantics', () => {
       responseProfile: 'navigation'
     });
 
-    const data = result.data as { stateEffects: string[]; navigation: { enabled: boolean; queryTargetCards: Array<{ path: string }> } };
+    const data = result.data as {
+      stateEffects: string[];
+      stateEffectsDetailed: Array<{ effect: string; sourceWrites: boolean; worksetWrites: boolean; counterWrites: string[]; navigationMode: string }>;
+      navigation: { enabled: boolean; queryTargetCards: Array<{ path: string }> };
+    };
     expect(result.ok).toBe(true);
     expect(data.navigation.enabled).toBe(true);
     expect(data.navigation.queryTargetCards[0]).toMatchObject({ path: 'DeepScientist/quests/001/STAGE10_推进规划.md' });
     expect(data.stateEffects).toEqual(expect.arrayContaining(['workset.navigation_query_recorded']));
+    expect(data.stateEffectsDetailed).toEqual([
+      expect.objectContaining({
+        effect: 'workset.navigation_query_recorded',
+        sourceWrites: false,
+        worksetWrites: true,
+        navigationMode: 'silent',
+        counterWrites: expect.arrayContaining(['projectActivitySeq', 'navigationQuerySeq'])
+      })
+    ]);
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'navigation_silent_state_effect', severity: 'info' })
+    ]));
 
     const workset = JSON.parse(await readFile(path.join(projectRoot, '.noemaloom', 'workset', 'anchors.json'), 'utf8')) as {
       anchors: Array<{ path: string; state: string; source: string }>;
@@ -472,7 +488,7 @@ describe('scoped coverage tool semantics', () => {
     expect(JSON.stringify(result).length).toBeLessThan(100_000);
   });
 
-  it('nl_verify_task scans cold docs from inventory and fails on remaining old terms', async () => {
+  it('nl_verify_task scans cold docs from inventory and reports outside old terms as attention by default', async () => {
     const projectRoot = await createScopedProject();
     await writeProjectFile(projectRoot, 'src/client.ts', 'export function createClient() { return "timeoutMs"; }\n');
     await writeProjectFile(projectRoot, 'docs/api/client.md', '# Client API\n\nStill says legacyTimeout.\n');
@@ -489,7 +505,7 @@ describe('scoped coverage tool semantics', () => {
 
     const coverage = (result.data as { coverage: { status: string; unsyncedDocRoles: Array<{ path: string; term: string }> } }).coverage;
     expect(result.ok).toBe(false);
-    expect(coverage.status).toBe('fail');
+    expect(coverage.status).toBe('needs_attention');
     expect(coverage.unsyncedDocRoles).toEqual([
       expect.objectContaining({ path: 'docs/api/client.md', term: 'legacyTimeout' })
     ]);

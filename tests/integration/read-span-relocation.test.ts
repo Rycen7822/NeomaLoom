@@ -262,6 +262,46 @@ describe('nl_read_span relocation and block sizing', () => {
     expect(read.data.content).toContain('LARGE_MODULE_SENTINEL');
   });
 
+  it('uses focus lines to preview the relevant segment of an oversized code module', async () => {
+    const projectRoot = await createProject();
+    await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'all',
+      mode: 'safe'
+    });
+    const locate = await callInternalTool('nl_locate', {
+      projectPath: projectRoot,
+      goal: 'Read LARGE_MODULE_SENTINEL large_module module',
+      targetRoles: ['source'],
+      limit: 20
+    });
+    const locateData = locate.data as {
+      targets: Array<{ spanId: string; path: string; kind: string; startLine: number; endLine: number }>;
+    };
+    const moduleSpan = locateData.targets.find((item: { path: string; kind: string }) =>
+      item.path === 'src/large_module.py' &&
+      item.kind === 'code.module'
+    );
+    expect(moduleSpan).toBeTruthy();
+    if (!moduleSpan) {
+      throw new Error('large module span was not located');
+    }
+
+    const read = await callInternalTool('nl_read_span', {
+      projectPath: projectRoot,
+      spanId: moduleSpan.spanId,
+      contextLines: 0,
+      maxLines: 80,
+      focusLine: moduleSpan.startLine + 170
+    });
+
+    expect(read.ok).toBe(true);
+    expect(read.data).toMatchObject({ status: 'block_too_large', path: 'src/large_module.py' });
+    expect(read.data.startLine).toBeGreaterThan(moduleSpan.startLine);
+    expect(read.data.content).toContain('VALUE_170 = 170');
+    expect(read.data.content).not.toContain('LARGE_MODULE_SENTINEL');
+  });
+
   it('relocates truncated large code spans by prefix after line drift', async () => {
     const projectRoot = await createProject();
     await writeProjectFile(
@@ -405,7 +445,7 @@ describe('nl_read_span relocation and block sizing', () => {
     const locate = await callInternalTool('nl_locate', {
       projectPath: projectRoot,
       goal: 'Read Secrets fixture paragraph',
-      targetRoles: ['canonical_api_doc'],
+      targetRoles: ['document'],
       limit: 5
     });
     const locateData = locate.data as {

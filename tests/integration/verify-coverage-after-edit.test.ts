@@ -191,7 +191,11 @@ describe('aggregated impact planning and coverage verification after edits', () 
       },
       impact: expect.objectContaining({
         requiredVerification: expect.arrayContaining(['tests/client.test.ts'])
-      })
+      }),
+      requiredVerification: expect.arrayContaining(['tests/client.test.ts']),
+      requiredVerificationDetails: expect.arrayContaining([
+        expect.objectContaining({ path: 'tests/client.test.ts', source: 'coverage_gap', severity: 'required' })
+      ])
     });
 
     await writeProjectFile(

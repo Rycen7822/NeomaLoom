@@ -1,4 +1,5 @@
 import { classifyFileRole } from '../../packages/core/src/files/role-classifier.js';
+import { classifyPathLayer, isDefaultBusinessPath } from '../../packages/core/src/files/path-layer.js';
 
 const roleCases: Array<[string, ReturnType<typeof classifyFileRole>]> = [
   ['README.md', 'readme_doc'],
@@ -41,5 +42,17 @@ const roleCases: Array<[string, ReturnType<typeof classifyFileRole>]> = [
 describe('file role classifier', () => {
   it.each(roleCases)('classifies %s as %s', (repoPath, expected) => {
     expect(classifyFileRole(repoPath)).toBe(expected);
+  });
+
+  it('classifies non-business path layers separately from file roles', () => {
+    expect(classifyPathLayer('.agents/skills/review/SKILL.md')).toBe('tooling_agent');
+    expect(classifyPathLayer('hermes-plugin-backups/noemaloom/src/index.ts')).toBe('backup');
+    expect(classifyPathLayer('artifacts/daily/run.json')).toBe('artifact');
+    expect(classifyPathLayer('runs/exp-001/checkpoints/model.bin')).toBe('artifact');
+    expect(classifyPathLayer('token_efficiency_benchmark/result.md')).toBe('artifact');
+    expect(classifyPathLayer('archive/old-plan.md')).toBe('archive');
+    expect(classifyPathLayer('src/client.ts')).toBe('business');
+    expect(isDefaultBusinessPath('.agents/skills/review/SKILL.md')).toBe(false);
+    expect(isDefaultBusinessPath('src/client.ts')).toBe(true);
   });
 });

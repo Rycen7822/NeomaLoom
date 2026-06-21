@@ -4,6 +4,7 @@ import { buildCoveragePlan, type CoveragePlan } from '../../locator/coverage-pla
 import { generateCandidates } from '../../locator/candidate-generation.js';
 import { decideCandidate } from '../../locator/decision.js';
 import { rankCandidates, type RankedCandidate, type LocatorDecision } from '../../locator/ranking.js';
+import { expandRoleAliases, roleMatchesRequest } from '../../spans/role-groups.js';
 import { createEnvelope, resolveProjectRootFromInput, type EnvelopeWarning, type GraphState, type NoemaLoomEnvelope, type TokenBudget } from '../envelope.js';
 import { applyLocatorTokenBudget } from '../token-budget.js';
 
@@ -132,7 +133,12 @@ export async function runLocator(input: {
     includeGeneratedVendor
   });
   const ranked = rankCandidates(generated.candidates, generated.normalizedQuery, { includeGeneratedVendor });
-  const diversified = diversifyRankedCandidates(ranked);
+  const requestedTargetRoles = expandRoleAliases(input.targetRoles ?? []);
+  const rankedTargets = requestedTargetRoles.length > 0
+    ? ranked.filter(candidate => roleMatchesRequest(String(candidate.role), requestedTargetRoles))
+    : ranked;
+  const exactPathRequested = generated.normalizedQuery.pathTerms.some(term => term.includes('/') || /\.[A-Za-z0-9]+$/.test(term));
+  const diversified = exactPathRequested ? rankedTargets : diversifyRankedCandidates(rankedTargets);
   const coveragePlan = buildCoveragePlan({
     query: generated.normalizedQuery,
     targets: ranked,

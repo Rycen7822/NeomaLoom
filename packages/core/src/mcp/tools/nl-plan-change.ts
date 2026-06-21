@@ -1,7 +1,9 @@
 import { z } from 'zod';
 
 import { createEnvelope, resolveProjectRootFromInput, type EnvelopeWarning, type GraphState, type NoemaLoomEnvelope } from '../envelope.js';
+import { mergeRequiredVerification, requiredVerificationPaths } from '../../verifier/required-verification.js';
 import { RESPONSE_PROFILES, shapeEvidence, shapePlanChangeData, type ResponseProfile } from '../output-profile.js';
+import { estimateEnvelopeTokenBudget } from '../token-budget.js';
 import {
   aggregateOk,
   combineEvidence,
@@ -171,6 +173,10 @@ export async function handleNlPlanChange(input: unknown): Promise<NoemaLoomEnvel
     ...promotionActions,
     ...(impactData.requiredActions ?? [])
   ]);
+  const requiredVerificationDetails = mergeRequiredVerification({
+    impactRequiredVerification: impactData.requiredVerification,
+    coveragePlan: locateData.coveragePlan
+  });
 
   const responseProfile = parsed.responseProfile as ResponseProfile;
   const data = {
@@ -179,11 +185,26 @@ export async function handleNlPlanChange(input: unknown): Promise<NoemaLoomEnvel
     normalizedQuery: locateData.normalizedQuery,
     trace: traceSkipped ? null : trace?.data ?? null,
     impact: impactSkipped ? null : impact.data,
-    requiredVerification: impactData.requiredVerification ?? [],
+    requiredVerification: requiredVerificationPaths(requiredVerificationDetails),
+    requiredVerificationDetails,
     requiredActions,
     steps: summarizeSteps(envelopes)
   };
   const evidence = combineEvidence(envelopes);
+  const shapedData = shapePlanChangeData(data, responseProfile) as Record<string, unknown>;
+  const shapedEvidence = shapeEvidence(evidence, responseProfile);
+  const nextActions = requiredActions.length > 0
+    ? [...requiredActions, 'call nl_prepare_context when edit targets need ordering']
+    : ['read impacted files with native tools', 'call nl_prepare_context when edit targets need ordering'];
+  const combinedBudget = combineTokenBudget(envelopes);
+  const finalizedBudget = estimateEnvelopeTokenBudget({
+    requested: combinedBudget.requested,
+    data: shapedData,
+    evidence: shapedEvidence,
+    warnings: combineWarnings(envelopes),
+    nextActions,
+    truncated: combinedBudget.truncated
+  });
 
   return createEnvelope({
     ok: aggregateOk(envelopes),
@@ -191,12 +212,10 @@ export async function handleNlPlanChange(input: unknown): Promise<NoemaLoomEnvel
     projectRoot,
     graphRevision: combineGraphRevision(envelopes),
     graphState: combineGraphState(envelopes),
-    tokenBudget: combineTokenBudget(envelopes),
-    warnings: combineWarnings(envelopes),
-    data: shapePlanChangeData(data, responseProfile) as Record<string, unknown>,
-    evidence: shapeEvidence(evidence, responseProfile),
-    nextActions: requiredActions.length > 0
-      ? [...requiredActions, 'call nl_prepare_context when edit targets need ordering']
-      : ['read impacted files with native tools', 'call nl_prepare_context when edit targets need ordering']
+    tokenBudget: finalizedBudget.tokenBudget,
+    warnings: finalizedBudget.warnings,
+    data: shapedData,
+    evidence: shapedEvidence,
+    nextActions
   });
 }

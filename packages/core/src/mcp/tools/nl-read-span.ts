@@ -50,7 +50,10 @@ export const nlReadSpanInputSchema = z
     projectPath: z.string().optional(),
     spanId: z.string().min(1),
     contextLines: z.number().int().min(0).max(80).default(20),
-    maxLines: z.number().int().positive().max(500).default(160)
+    maxLines: z.number().int().positive().max(500).default(160),
+    focusStartLine: z.number().int().positive().optional(),
+    focusEndLine: z.number().int().positive().optional(),
+    focusLine: z.number().int().positive().optional()
   })
   .passthrough();
 
@@ -104,6 +107,25 @@ function segmentRanges(startLine: number, endLine: number, maxLines: number): Ar
     ranges.push({ startLine: line, endLine: Math.min(endLine, line + maxLines - 1) });
   }
   return ranges;
+}
+
+function choosePreviewRange(input: {
+  ranges: Array<{ startLine: number; endLine: number }>;
+  fallback: { startLine: number; endLine: number };
+  focusStartLine?: number;
+  focusEndLine?: number;
+  focusLine?: number;
+}): { startLine: number; endLine: number } {
+  if (input.ranges.length === 0) return input.fallback;
+  const focusStart = input.focusStartLine ?? input.focusLine;
+  const focusEnd = input.focusEndLine ?? input.focusLine ?? focusStart;
+  if (!focusStart || !focusEnd) return input.ranges[0];
+  const focusMid = (focusStart + focusEnd) / 2;
+  return [...input.ranges].sort((left, right) => {
+    const leftMid = (left.startLine + left.endLine) / 2;
+    const rightMid = (right.startLine + right.endLine) / 2;
+    return Math.abs(leftMid - focusMid) - Math.abs(rightMid - focusMid) || left.startLine - right.startLine;
+  })[0];
 }
 
 function redactedContentPayload(content: string): { content: string; redaction?: { hasSensitiveContent: boolean; redactedKinds: string[] } } {
@@ -345,7 +367,14 @@ export async function handleNlReadSpan(input: unknown): Promise<NoemaLoomEnvelop
 
   if (blockTooLarge) {
     const ranges = segmentRanges(relocated.startLine, relocated.endLine, parsed.maxLines);
-    const previewRange = ranges[0] ?? { startLine: relocated.startLine, endLine: Math.min(relocated.endLine, relocated.startLine + parsed.maxLines - 1) };
+    const fallbackRange = { startLine: relocated.startLine, endLine: Math.min(relocated.endLine, relocated.startLine + parsed.maxLines - 1) };
+    const previewRange = choosePreviewRange({
+      ranges,
+      fallback: fallbackRange,
+      focusStartLine: parsed.focusStartLine,
+      focusEndLine: parsed.focusEndLine,
+      focusLine: parsed.focusLine
+    });
     const previewPayload = redactedContentPayload(sliceLines(currentText, previewRange.startLine, previewRange.endLine));
     return createEnvelope({
       ok: true,
@@ -366,6 +395,11 @@ export async function handleNlReadSpan(input: unknown): Promise<NoemaLoomEnvelop
         spanTextHash: sha1(relocated.spanText),
         fileContentHash: sha1(currentText),
         relocation: relocated.relocation,
+        previewFocus: {
+          focusLine: parsed.focusLine,
+          focusStartLine: parsed.focusStartLine,
+          focusEndLine: parsed.focusEndLine
+        },
         segmentRanges: ranges
       }
     });

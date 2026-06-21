@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { createEnvelope, resolveProjectRootFromInput, type NoemaLoomEnvelope } from '../envelope.js';
+import { mergeRequiredVerification, requiredVerificationPaths } from '../../verifier/required-verification.js';
 import {
   aggregateOk,
   combineEvidence,
@@ -34,6 +35,7 @@ export const nlVerifyTaskInputSchema = z
     changedPaths: z.array(z.string()).default([]),
     oldTerms: z.array(z.string()).default([]),
     newTerms: z.array(z.string()).default([]),
+    oldTermPolicy: z.enum(['changed_paths', 'changed_paths_plus_advisory_docs', 'strict_global']).default('changed_paths_plus_advisory_docs'),
     target: z.string().optional(),
     targetType: z.enum(['auto', 'span', 'symbol', 'file', 'feature', 'config', 'doc']).default('auto'),
     depth: z.number().int().min(0).max(5).default(2),
@@ -50,7 +52,8 @@ export async function handleNlVerifyTask(input: unknown): Promise<NoemaLoomEnvel
     goal: parsed.goal,
     changedPaths: parsed.changedPaths,
     oldTerms: parsed.oldTerms,
-    newTerms: parsed.newTerms
+    newTerms: parsed.newTerms,
+    oldTermPolicy: parsed.oldTermPolicy
   });
   const impact =
     parsed.target && parsed.includeImpact
@@ -73,6 +76,11 @@ export async function handleNlVerifyTask(input: unknown): Promise<NoemaLoomEnvel
       : null;
   const envelopes = [coverage, impact, trace];
   const coverageData = coverage.data as CoverageData;
+  const impactData = impact?.data as ({ requiredVerification?: string[] } | null | undefined);
+  const requiredVerificationDetails = mergeRequiredVerification({
+    impactRequiredVerification: impactData?.requiredVerification,
+    coverage: coverage.data
+  });
 
   return createEnvelope({
     ok: aggregateOk(envelopes),
@@ -87,6 +95,8 @@ export async function handleNlVerifyTask(input: unknown): Promise<NoemaLoomEnvel
       coverage: coverage.data,
       impact: impact?.data ?? null,
       trace: trace?.data ?? null,
+      requiredVerification: requiredVerificationPaths(requiredVerificationDetails),
+      requiredVerificationDetails,
       steps: summarizeSteps(envelopes)
     },
     evidence: combineEvidence(envelopes),
