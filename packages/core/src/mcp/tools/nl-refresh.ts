@@ -359,7 +359,9 @@ async function runFeatureProjection(projectRoot: string, graphRevision: string, 
     revision: graphRevision,
     pythonExecutable: usesDefaultWorker ? process.env.PYTHON ?? 'python3' : undefined,
     workerCommand: usesDefaultWorker ? undefined : workerCommand,
-    pythonPath: process.env.NOEMALOOM_PYTHONPATH
+    pythonPath: process.env.NOEMALOOM_PYTHONPATH,
+    timeoutMs: config.featureProjection.timeoutMs,
+    maxOutputBytes: config.featureProjection.maxOutputBytes
   });
   return result.state === 'available' ? [] : result.warnings.map(warning => `featureProjection: ${warning}`);
 }
@@ -402,6 +404,50 @@ type ScopeSelection = {
   hotsetRevision: string | null;
   warnings: string[];
 };
+
+type RefreshTiming = {
+  step: string;
+  durationMs: number;
+};
+
+type DeepIndexReport = {
+  scope: 'none' | 'scoped' | 'full';
+  deepFiles: number;
+  hotFiles: number;
+  coldFiles: number;
+  changedTargetStrategy?: 'scoped_hotset_reindex' | 'full_deep_reindex';
+};
+
+async function timed<T>(timings: RefreshTiming[], step: string, task: () => Promise<T>): Promise<T> {
+  const startedAt = Date.now();
+  try {
+    return await task();
+  } finally {
+    timings.push({ step, durationMs: Date.now() - startedAt });
+  }
+}
+
+function timedSync<T>(timings: RefreshTiming[], step: string, task: () => T): T {
+  const startedAt = Date.now();
+  try {
+    return task();
+  } finally {
+    timings.push({ step, durationMs: Date.now() - startedAt });
+  }
+}
+
+function deepIndexReport(target: RefreshTarget, selection: ScopeSelection): DeepIndexReport {
+  const scope = selection.coverage.deepSpans === 'none' ? 'none' : selection.scoped ? 'scoped' : 'full';
+  return {
+    scope,
+    deepFiles: selection.deepFiles.length,
+    hotFiles: selection.coverage.hotFiles,
+    coldFiles: selection.coverage.coldFiles,
+    ...(target === 'changed'
+      ? { changedTargetStrategy: selection.scoped ? 'scoped_hotset_reindex' as const : 'full_deep_reindex' as const }
+      : {})
+  };
+}
 
 async function selectDeepFiles(input: {
   projectRoot: string;
@@ -526,6 +572,7 @@ async function runRefresh(input: {
   config: NoemaLoomConfig;
 }) {
   const startedAt = Date.now();
+  const timings: RefreshTiming[] = [];
   const refreshNonce = `${startedAt}:${process.hrtime.bigint().toString()}`;
   const previousInventory = await readInventorySnapshot(input.projectRoot);
   const previousCoverage = await readIndexCoverage(input.projectRoot);
@@ -537,16 +584,16 @@ async function runRefresh(input: {
     });
   }
 
-  const inventory = await buildFileInventory({ projectRoot: input.projectRoot, config: input.config, loadIndexedText: false });
+  const inventory = await timed(timings, 'FileInventory', () => buildFileInventory({ projectRoot: input.projectRoot, config: input.config, loadIndexedText: false }));
   const changed = detectChangedFiles(previousInventory, inventory.files);
-  const selection = await selectDeepFiles({
+  const selection = await timed(timings, 'ScopeSelection', () => selectDeepFiles({
     projectRoot: input.projectRoot,
     target: input.target,
     inventory,
     requestedPaths: input.paths,
     promotionReason: input.promotionReason,
     previousCoverage
-  });
+  }));
 
   if (input.target === 'files') {
     await writeInventoryOutputs(input.projectRoot, inventory);
@@ -559,6 +606,9 @@ async function runRefresh(input: {
       graphState: 'partial' as const,
       steps: [...FILE_REFRESH_STEPS],
       coverage: selection.coverage,
+      deepIndex: deepIndexReport(input.target, selection),
+      durationMs: Date.now() - startedAt,
+      timings,
       counts: {
         files: inventory.files.length,
         spans: 0,
@@ -571,19 +621,19 @@ async function runRefresh(input: {
   }
 
   const deepInventory: FileInventory = { files: selection.deepFiles, ignoredPaths: inventory.ignoredPaths };
-  const codeFacts = await indexCodeFacts({
+  const codeFacts = await timed(timings, 'CodeFactIndexer', () => indexCodeFacts({
     projectRoot: input.projectRoot,
     inventory: deepInventory,
     includeExperimentNotes: selection.scoped,
     includeVendor: selection.scoped
-  });
-  const documentIndexed = await indexDocumentFiles(input.projectRoot, selection.deepFiles.filter(file => !file.oversized && isDocument(file, selection.scoped)));
+  }));
+  const documentIndexed = await timed(timings, 'DocumentSpanIndexer', () => indexDocumentFiles(input.projectRoot, selection.deepFiles.filter(file => !file.oversized && isDocument(file, selection.scoped))));
   const documentSpans = documentIndexed.spans;
   const documentWarnings = documentIndexed.warnings;
-  const artifactIndexed = await indexArtifactFiles(selection.deepFiles.filter(file => !file.oversized && isArtifact(file, selection.scoped)));
+  const artifactIndexed = await timed(timings, 'ArtifactSpanIndexer', () => indexArtifactFiles(selection.deepFiles.filter(file => !file.oversized && isArtifact(file, selection.scoped))));
   const artifactSpans = artifactIndexed.spans;
   const artifactWarnings = artifactIndexed.warnings;
-  const testExampleSpans = await indexTestExampleFiles(selection.deepFiles.filter(file => !file.oversized && isTestExampleCandidate(file, selection.scoped)));
+  const testExampleSpans = await timed(timings, 'TestExampleSpanIndexer', () => indexTestExampleFiles(selection.deepFiles.filter(file => !file.oversized && isTestExampleCandidate(file, selection.scoped))));
   const graphRevisionSeed = createGraphRevision({
     target: input.target,
     files: selection.deepFiles,
@@ -592,9 +642,9 @@ async function runRefresh(input: {
     nonce: `${refreshNonce}:seed`
   });
   const featureProjectionEnabled = !selection.scoped && input.config.featureProjection.enabled;
-  const featureWarnings = featureProjectionEnabled ? await runFeatureProjection(input.projectRoot, graphRevisionSeed, input.config) : [];
-  const features = featureProjectionEnabled ? await readFeatures(input.projectRoot, input.config) : [];
-  const projection = buildProjectionGraph({
+  const featureWarnings = featureProjectionEnabled ? await timed(timings, 'FeatureProjectionWorker', () => runFeatureProjection(input.projectRoot, graphRevisionSeed, input.config)) : [];
+  const features = featureProjectionEnabled ? await timed(timings, 'FeatureProjectionReader', () => readFeatures(input.projectRoot, input.config)) : [];
+  const projection = timedSync(timings, 'ProjectionBuilder', () => buildProjectionGraph({
     projectRoot: input.projectRoot,
     files: selection.deepFiles,
     codeSpans: codeFacts.spans,
@@ -602,9 +652,9 @@ async function runRefresh(input: {
     artifactSpans,
     testExampleSpans,
     features: selection.scoped ? [] : features
-  });
-  const xrefEdges = buildCrossReferenceEdges(extractLinkCandidatesFromSpans(projection.spans));
-  const edges = uniqueEdges([...projection.edges, ...codeFacts.edges.map(codeEdgeToRepoEdge), ...xrefEdges]);
+  }));
+  const xrefEdges = timedSync(timings, 'CrossReferenceLinker', () => buildCrossReferenceEdges(extractLinkCandidatesFromSpans(projection.spans)));
+  const edges = timedSync(timings, 'EdgeDeduplicator', () => uniqueEdges([...projection.edges, ...codeFacts.edges.map(codeEdgeToRepoEdge), ...xrefEdges]));
   const graphRevision = createGraphRevision({
     target: input.target,
     files: inventory.files,
@@ -613,17 +663,17 @@ async function runRefresh(input: {
     nonce: refreshNonce
   });
   const warnings = [...documentWarnings, ...artifactWarnings, ...featureWarnings, ...selection.warnings].sort();
-  const map = buildRepositoryMap({
+  const map = timedSync(timings, 'DerivedRepositoryMapBuilder', () => buildRepositoryMap({
     projectRoot: input.projectRoot,
     graphRevision,
     spans: projection.spans,
     edges,
     warnings
-  });
-  await writeRepositoryMap({ projectRoot: input.projectRoot, map });
-  await writeInventoryOutputs(input.projectRoot, inventory);
-  await writeDocumentAnchorIndex(input.projectRoot, documentSpans, documentWarnings);
-  await writeRefreshRevision({
+  }));
+  await timed(timings, 'DerivedRepositoryMapWriter', () => writeRepositoryMap({ projectRoot: input.projectRoot, map }));
+  await timed(timings, 'InventoryWriter', () => writeInventoryOutputs(input.projectRoot, inventory));
+  await timed(timings, 'DocumentAnchorIndexWriter', () => writeDocumentAnchorIndex(input.projectRoot, documentSpans, documentWarnings));
+  await timed(timings, 'RefreshRevisionWriter', () => writeRefreshRevision({
     projectRoot: input.projectRoot,
     graphRevision,
     target: input.target,
@@ -634,7 +684,7 @@ async function runRefresh(input: {
     edges,
     warnings,
     coverage: selection.coverage
-  });
+  }));
 
   return {
     status: 'refreshed',
@@ -645,6 +695,9 @@ async function runRefresh(input: {
     steps: selection.scoped ? [...SCOPED_REFRESH_STEPS] : [...FULL_REFRESH_STEPS],
     changed: input.target === 'changed' ? changed : undefined,
     coverage: selection.coverage,
+    deepIndex: deepIndexReport(input.target, selection),
+    durationMs: Date.now() - startedAt,
+    timings,
     counts: {
       files: inventory.files.length,
       hotFiles: selection.coverage.hotFiles,

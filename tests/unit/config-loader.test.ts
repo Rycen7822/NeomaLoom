@@ -36,6 +36,10 @@ describe('NoemaLoom config loader', () => {
       indexing: {
         ...validConfig.indexing,
         maxFileBytes: 'large'
+      },
+      featureProjection: {
+        ...validConfig.featureProjection,
+        timeoutMs: 'slow'
       }
     };
     await writeFile(paths.configFile, `${JSON.stringify(invalidConfig, null, 2)}\n`);
@@ -50,9 +54,42 @@ describe('NoemaLoom config loader', () => {
         {
           field: 'indexing.maxFileBytes',
           message: 'indexing.maxFileBytes must be a positive integer'
+        },
+        {
+          field: 'featureProjection.timeoutMs',
+          message: 'featureProjection.timeoutMs must be a positive integer'
         }
       ]
     });
-    expect(JSON.parse(await readFile(paths.configFile, 'utf8')).indexing.maxFileBytes).toBe('large');
+    const stored = JSON.parse(await readFile(paths.configFile, 'utf8')) as { indexing: { maxFileBytes: unknown }; featureProjection: { timeoutMs: unknown } };
+    expect(stored.indexing.maxFileBytes).toBe('large');
+    expect(stored.featureProjection.timeoutMs).toBe('slow');
+  });
+
+  it('normalizes old configs with additive featureProjection fields and current default ignore globs', async () => {
+    const projectRoot = await createTempProject();
+    const paths = resolveNoemaLoomPaths(projectRoot);
+    await ensureStateDir(projectRoot);
+    const oldConfig = createDefaultConfig(projectRoot);
+    oldConfig.fileInventory.ignoreGlobs = ['node_modules/**', 'custom-cache/**'];
+    delete (oldConfig.featureProjection as Partial<typeof oldConfig.featureProjection>).timeoutMs;
+    delete (oldConfig.featureProjection as Partial<typeof oldConfig.featureProjection>).maxOutputBytes;
+    await writeFile(paths.configFile, `${JSON.stringify(oldConfig, null, 2)}\n`);
+
+    const result = await loadOrCreateConfig(projectRoot);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.created).toBe(false);
+    expect(result.config.featureProjection).toMatchObject({
+      timeoutMs: createDefaultConfig(projectRoot).featureProjection.timeoutMs,
+      maxOutputBytes: createDefaultConfig(projectRoot).featureProjection.maxOutputBytes
+    });
+    expect(result.config.fileInventory.ignoreGlobs).toEqual(
+      expect.arrayContaining(['node_modules/**', 'custom-cache/**', '.noemaloom/**', 'hermes-plugin-backups/**'])
+    );
+    const stored = JSON.parse(await readFile(paths.configFile, 'utf8')) as { featureProjection: Record<string, unknown>; fileInventory: { ignoreGlobs: string[] } };
+    expect(stored.featureProjection.timeoutMs).toBeUndefined();
+    expect(stored.fileInventory.ignoreGlobs).toEqual(['node_modules/**', 'custom-cache/**']);
   });
 });

@@ -18,6 +18,8 @@ export type NoemaLoomConfig = {
     enabled: boolean;
     workerCommand: string;
     stateDir: string;
+    timeoutMs: number;
+    maxOutputBytes: number;
   };
   safety: {
     denyRawToolExposure: boolean;
@@ -118,7 +120,9 @@ export function createDefaultConfig(projectRoot: string): NoemaLoomConfig {
     featureProjection: {
       enabled: true,
       workerCommand: 'python3 -m nl_rpg_projection_worker.main',
-      stateDir: '.noemaloom/planning'
+      stateDir: '.noemaloom/planning',
+      timeoutMs: 120_000,
+      maxOutputBytes: 1_048_576
     },
     safety: {
       denyRawToolExposure: true,

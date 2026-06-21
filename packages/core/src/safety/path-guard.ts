@@ -1,5 +1,5 @@
 import { lstatSync, readFileSync, statSync } from 'node:fs';
-import { open, appendFile, lstat, mkdir, readFile, readdir, rename, stat, unlink, writeFile, type FileHandle } from 'node:fs/promises';
+import { open, appendFile, lstat, mkdir, readFile, readdir, rename, stat, unlink, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 
 export class StatePathGuardError extends Error {
@@ -173,6 +173,18 @@ async function lstatIfExists(targetPath: string) {
   }
 }
 
+async function syncDirectoryBestEffort(directory: string): Promise<void> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(directory, 'r');
+    await handle.sync();
+  } catch {
+    // Directory fsync is not supported on every filesystem/runtime; file fsync remains strict.
+  } finally {
+    await handle?.close();
+  }
+}
+
 async function assertNoSymlinkEscape(projectRoot: string, targetPath: string): Promise<void> {
   const safePath = assertWritableStatePath(projectRoot, targetPath);
   const stateDir = getStateDir(projectRoot);
@@ -226,13 +238,20 @@ export async function writeFileInsideStateDir(
   );
   await assertNoSymlinkEscape(projectRoot, tempPath);
   let wroteTemp = false;
+  let tempHandle: FileHandle | undefined;
   try {
-    await writeFile(tempPath, data, { flag: 'wx' });
+    tempHandle = await open(tempPath, 'wx');
     wroteTemp = true;
+    await tempHandle.writeFile(data);
+    await tempHandle.sync();
+    await tempHandle.close();
+    tempHandle = undefined;
     await rename(tempPath, safePath);
     wroteTemp = false;
+    await syncDirectoryBestEffort(path.dirname(safePath));
     return safePath;
   } finally {
+    await tempHandle?.close();
     if (wroteTemp) {
       try {
         await unlink(tempPath);

@@ -152,4 +152,26 @@ describe('feature worker client', () => {
     await delay(2_500);
     expect(processIsAlive(pid)).toBe(false);
   });
+
+  it('terminates workers whose stdout exceeds the configured output cap', async () => {
+    const projectRoot = await createTempProject();
+    const fakeWorker = path.join(projectRoot, 'overflow-worker');
+    await writeFile(
+      fakeWorker,
+      '#!/usr/bin/env bash\nread _line\nhead -c 4096 /dev/zero | tr "\\0" x\nprintf "\\n"\nsleep 2\n'
+    );
+    await chmod(fakeWorker, 0o755);
+
+    const result = await projectFeatures({
+      command: 'feature.status',
+      projectRoot,
+      stateDir: path.join(projectRoot, '.noemaloom'),
+      revision: 'rev-client',
+      workerCommand: `"${fakeWorker}"`,
+      maxOutputBytes: 128
+    });
+
+    expect(result.state).toBe('unavailable');
+    expect(result.warnings.join('\n')).toContain('exceeded maxOutputBytes');
+  });
 });

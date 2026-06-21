@@ -10,6 +10,7 @@ export async function projectFeatures(input: {
   pythonPath?: string;
   workerCommand?: string;
   timeoutMs?: number;
+  maxOutputBytes?: number;
 }): Promise<FeatureWorkerResult> {
   return runFeatureWorkerCommand(input);
 }

@@ -64,6 +64,12 @@ describe('nl_refresh target all', () => {
       'DerivedRepositoryMapBuilder',
       'RefreshRevisionWriter'
     ]));
+    expect(result.data.durationMs).toEqual(expect.any(Number));
+    expect(result.data.timings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ step: 'FileInventory', durationMs: expect.any(Number) }),
+      expect.objectContaining({ step: 'RefreshRevisionWriter', durationMs: expect.any(Number) })
+    ]));
+    expect(result.data.deepIndex).toMatchObject({ scope: 'full', deepFiles: expect.any(Number) });
     await expect(access(path.join(projectRoot, '.noemaloom', 'files', 'inventory.json'))).resolves.toBeUndefined();
     await expect(access(path.join(projectRoot, '.noemaloom', 'files', 'inventory.sqlite'))).rejects.toThrow();
     await expect(access(path.join(projectRoot, '.noemaloom', 'fact', 'codegraph.db'))).resolves.toBeUndefined();

@@ -64,6 +64,10 @@ describe('nl_refresh target changed', () => {
       changed: {
         changedPaths: ['src/client.ts'],
         deletedPaths: ['docs/api/client.md']
+      },
+      deepIndex: {
+        scope: 'full',
+        changedTargetStrategy: 'full_deep_reindex'
       }
     });
     expect(scalar(dbPath, 'SELECT COUNT(*) AS value FROM refresh_revisions')).toBe(beforeRevisionCount + 1);

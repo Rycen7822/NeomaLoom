@@ -19,6 +19,7 @@ export type FeatureWorkerResult = {
 
 const DEFAULT_WORKER_ARGS = ['-m', 'nl_rpg_projection_worker.main'] as const;
 const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_MAX_OUTPUT_BYTES = 1_048_576;
 const FORCE_KILL_GRACE_MS = 2_000;
 
 function parseWorkerCommand(command: string): string[] {
@@ -95,6 +96,7 @@ export async function runFeatureWorkerCommand(input: {
   pythonPath?: string;
   workerCommand?: string;
   timeoutMs?: number;
+  maxOutputBytes?: number;
 }): Promise<FeatureWorkerResult> {
   let command;
   try {
@@ -106,16 +108,17 @@ export async function runFeatureWorkerCommand(input: {
     ? [input.pythonPath, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter)
     : process.env.PYTHONPATH;
   const timeoutMs = Math.max(1, Math.floor(input.timeoutMs ?? DEFAULT_TIMEOUT_MS));
+  const maxOutputBytes = Math.max(1, Math.floor(input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES));
 
   return new Promise(resolve => {
     let settled = false;
-    let timedOut = false;
+    let terminating = false;
     let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
     const settle = (result: FeatureWorkerResult): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timeoutTimer);
-      if (!timedOut && forceKillTimer) clearTimeout(forceKillTimer);
+      if (!terminating && forceKillTimer) clearTimeout(forceKillTimer);
       resolve(result);
     };
 
@@ -132,17 +135,33 @@ export async function runFeatureWorkerCommand(input: {
     let stdout = '';
     let stderr = '';
     const timeoutTimer = setTimeout(() => {
-      timedOut = true;
+      terminating = true;
       child.kill('SIGTERM');
       forceKillTimer = setTimeout(() => child.kill('SIGKILL'), FORCE_KILL_GRACE_MS);
       settle({ state: 'unavailable', warnings: [`Worker timed out after ${timeoutMs}ms.`] });
     }, timeoutMs);
 
+    const appendOutput = (stream: 'stdout' | 'stderr', chunk: unknown): void => {
+      if (settled) return;
+      const text = String(chunk);
+      if (stream === 'stdout') stdout += text;
+      else stderr += text;
+      if (stdout.length + stderr.length > maxOutputBytes) {
+        terminating = true;
+        child.kill('SIGTERM');
+        forceKillTimer = setTimeout(() => child.kill('SIGKILL'), FORCE_KILL_GRACE_MS);
+        settle({
+          state: 'unavailable',
+          warnings: [`Worker output exceeded maxOutputBytes=${maxOutputBytes}.`]
+        });
+      }
+    };
+
     child.stdout.on('data', chunk => {
-      stdout += String(chunk);
+      appendOutput('stdout', chunk);
     });
     child.stderr.on('data', chunk => {
-      stderr += String(chunk);
+      appendOutput('stderr', chunk);
     });
     child.stdin.on('error', () => {
       // The worker may exit before consuming stdin (for example malformed-output probes).
@@ -152,7 +171,7 @@ export async function runFeatureWorkerCommand(input: {
       settle({ state: 'unavailable', warnings: [error.message] });
     });
     child.on('close', code => {
-      if (timedOut) {
+      if (terminating) {
         if (forceKillTimer) clearTimeout(forceKillTimer);
         return;
       }

@@ -55,10 +55,42 @@ function validateString(value: unknown, field: string, errors: ConfigValidationE
   }
 }
 
-export function validateConfig(value: unknown, projectRoot: string): ConfigLoadResult {
-  const errors: ConfigValidationError[] = [];
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
+}
 
+function normalizeConfigWithDefaults(value: unknown, projectRoot: string): unknown {
   if (!isRecord(value)) {
+    return value;
+  }
+
+  const defaults = createDefaultConfig(projectRoot);
+  const normalized: Record<string, unknown> = { ...value };
+
+  if (isRecord(value.fileInventory)) {
+    normalized.fileInventory = {
+      ...value.fileInventory,
+      ignoreGlobs: Array.isArray(value.fileInventory.ignoreGlobs)
+        ? uniqueStrings([...defaults.fileInventory.ignoreGlobs, ...value.fileInventory.ignoreGlobs.filter((item): item is string => typeof item === 'string')])
+        : value.fileInventory.ignoreGlobs
+    };
+  }
+
+  if (isRecord(value.featureProjection)) {
+    normalized.featureProjection = {
+      ...defaults.featureProjection,
+      ...value.featureProjection
+    };
+  }
+
+  return normalized;
+}
+
+export function validateConfig(rawValue: unknown, projectRoot: string): ConfigLoadResult {
+  const errors: ConfigValidationError[] = [];
+  const normalizedValue = normalizeConfigWithDefaults(rawValue, projectRoot);
+
+  if (!isRecord(normalizedValue)) {
     return {
       ok: false,
       status: 'config_invalid',
@@ -66,6 +98,8 @@ export function validateConfig(value: unknown, projectRoot: string): ConfigLoadR
       errors: [{ field: '$', message: 'config.json must be an object' }]
     };
   }
+
+  const value = normalizedValue;
 
   if (value.schemaRevision !== 1) {
     errors.push({ field: 'schemaRevision', message: 'schemaRevision must be 1' });
@@ -103,6 +137,8 @@ export function validateConfig(value: unknown, projectRoot: string): ConfigLoadR
     validateBoolean(featureProjection.enabled, 'featureProjection.enabled', errors);
     validateString(featureProjection.workerCommand, 'featureProjection.workerCommand', errors);
     validateString(featureProjection.stateDir, 'featureProjection.stateDir', errors);
+    validatePositiveInteger(featureProjection.timeoutMs, 'featureProjection.timeoutMs', errors);
+    validatePositiveInteger(featureProjection.maxOutputBytes, 'featureProjection.maxOutputBytes', errors);
   }
 
   const safety = isRecord(value.safety) ? value.safety : undefined;
