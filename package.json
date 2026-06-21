@@ -19,13 +19,13 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@types/node": "^20.19.30",
+    "@types/node": "^22.13.0",
     "typescript": "^5.0.0",
     "vitest": "^2.1.9"
   },
   "dependencies": {
     "@cfworker/json-schema": "^4.1.1",
-    "@modelcontextprotocol/server": "^2.0.0-alpha.2",
+    "@modelcontextprotocol/server": "2.0.0-alpha.2",
     "mdast-util-to-string": "^4.0.0",
     "remark-gfm": "^4.0.1",
     "remark-mdx": "^3.1.1",

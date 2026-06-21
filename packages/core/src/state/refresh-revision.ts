@@ -57,6 +57,8 @@ function sha1(value: string): string {
 const MAX_REPO_SPAN_INDEXED_TEXT_BYTES = 8192;
 const MAX_REPO_SPAN_LABEL_BYTES = 1024;
 const MAX_REPO_SPAN_SUMMARY_BYTES = 2048;
+const MAX_REFRESH_REVISIONS = 50;
+const MAX_REFRESH_LOG_BYTES = 1_048_576;
 
 function byteLength(value: string): number {
   return Buffer.byteLength(value, 'utf8');
@@ -163,16 +165,39 @@ type RevisionRow = {
 
 function readExistingRevisions(db: Database): RevisionRow[] {
   try {
-    return db
+    const rows = db
       .prepare(
         `SELECT graph_revision, project_root, target, started_at, finished_at, file_count, span_count, edge_count, warnings_json
          FROM refresh_revisions
-         ORDER BY finished_at ASC`
+         ORDER BY finished_at DESC
+         LIMIT ?`
       )
-      .all() as RevisionRow[];
+      .all(Math.max(0, MAX_REFRESH_REVISIONS - 1)) as RevisionRow[];
+    return rows.reverse();
   } catch {
     return [];
   }
+}
+
+async function rotateRefreshLogIfLarge(projectRoot: string, logPath: string): Promise<void> {
+  let info: Awaited<ReturnType<typeof stat>> | undefined;
+  try {
+    info = await stat(logPath);
+  } catch (error) {
+    if (isErrnoException(error) && error.code === 'ENOENT') {
+      return;
+    }
+    throw error;
+  }
+  if (!info.isFile() || info.size <= MAX_REFRESH_LOG_BYTES) {
+    return;
+  }
+  const paths = resolveNoemaLoomPaths(projectRoot);
+  const rotated = assertWritableStatePath(
+    paths.projectRoot,
+    path.join(paths.logsDir, `refresh.${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`)
+  );
+  await rename(logPath, rotated);
 }
 
 export function createGraphRevision(input: {
@@ -490,9 +515,11 @@ export async function writeRefreshRevision(input: {
     path.join(paths.logsDir, 'latest-revision.json'),
     `${JSON.stringify({ graphRevision: input.graphRevision, target: input.target, coverage: input.coverage ?? null }, null, 2)}\n`
   );
+  const refreshLogPath = path.join(paths.logsDir, 'refresh.jsonl');
+  await rotateRefreshLogIfLarge(paths.projectRoot, refreshLogPath);
   await appendFileInsideStateDir(
     paths.projectRoot,
-    path.join(paths.logsDir, 'refresh.jsonl'),
+    refreshLogPath,
     `${JSON.stringify({
       graphRevision: input.graphRevision,
       target: input.target,

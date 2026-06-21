@@ -75,7 +75,7 @@ describe('nl_refresh target changed', () => {
     const projectRoot = await createProject();
     const lockPath = path.join(projectRoot, '.noemaloom', 'locks', 'refresh.lock');
     await mkdir(path.dirname(lockPath), { recursive: true });
-    await writeFile(lockPath, '{}\n');
+    await writeFile(lockPath, `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })}\n`);
 
     const result = await callRegisteredTool('nl_refresh', {
       projectPath: projectRoot,

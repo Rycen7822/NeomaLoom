@@ -1,13 +1,14 @@
 # pyright: reportMissingImports=false
 
 import json
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hermes-plugin"))
 
 from noemaloom import register
-from noemaloom.navigation_hooks import post_tool_call, pre_llm_call
+from noemaloom.navigation_hooks import _manifest_lock_path, post_tool_call, pre_llm_call
 
 
 def write_manifest(project_root: Path, *, enabled: bool = False, mode: str = "silent") -> Path:
@@ -87,6 +88,43 @@ def test_post_tool_call_marks_matching_anchor_useful(tmp_path):
     assert anchor["usefulHitCount"] == 1
     assert anchor["ignoredInjectionCount"] == 0
     assert anchor["state"] == "active"
+    assert not _manifest_lock_path(tmp_path).exists()
+    assert list((tmp_path / ".noemaloom" / "workset").glob(".*.tmp")) == []
+
+
+def test_post_tool_call_skips_update_when_manifest_lock_is_active(tmp_path):
+    manifest_path = write_manifest(tmp_path, enabled=True, mode="inject")
+    lock_path = _manifest_lock_path(tmp_path)
+    lock_path.write_text("active\n", encoding="utf-8")
+
+    result = post_tool_call({
+        "projectPath": str(tmp_path),
+        "tool_name": "read_file",
+        "args": {"path": "src/client.ts"},
+    })
+
+    assert result == {"ok": True}
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["anchors"][0]["usefulHitCount"] == 0
+
+
+def test_post_tool_call_recovers_stale_manifest_lock(tmp_path):
+    manifest_path = write_manifest(tmp_path, enabled=True, mode="inject")
+    lock_path = _manifest_lock_path(tmp_path)
+    lock_path.write_text("stale\n", encoding="utf-8")
+    old = 1
+    os.utime(lock_path, (old, old))
+
+    result = post_tool_call({
+        "projectPath": str(tmp_path),
+        "tool_name": "read_file",
+        "args": {"path": "src/client.ts"},
+    })
+
+    assert result == {"ok": True}
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["anchors"][0]["usefulHitCount"] == 1
+    assert not lock_path.exists()
 
 
 def test_register_adds_tools_skills_and_optional_hooks():

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { callRegisteredTool } from '../../packages/core/src/mcp/tool-registry.js';
+import { createDefaultConfig } from '../../packages/core/src/config/default-config.js';
 
 const require = createRequire(import.meta.url);
 const { DatabaseSync } = require('node:sqlite') as {
@@ -82,6 +83,25 @@ describe('nl_refresh target all', () => {
     };
     expect(map.coreSourceModules.some(item => item.label === 'createClient')).toBe(true);
     expect(map.highConfidenceLinks.length).toBeGreaterThan(0);
+  });
+
+  it('respects disabled feature projection and does not project stale feature files', async () => {
+    const projectRoot = await createProject();
+    const config = createDefaultConfig(projectRoot);
+    config.featureProjection.enabled = false;
+    await mkdir(path.join(projectRoot, '.noemaloom', 'planning'), { recursive: true });
+    await writeFile(path.join(projectRoot, '.noemaloom', 'config.json'), `${JSON.stringify(config, null, 2)}\n`);
+    await writeFile(
+      path.join(projectRoot, '.noemaloom', 'planning', 'features.json'),
+      `${JSON.stringify([{ id: 'feature:stale', title: 'Stale feature', source: 'test' }], null, 2)}\n`
+    );
+
+    const result = await callRegisteredTool('nl_refresh', { projectPath: projectRoot, target: 'all', mode: 'safe' });
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual([]);
+    const dbPath = path.join(projectRoot, '.noemaloom', 'spans', 'spans.db');
+    expect(scalar(dbPath, "SELECT COUNT(*) AS value FROM repo_spans WHERE kind = 'feature.node'")).toBe(0);
   });
 
   it('cleans stale codegraph temp DB artifacts before writing a new codegraph', async () => {

@@ -219,6 +219,14 @@ export type CodeFactSearchResult = {
   signature: string;
 };
 
+function safeFtsQuery(term: string): string | undefined {
+  const cleaned = term.trim().replace(/"/g, '""');
+  if (!cleaned || /[\u0000-\u001f]/.test(cleaned)) {
+    return undefined;
+  }
+  return `"${cleaned}"`;
+}
+
 export function searchCodeGraphDb(input: { dbPath: string; query: string; limit?: number }): CodeFactSearchResult[] {
   const db = openDatabase(input.dbPath);
   try {
@@ -234,6 +242,10 @@ export function searchCodeGraphDb(input: { dbPath: string; query: string; limit?
       return exactRows as CodeFactSearchResult[];
     }
 
+    const ftsQuery = safeFtsQuery(input.query);
+    if (!ftsQuery) {
+      return [];
+    }
     const rows = db
       .prepare(
         `SELECT span_id AS spanId, kind, path, label, qualified_name AS qualifiedName, signature
@@ -241,7 +253,7 @@ export function searchCodeGraphDb(input: { dbPath: string; query: string; limit?
          WHERE codegraph_nodes_fts MATCH ? AND kind != 'code.callsite'
          LIMIT ?`
       )
-      .all(input.query, input.limit ?? 10);
+      .all(ftsQuery, input.limit ?? 10);
     return rows as CodeFactSearchResult[];
   } finally {
     db.close();

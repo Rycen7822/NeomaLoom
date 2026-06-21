@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,8 @@ _READ_WRITE_TOOL_NAMES = {
     "write_file",
     "nl_verify_task",
 }
+_MANIFEST_LOCK_TTL_SECONDS = 30
+_ROOT_CACHE: dict[str, Path] = {}
 
 
 def _is_mapping(value: Any) -> bool:
@@ -66,9 +70,14 @@ def _find_project_root(context: Any = None, **kwargs: Any) -> Path | None:
             continue
         if current.is_file():
             current = current.parent
+        cache_key = str(current)
+        cached = _ROOT_CACHE.get(cache_key)
+        if cached and (_manifest_path(cached)).exists():
+            return cached
         for candidate in [current, *current.parents]:
             manifest = candidate / ".noemaloom" / "workset" / "anchors.json"
             if manifest.exists():
+                _ROOT_CACHE[cache_key] = candidate
                 return candidate
     return None
 
@@ -94,7 +103,42 @@ def _load_manifest(project_root: Path) -> dict[str, Any] | None:
 def _write_manifest(project_root: Path, manifest: dict[str, Any]) -> None:
     manifest_path = _manifest_path(project_root)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    payload = json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    temp_path = manifest_path.with_name(f".{manifest_path.name}.{os.getpid()}.tmp")
+    temp_path.write_text(payload, encoding="utf-8")
+    os.replace(temp_path, manifest_path)
+
+
+def _manifest_lock_path(project_root: Path) -> Path:
+    manifest_path = _manifest_path(project_root)
+    return manifest_path.with_name(f"{manifest_path.name}.lock")
+
+
+@contextmanager
+def _manifest_lock(project_root: Path):
+    lock_path = _manifest_lock_path(project_root)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd: int | None = None
+    try:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, f"{os.getpid()} {time.time()}\n".encode("utf-8"))
+        except FileExistsError:
+            try:
+                if time.time() - lock_path.stat().st_mtime > _MANIFEST_LOCK_TTL_SECONDS:
+                    lock_path.unlink()
+                    fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                    os.write(fd, f"{os.getpid()} {time.time()}\n".encode("utf-8"))
+            except OSError:
+                fd = None
+        yield fd is not None
+    finally:
+        if fd is not None:
+            os.close(fd)
+            try:
+                lock_path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def _navigation_enabled(manifest: dict[str, Any]) -> bool:
@@ -218,12 +262,15 @@ def post_tool_call(context: Any = None, **kwargs: Any) -> dict[str, Any]:
     project_root = _find_project_root(context, **kwargs)
     if not project_root:
         return {"ok": True}
-    manifest = _load_manifest(project_root)
-    if not manifest or not _navigation_enabled(manifest):
-        return {"ok": True}
-    if _mark_useful(manifest, _tool_paths(context, **kwargs)):
-        try:
-            _write_manifest(project_root, manifest)
-        except Exception:
-            return {"ok": False}
+    with _manifest_lock(project_root) as locked:
+        if not locked:
+            return {"ok": True}
+        manifest = _load_manifest(project_root)
+        if not manifest or not _navigation_enabled(manifest):
+            return {"ok": True}
+        if _mark_useful(manifest, _tool_paths(context, **kwargs)):
+            try:
+                _write_manifest(project_root, manifest)
+            except Exception:
+                return {"ok": False}
     return {"ok": True}

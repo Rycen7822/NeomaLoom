@@ -8,6 +8,8 @@ export async function projectFeatures(input: {
   payload?: Record<string, unknown>;
   pythonExecutable?: string;
   pythonPath?: string;
+  workerCommand?: string;
+  timeoutMs?: number;
 }): Promise<FeatureWorkerResult> {
   return runFeatureWorkerCommand(input);
 }

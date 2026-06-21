@@ -101,7 +101,7 @@ export function createDefaultConfig(projectRoot: string): NoemaLoomConfig {
     },
     featureProjection: {
       enabled: true,
-      workerCommand: 'python -m nl_rpg_projection_worker.main',
+      workerCommand: 'python3 -m nl_rpg_projection_worker.main',
       stateDir: '.noemaloom/planning'
     },
     safety: {

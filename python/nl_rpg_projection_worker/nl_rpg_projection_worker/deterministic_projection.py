@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Iterable
@@ -8,18 +9,54 @@ from typing import Any, Iterable
 from .paths import build_worker_paths
 from .projection import write_projection
 
-IGNORED_DIRS = {".git", ".noemaloom", ".rpgkit", "node_modules", "reference", "worknotes"}
+IGNORED_DIRS = {
+    ".git",
+    ".noemaloom",
+    ".rpgkit",
+    ".venv",
+    "venv",
+    "node_modules",
+    "dist",
+    "build",
+    "coverage",
+    "vendor",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    "reference",
+    "worknotes",
+}
 CODE_SUFFIXES = {".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs", ".java", ".kt", ".scala"}
+MAX_WORKER_FILE_BYTES = 1_048_576
 
 
 def _iter_repo_files(project_root: Path) -> Iterable[Path]:
-    for path in sorted(project_root.rglob("*")):
-        if not path.is_file():
-            continue
-        relative = path.relative_to(project_root)
-        if any(part in IGNORED_DIRS for part in relative.parts):
-            continue
-        yield relative
+    for current_root, dirnames, filenames in os.walk(project_root):
+        dirnames[:] = sorted(name for name in dirnames if name not in IGNORED_DIRS)
+        current = Path(current_root)
+        for name in sorted(filenames):
+            path = current / name
+            try:
+                if path.is_symlink() or not path.is_file():
+                    continue
+                if path.stat().st_size > MAX_WORKER_FILE_BYTES:
+                    continue
+                relative = path.relative_to(project_root)
+            except OSError:
+                continue
+            if any(part in IGNORED_DIRS for part in relative.parts):
+                continue
+            yield relative
+
+
+def _read_text(project_root: Path, relative: Path) -> str:
+    target = project_root / relative
+    try:
+        if target.stat().st_size > MAX_WORKER_FILE_BYTES:
+            return ""
+        return target.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
 
 
 def _slug(value: str) -> str:
@@ -30,14 +67,17 @@ def _package_features(project_root: Path) -> list[dict[str, str]]:
     package_file = project_root / "package.json"
     if not package_file.exists():
         return []
-    data = json.loads(package_file.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(package_file.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return []
     name = str(data.get("name") or "package")
     return [{"id": f"package:{name}", "title": f"Package {name}", "source": "package"}]
 
 
 def _doc_features(project_root: Path, relative: Path) -> list[dict[str, str]]:
     features: list[dict[str, str]] = []
-    for line in (project_root / relative).read_text(encoding="utf-8").splitlines():
+    for line in _read_text(project_root, relative).splitlines():
         match = re.match(r"^(#{1,6})\s+(.+)$", line)
         if match:
             title = match.group(2).strip()
@@ -50,7 +90,7 @@ def _doc_features(project_root: Path, relative: Path) -> list[dict[str, str]]:
 
 
 def _test_features(project_root: Path, relative: Path) -> list[dict[str, str]]:
-    text = (project_root / relative).read_text(encoding="utf-8")
+    text = _read_text(project_root, relative)
     names = re.findall(r"\bdef\s+(test_[A-Za-z0-9_]+)\s*\(", text)
     names += re.findall(r"\b(?:test|it)\(\s*['\"]([^'\"]+)['\"]", text)
     return [

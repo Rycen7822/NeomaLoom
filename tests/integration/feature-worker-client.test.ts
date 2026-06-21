@@ -19,6 +19,10 @@ describe('feature worker client', () => {
     const projectRoot = await createTempProject();
     const stateDir = path.join(projectRoot, '.noemaloom');
     await writeProjectFile(projectRoot, 'package.json', JSON.stringify({ name: 'client-demo' }));
+    await writeProjectFile(projectRoot, '.venv/lib/python/site-packages/hidden_test.py', 'def test_hidden_worker_case(): pass\n');
+    await writeProjectFile(projectRoot, 'docs/oversized.md', `${'# Large ignored doc\n'}${'x'.repeat(1_100_000)}`);
+    await mkdir(path.join(projectRoot, 'tests'), { recursive: true });
+    await writeFile(path.join(projectRoot, 'tests', 'binary.test.py'), Buffer.from([0xff, 0xfe, 0x00, 0x61]));
 
     const result = await projectFeatures({
       command: 'feature.project_from_repo',
@@ -36,6 +40,8 @@ describe('feature worker client', () => {
       source: string;
     }>;
     expect(features).toContainEqual({ id: 'package:client-demo', title: 'Package client-demo', source: 'package' });
+    expect(features.some(feature => feature.id.includes('hidden-worker-case'))).toBe(false);
+    expect(features.some(feature => feature.id.includes('oversized'))).toBe(false);
     await expect(access(path.join(projectRoot, '.rpgkit'))).rejects.toThrow();
   });
 
@@ -68,5 +74,41 @@ describe('feature worker client', () => {
         pythonExecutable: fakeWorker
       })
     ).resolves.toMatchObject({ state: 'unavailable' });
+  });
+
+  it('runs an explicitly configured worker command', async () => {
+    const projectRoot = await createTempProject();
+    const fakeWorker = path.join(projectRoot, 'custom worker');
+    await writeFile(fakeWorker, '#!/usr/bin/env bash\nread _line\nprintf "{\\\"ok\\\":true,\\\"data\\\":{\\\"source\\\":\\\"custom\\\"}}\\n"\n');
+    await chmod(fakeWorker, 0o755);
+
+    await expect(
+      projectFeatures({
+        command: 'feature.status',
+        projectRoot,
+        stateDir: path.join(projectRoot, '.noemaloom'),
+        revision: 'rev-client',
+        workerCommand: `"${fakeWorker}"`
+      })
+    ).resolves.toMatchObject({ state: 'available', data: { source: 'custom' }, warnings: [] });
+  });
+
+  it('times out a hung worker and returns an unavailable result', async () => {
+    const projectRoot = await createTempProject();
+    const fakeWorker = path.join(projectRoot, 'sleep-worker');
+    await writeFile(fakeWorker, '#!/usr/bin/env bash\nsleep 5\n');
+    await chmod(fakeWorker, 0o755);
+
+    const result = await projectFeatures({
+      command: 'feature.status',
+      projectRoot,
+      stateDir: path.join(projectRoot, '.noemaloom'),
+      revision: 'rev-client',
+      workerCommand: fakeWorker,
+      timeoutMs: 50
+    });
+
+    expect(result.state).toBe('unavailable');
+    expect(result.warnings.join('\n')).toContain('timed out');
   });
 });

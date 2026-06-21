@@ -146,6 +146,7 @@ describe('CodeGraph-derived code fact indexer', () => {
         signature: 'Calculator'
       })
       ]);
+    expect(() => searchCodeFacts({ dbPath: result.dbPath, query: 'foo-bar "unterminated' })).not.toThrow();
     });
 
   it('keeps same-line duplicate callsites distinct and writes a searchable codegraph DB', async () => {

@@ -2,7 +2,7 @@ import { access, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { withRefreshLock } from '../../packages/core/src/state/refresh-lock.js';
+import { withRefreshLock, inspectRefreshLock } from '../../packages/core/src/state/refresh-lock.js';
 import { resolveNoemaLoomPaths } from '../../packages/core/src/state/paths.js';
 
 async function createTempProject(): Promise<string> {
@@ -43,5 +43,21 @@ describe('refresh lock', () => {
 
     expect(result).toEqual({ ok: true, result: 'after-stale' });
     await expect(access(paths.refreshLockFile)).rejects.toThrow();
+  });
+
+  it('treats invalid and expired pid locks as stale instead of permanently active', async () => {
+    const projectRoot = await createTempProject();
+    const paths = resolveNoemaLoomPaths(projectRoot);
+    await mkdir(paths.locksDir, { recursive: true });
+    await writeFile(paths.refreshLockFile, `${JSON.stringify({ pid: -1, createdAt: new Date().toISOString() })}\n`);
+
+    await expect(inspectRefreshLock(projectRoot)).resolves.toMatchObject({ state: 'stale', pid: -1 });
+    await expect(withRefreshLock(projectRoot, async () => 'after-invalid')).resolves.toEqual({ ok: true, result: 'after-invalid' });
+
+    await mkdir(paths.locksDir, { recursive: true });
+    await writeFile(paths.refreshLockFile, `${JSON.stringify({ pid: process.pid, createdAt: new Date(0).toISOString() })}\n`);
+
+    await expect(inspectRefreshLock(projectRoot)).resolves.toMatchObject({ state: 'stale', pid: process.pid });
+    await expect(withRefreshLock(projectRoot, async () => 'after-expired')).resolves.toEqual({ ok: true, result: 'after-expired' });
   });
 });

@@ -13,13 +13,15 @@ export type RefreshLockResult<T> =
       status: 'refresh_in_progress';
     };
 
+const REFRESH_LOCK_TTL_MS = 6 * 60 * 60 * 1000;
+
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && 'code' in error;
 }
 
 function processIsAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) {
-    return true;
+    return false;
   }
   try {
     process.kill(pid, 0);
@@ -27,6 +29,18 @@ function processIsAlive(pid: number): boolean {
   } catch (error) {
     return !(isErrnoException(error) && error.code === 'ESRCH');
   }
+}
+
+function lockExpired(createdAt: unknown, now = Date.now()): boolean {
+  if (typeof createdAt !== 'string') {
+    return false;
+  }
+  const timestamp = Date.parse(createdAt);
+  return Number.isFinite(timestamp) && now - timestamp > REFRESH_LOCK_TTL_MS;
+}
+
+function lockIsActive(parsed: { pid?: unknown; createdAt?: unknown }): parsed is { pid: number; createdAt?: string } {
+  return typeof parsed.pid === 'number' && processIsAlive(parsed.pid) && !lockExpired(parsed.createdAt);
 }
 
 export type RefreshLockInspection =
@@ -52,7 +66,7 @@ export async function inspectRefreshLock(projectRoot: string): Promise<RefreshLo
       return { state: 'unreadable', message: 'refresh.lock does not contain a numeric pid' };
     }
     return {
-      state: processIsAlive(parsed.pid) ? 'active' : 'stale',
+      state: lockIsActive(parsed) ? 'active' : 'stale',
       pid: parsed.pid,
       ...(typeof parsed.createdAt === 'string' ? { createdAt: parsed.createdAt } : {})
     };
@@ -69,14 +83,14 @@ async function removeStaleLockIfDead(projectRoot: string, lockFile: string): Pro
     return false;
   }
 
-  let parsed: { pid?: unknown };
+  let parsed: { pid?: unknown; createdAt?: unknown };
   try {
-    parsed = JSON.parse(raw) as { pid?: unknown };
+    parsed = JSON.parse(raw) as { pid?: unknown; createdAt?: unknown };
   } catch {
     return false;
   }
 
-  if (typeof parsed.pid !== 'number' || processIsAlive(parsed.pid)) {
+  if (lockIsActive(parsed)) {
     return false;
   }
 

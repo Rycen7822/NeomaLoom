@@ -21,4 +21,16 @@ describe('package scripts', () => {
       typecheck: 'tsc --noEmit'
     });
   });
+
+  it('keeps runtime dependency declarations aligned with the supported Node engine', async () => {
+    const pkg = JSON.parse(await readFile('package.json', 'utf8')) as {
+      engines?: Record<string, string>;
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+
+    expect(pkg.engines?.node).toContain('>=22.13.0');
+    expect(pkg.devDependencies?.['@types/node']).toMatch(/^\^22\./);
+    expect(pkg.dependencies?.['@modelcontextprotocol/server']).toBe('2.0.0-alpha.2');
+  });
 });

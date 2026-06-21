@@ -319,14 +319,28 @@ async function removeDeepIndexOutputs(projectRoot: string): Promise<string[]> {
   return warnings;
 }
 
-async function runFeatureProjection(projectRoot: string, graphRevision: string): Promise<string[]> {
-  const paths = resolveNoemaLoomPaths(projectRoot);
+const DEFAULT_FEATURE_WORKER_COMMANDS = new Set([
+  'python -m nl_rpg_projection_worker.main',
+  'python3 -m nl_rpg_projection_worker.main'
+]);
+
+function resolveFeatureProjectionStateDir(projectRoot: string, configuredStateDir: string): string {
+  const absolute = path.isAbsolute(configuredStateDir)
+    ? path.resolve(configuredStateDir)
+    : path.resolve(projectRoot, configuredStateDir);
+  return path.basename(absolute) === 'planning' ? path.dirname(absolute) : absolute;
+}
+
+async function runFeatureProjection(projectRoot: string, graphRevision: string, config: NoemaLoomConfig): Promise<string[]> {
+  const workerCommand = config.featureProjection.workerCommand.trim();
+  const usesDefaultWorker = DEFAULT_FEATURE_WORKER_COMMANDS.has(workerCommand);
   const result = await projectFeatures({
     command: 'feature.project_from_repo',
     projectRoot,
-    stateDir: paths.stateDir,
+    stateDir: resolveFeatureProjectionStateDir(projectRoot, config.featureProjection.stateDir),
     revision: graphRevision,
-    pythonExecutable: process.env.PYTHON ?? 'python3',
+    pythonExecutable: usesDefaultWorker ? process.env.PYTHON ?? workerCommand.split(/\s+/, 1)[0] : undefined,
+    workerCommand: usesDefaultWorker ? undefined : workerCommand,
     pythonPath: process.env.NOEMALOOM_PYTHONPATH
   });
   return result.state === 'available' ? [] : result.warnings.map(warning => `featureProjection: ${warning}`);
@@ -559,8 +573,9 @@ async function runRefresh(input: {
     edges: [],
     nonce: `${refreshNonce}:seed`
   });
-  const featureWarnings = selection.scoped ? [] : await runFeatureProjection(input.projectRoot, graphRevisionSeed);
-  const features = await readFeatures(input.projectRoot);
+  const featureProjectionEnabled = !selection.scoped && input.config.featureProjection.enabled;
+  const featureWarnings = featureProjectionEnabled ? await runFeatureProjection(input.projectRoot, graphRevisionSeed, input.config) : [];
+  const features = featureProjectionEnabled ? await readFeatures(input.projectRoot) : [];
   const projection = buildProjectionGraph({
     projectRoot: input.projectRoot,
     files: selection.deepFiles,
