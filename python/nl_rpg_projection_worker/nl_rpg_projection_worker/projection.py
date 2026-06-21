@@ -14,12 +14,19 @@ PROJECTION_FILES = {
     "tasks": "tasks.json",
     "meta": "projection-meta.json",
 }
+MAX_WORKER_JSON_BYTES = 10_000_000
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        if path.stat().st_size > MAX_WORKER_JSON_BYTES:
+            return None
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def write_projection(paths: WorkerPaths, projection: dict[str, Any]) -> None:

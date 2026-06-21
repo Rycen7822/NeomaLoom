@@ -52,12 +52,31 @@ function normalizeExtension(extension: string): string {
   return lower.startsWith('.') ? lower : `.${lower}`;
 }
 
+const SENSITIVE_PATH_PATTERNS: RegExp[] = [
+  /(^|\/)\.env(?:$|[._-])/i,
+  /(^|\/)\.envrc$/i,
+  /(^|\/)\.aws(?:\/|$)/i,
+  /(^|\/)\.ssh(?:\/|$)/i,
+  /(^|\/)\.npmrc$/i,
+  /(^|\/)\.pypirc$/i,
+  /(^|\/)\.netrc$/i,
+  /(^|\/)\.git-credentials$/i,
+  /(^|\/)id_(?:rsa|dsa|ecdsa|ed25519)(?:$|\.)/i,
+  /\.(?:pem|key|p12|pfx)$/i,
+  /(^|\/)secrets?\.(?:json|ya?ml|toml|ini)$/i,
+  /(^|\/)credentials(?:$|[._-])/i
+];
+
+function isSensitivePath(repoPath: string): boolean {
+  return SENSITIVE_PATH_PATTERNS.some(pattern => pattern.test(repoPath));
+}
+
 function isIncludedExtension(repoPath: string, includeExtensions: Set<string>): boolean {
   if (includeExtensions.size === 0) {
     return true;
   }
   const extension = path.posix.extname(repoPath).toLowerCase();
-  return extension === '' || includeExtensions.has(extension);
+  return includeExtensions.has(extension);
 }
 
 async function listCandidateFiles(projectRoot: string): Promise<string[]> {
@@ -134,6 +153,11 @@ export async function buildFileInventory(options: BuildFileInventoryOptions): Pr
   const loadIndexedText = options.loadIndexedText ?? true;
 
   for (const repoPath of candidates) {
+    if (isSensitivePath(repoPath)) {
+      ignoredPaths.push(repoPath);
+      continue;
+    }
+
     if (ignoreMatcher.ignores(repoPath)) {
       ignoredPaths.push(repoPath);
       continue;

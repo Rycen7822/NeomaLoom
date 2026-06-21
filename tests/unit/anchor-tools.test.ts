@@ -33,6 +33,7 @@ describe('NoemaLoom compressed navigation anchor tool surface', () => {
       startLine: 10,
       endLine: 18,
       pinned: true,
+      enableNavigation: true,
       reason: 'agent found owner seam'
     });
     expect(promoted.ok).toBe(true);

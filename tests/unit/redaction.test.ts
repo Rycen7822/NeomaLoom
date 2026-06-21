@@ -63,4 +63,15 @@ describe('redaction safety helper', () => {
     expect(result.redactedText).not.toContain('abcdefghijklmnop1234567890');
     expect(result.redactedText).not.toContain('hunter2secure');
   });
+
+  it('redacts quoted passphrases with spaces and gates email scanning behind @', () => {
+    const noEmail = redactText('ordinary release notes '.repeat(2000));
+    expect(noEmail.redactedKinds).not.toContain('email');
+
+    const result = redactText('password = "correct horse battery staple" and owner admin@example.com');
+    expect(result.redactedKinds).toEqual(['password', 'email']);
+    expect(result.redactedText).toContain('[REDACTED:password]');
+    expect(result.redactedText).not.toContain('correct horse battery staple');
+    expect(result.redactedText).not.toContain('admin@example.com');
+  });
 });

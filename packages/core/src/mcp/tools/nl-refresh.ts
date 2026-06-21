@@ -13,7 +13,7 @@ import { projectFeatures } from '../../feature-projection/feature-projector.js';
 import { buildCrossReferenceEdges } from '../../linker/cross-reference-linker.js';
 import { extractLinkCandidatesFromSpans } from '../../linker/evidence-extractors.js';
 import { detectCodexScientistHotsetSeedPaths, isCodexScientistColdPath } from '../../profiles/codex-scientist.js';
-import { writeFileInsideStateDir } from '../../safety/path-guard.js';
+import { safeReadFileInsideProject, writeFileInsideStateDir } from '../../safety/path-guard.js';
 import { buildProjectionGraph, type FeatureProjectionRecord } from '../../spans/projection-builder.js';
 import type { RepoEdge } from '../../spans/types.js';
 import { indexTestExampleSpans, type TestExampleSpan } from '../../tests-examples/test-example-span-indexer.js';
@@ -115,11 +115,11 @@ function isTestExampleCandidate(file: InventoryFile, scoped: boolean): boolean {
   return ['python', 'typescript', 'javascript', 'go', 'rust', 'java', 'kotlin', 'scala'].includes(file.language) || /(^|\/)examples?\//.test(file.path);
 }
 
-async function indexedTextForFile(file: InventoryFile): Promise<string> {
+async function indexedTextForFile(projectRoot: string, file: InventoryFile): Promise<string> {
   if (file.oversized) {
     return '';
   }
-  return file.indexedText || readFile(file.absolutePath, 'utf8');
+  return file.indexedText || safeReadFileInsideProject(projectRoot, file.path, 'utf8');
 }
 
 async function indexDocumentFiles(projectRoot: string, files: InventoryFile[]): Promise<{ spans: DocumentSpan[]; warnings: string[] }> {
@@ -129,7 +129,7 @@ async function indexDocumentFiles(projectRoot: string, files: InventoryFile[]): 
     const result = await indexDocumentSpans({
       projectRoot,
       path: file.path,
-      text: await indexedTextForFile(file)
+      text: await indexedTextForFile(projectRoot, file)
     });
     spans.push(...result.spans);
     warnings.push(...result.warnings.map(warning => `${result.path}: ${warning.message}`));
@@ -137,21 +137,21 @@ async function indexDocumentFiles(projectRoot: string, files: InventoryFile[]): 
   return { spans, warnings };
 }
 
-async function indexArtifactFiles(files: InventoryFile[]): Promise<{ spans: ArtifactSpan[]; warnings: string[] }> {
+async function indexArtifactFiles(projectRoot: string, files: InventoryFile[]): Promise<{ spans: ArtifactSpan[]; warnings: string[] }> {
   const spans: ArtifactSpan[] = [];
   const warnings: string[] = [];
   for (const file of files) {
-    const result = indexArtifactSpans({ path: file.path, text: await indexedTextForFile(file) });
+    const result = indexArtifactSpans({ path: file.path, text: await indexedTextForFile(projectRoot, file) });
     spans.push(...result.spans);
     warnings.push(...result.warnings.map(warning => `${result.path}: ${warning}`));
   }
   return { spans, warnings };
 }
 
-async function indexTestExampleFiles(files: InventoryFile[]): Promise<TestExampleSpan[]> {
+async function indexTestExampleFiles(projectRoot: string, files: InventoryFile[]): Promise<TestExampleSpan[]> {
   const spans: TestExampleSpan[] = [];
   for (const file of files) {
-    const result = indexTestExampleSpans({ path: file.path, text: await indexedTextForFile(file) });
+    const result = indexTestExampleSpans({ path: file.path, text: await indexedTextForFile(projectRoot, file) });
     spans.push(...result.spans);
   }
   return spans;
@@ -630,10 +630,10 @@ async function runRefresh(input: {
   const documentIndexed = await timed(timings, 'DocumentSpanIndexer', () => indexDocumentFiles(input.projectRoot, selection.deepFiles.filter(file => !file.oversized && isDocument(file, selection.scoped))));
   const documentSpans = documentIndexed.spans;
   const documentWarnings = documentIndexed.warnings;
-  const artifactIndexed = await timed(timings, 'ArtifactSpanIndexer', () => indexArtifactFiles(selection.deepFiles.filter(file => !file.oversized && isArtifact(file, selection.scoped))));
+  const artifactIndexed = await timed(timings, 'ArtifactSpanIndexer', () => indexArtifactFiles(input.projectRoot, selection.deepFiles.filter(file => !file.oversized && isArtifact(file, selection.scoped))));
   const artifactSpans = artifactIndexed.spans;
   const artifactWarnings = artifactIndexed.warnings;
-  const testExampleSpans = await timed(timings, 'TestExampleSpanIndexer', () => indexTestExampleFiles(selection.deepFiles.filter(file => !file.oversized && isTestExampleCandidate(file, selection.scoped))));
+  const testExampleSpans = await timed(timings, 'TestExampleSpanIndexer', () => indexTestExampleFiles(input.projectRoot, selection.deepFiles.filter(file => !file.oversized && isTestExampleCandidate(file, selection.scoped))));
   const graphRevisionSeed = createGraphRevision({
     target: input.target,
     files: selection.deepFiles,

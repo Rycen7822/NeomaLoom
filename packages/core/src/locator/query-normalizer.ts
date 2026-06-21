@@ -35,6 +35,11 @@ const STOP_WORDS = new Set([
 ]);
 
 const QUALIFIED_IDENTIFIER = String.raw`[A-Za-z_$][\w$-]*(?:[.:][A-Za-z_$][\w$-]*)*`;
+const MAX_RAW_QUERY_LENGTH = 10_000;
+
+function boundedRawQuery(query: string): string {
+  return query.trim().slice(0, MAX_RAW_QUERY_LENGTH);
+}
 
 function unique<T>(values: T[]): T[] {
   return [...new Set(values)];
@@ -147,7 +152,7 @@ function tableIntentTerms(raw: string, exactTerms: string[]): string[] {
 }
 
 export function normalizeQuery(input: { query: string; targetRoles?: string[] }): NormalizedQuery {
-  const raw = input.query.trim();
+  const raw = boundedRawQuery(input.query);
   const terms = words(raw);
   const cleanedTerms = terms.map(cleanTerm);
   const { oldTerms, newTerms } = oldNewPairs(raw);

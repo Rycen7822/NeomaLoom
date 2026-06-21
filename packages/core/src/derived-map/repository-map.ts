@@ -1,9 +1,10 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { EdgeRelation, FileRole, SpanKind } from '../spans/enums.js';
 import { isDefaultBusinessPath } from '../files/path-layer.js';
 import type { RepoEdge, RepoSpan } from '../spans/types.js';
+import { writeFileInsideStateDir } from '../safety/path-guard.js';
 import { renderRepositoryMapMarkdown } from './repository-map-markdown.js';
 
 export type RepositoryMap = {
@@ -158,6 +159,6 @@ export function buildRepositoryMap(input: BuildRepositoryMapInput): RepositoryMa
 export async function writeRepositoryMap(input: { projectRoot: string; map: RepositoryMap }): Promise<void> {
   const targetDir = path.join(path.resolve(input.projectRoot), '.noemaloom', 'derived-map');
   await mkdir(targetDir, { recursive: true });
-  await writeFile(path.join(targetDir, 'repository-map.json'), `${JSON.stringify(input.map, null, 2)}\n`, 'utf8');
-  await writeFile(path.join(targetDir, 'repository-map.md'), renderRepositoryMapMarkdown(input.map), 'utf8');
+  await writeFileInsideStateDir(input.projectRoot, path.join(targetDir, 'repository-map.json'), `${JSON.stringify(input.map, null, 2)}\n`);
+  await writeFileInsideStateDir(input.projectRoot, path.join(targetDir, 'repository-map.md'), renderRepositoryMapMarkdown(input.map));
 }

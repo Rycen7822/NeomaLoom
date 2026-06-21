@@ -63,30 +63,32 @@ export async function checkMarkdownLinks(input: {
     } catch {
       continue;
     }
-    for (const match of text.matchAll(/\[[^\]]+\]\(([^)\s]+)\)/g)) {
-      const rawTarget = match[1];
-      if (isExternal(rawTarget)) {
-        continue;
-      }
-      const [targetPath, anchor] = rawTarget.split('#');
-      let resolvedPath: string;
-      try {
-        resolvedPath = normalizeProjectRelativePath(
-          input.projectRoot,
-          targetPath
-            ? path.posix.normalize(path.posix.join(path.posix.dirname(changedPath), targetPath))
-            : changedPath
-        );
-      } catch {
-        brokenLinks.push({ path: changedPath, target: rawTarget, resolvedPath: targetPath });
-        continue;
-      }
-      if (!(await exists(input.projectRoot, resolvedPath))) {
-        brokenLinks.push({ path: changedPath, target: rawTarget, resolvedPath });
-        continue;
-      }
-      if (anchor && !(await hasAnchor(input.projectRoot, resolvedPath, anchor))) {
-        staleAnchors.push({ path: changedPath, target: rawTarget, anchor, resolvedPath });
+    for (const line of text.split(/\r?\n/)) {
+      for (const match of line.matchAll(/\[[^\]\r\n]+\]\(([^)\s\r\n]+)\)/g)) {
+        const rawTarget = match[1];
+        if (isExternal(rawTarget)) {
+          continue;
+        }
+        const [targetPath, anchor] = rawTarget.split('#');
+        let resolvedPath: string;
+        try {
+          resolvedPath = normalizeProjectRelativePath(
+            input.projectRoot,
+            targetPath
+              ? path.posix.normalize(path.posix.join(path.posix.dirname(changedPath), targetPath))
+              : changedPath
+          );
+        } catch {
+          brokenLinks.push({ path: changedPath, target: rawTarget, resolvedPath: targetPath });
+          continue;
+        }
+        if (!(await exists(input.projectRoot, resolvedPath))) {
+          brokenLinks.push({ path: changedPath, target: rawTarget, resolvedPath });
+          continue;
+        }
+        if (anchor && !(await hasAnchor(input.projectRoot, resolvedPath, anchor))) {
+          staleAnchors.push({ path: changedPath, target: rawTarget, anchor, resolvedPath });
+        }
       }
     }
   }

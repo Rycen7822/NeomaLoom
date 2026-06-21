@@ -1,6 +1,5 @@
-import { readFile } from 'node:fs/promises';
-
 import { buildFileInventory, type FileInventory, type InventoryFile } from '../files/file-inventory.js';
+import { safeReadFileInsideProject } from '../safety/path-guard.js';
 import { detectCodeLanguage, isCodeFactLanguage } from './language-detect.js';
 import { writeCodeGraphDb, searchCodeGraphDb, type CodeFactSearchResult } from './codegraph-db.js';
 import { extractCodeFacts, type CodeFactEdge, type CodeFactSpan } from './extractor.js';
@@ -20,11 +19,27 @@ export type IndexCodeFactsResult = {
   edges: CodeFactEdge[];
 };
 
-async function indexedTextForFile(file: InventoryFile): Promise<string> {
+const CODE_FACT_INDEX_CONCURRENCY = 8;
+
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length) as R[];
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await worker(items[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+async function indexedTextForFile(projectRoot: string, file: InventoryFile): Promise<string> {
   if (file.oversized) {
     return '';
   }
-  return file.indexedText || readFile(file.absolutePath, 'utf8');
+  return file.indexedText || safeReadFileInsideProject(projectRoot, file.path, 'utf8');
 }
 
 export async function indexCodeFacts(input: IndexCodeFactsInput): Promise<IndexCodeFactsResult> {
@@ -42,15 +57,16 @@ export async function indexCodeFacts(input: IndexCodeFactsInput): Promise<IndexC
         (input.includeVendor || file.role !== 'vendor_file') &&
         isCodeFactLanguage(file.language)
     );
-  const spanGroups = await Promise.all(
-    codeFiles.map(async file =>
+  const spanGroups = await mapWithConcurrency(
+    codeFiles,
+    CODE_FACT_INDEX_CONCURRENCY,
+    async file =>
       extractCodeFacts({
         projectRoot: input.projectRoot,
         path: file.path,
         language: file.language,
-        text: await indexedTextForFile(file)
+        text: await indexedTextForFile(input.projectRoot, file)
       }).spans
-    )
   );
   const spans = spanGroups.flat();
   const edges = resolveCodeFactEdges(spans);

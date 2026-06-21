@@ -161,6 +161,29 @@ describe('ArtifactSpanIndexer', () => {
     expect(item?.metadata).toMatchObject({ labelTruncated: true, truncatedIndexedText: true });
   });
 
+  it('truncates deeply nested JSON traversal instead of recursing through the whole object', () => {
+    let value: unknown = 'leaf';
+    for (let index = 0; index < 180; index += 1) {
+      value = { [`level_${index}`]: value };
+    }
+
+    const result = indexArtifactSpans({ path: 'config/deep.json', text: JSON.stringify(value), maxSpans: 500 });
+
+    expect(result.spans.length).toBeLessThan(140);
+    expect(result.warnings).toEqual(expect.arrayContaining([expect.stringContaining('omitted')]));
+  });
+
+  it('bounds recursive package export metadata extraction', () => {
+    let exportsValue: unknown = './dist/leaf.js';
+    for (let index = 0; index < 120; index += 1) {
+      exportsValue = { [`branch${index}`]: exportsValue };
+    }
+
+    const result = indexArtifactSpans({ path: 'package.json', text: JSON.stringify({ exports: exportsValue }, null, 2), maxSpans: 500 });
+
+    expect(result.spans.length).toBeLessThan(180);
+  });
+
   it('extracts package scripts, entrypoints, and workspace package names', () => {
     const result = indexArtifactSpans({
       path: 'package.json',

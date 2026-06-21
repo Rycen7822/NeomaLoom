@@ -45,7 +45,7 @@ export const nlAnchorManageInputSchema = z.object({
   reason: z.string().optional(),
   pinned: z.boolean().optional(),
   state: z.enum(['dormant', 'archived']).optional()
-}).passthrough();
+});
 
 export const nlAnchorPromoteInputSchema = z.object({
   projectPath: z.string().optional(),

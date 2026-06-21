@@ -29,6 +29,8 @@ const DEFAULT_MAX_ARTIFACT_SPANS = 1000;
 export const MAX_ARTIFACT_SPAN_TEXT_BYTES = 8192;
 const MAX_ARTIFACT_SPAN_LABEL_BYTES = 1024;
 const JSON_VALUE_PREVIEW_BYTES = 1024;
+const MAX_JSON_TRAVERSAL_DEPTH = 100;
+const MAX_JSON_HASH_KEYS = 100;
 
 function sha1(value: string): string {
   return createHash('sha1').update(value).digest('hex');
@@ -111,6 +113,29 @@ export function normalizedValueHash(value: unknown): string {
   return sha1(stableStringify(value));
 }
 
+function boundedValueHash(value: unknown): string {
+  if (value && typeof value === 'object') {
+    if (Array.isArray(value)) {
+      return sha1(JSON.stringify({ type: 'array', length: value.length }));
+    }
+    return sha1(JSON.stringify({ type: 'object', keys: Object.keys(value).slice(0, MAX_JSON_HASH_KEYS) }));
+  }
+  return normalizedValueHash(value);
+}
+
+function valuePreview(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return `[array:${value.length}]`;
+  }
+  if (value && typeof value === 'object') {
+    return `{object:${Object.keys(value).slice(0, MAX_JSON_HASH_KEYS).join(',')}}`;
+  }
+  return stableStringify(value);
+}
+
 function lineForNeedle(lines: string[], needle: string): number {
   const index = lines.findIndex(line => line.includes(needle));
   return index >= 0 ? index + 1 : 1;
@@ -147,11 +172,11 @@ function jsonSpanText(input: {
   if (byteLength(input.sourceLine) <= MAX_ARTIFACT_SPAN_TEXT_BYTES) {
     return { text: input.sourceLine, metadata: {}, truncated: false };
   }
-  const previewSource = typeof input.value === 'string' ? input.value : stableStringify(input.value);
+  const previewSource = valuePreview(input.value);
   const descriptor = [
     `jsonPointer=${input.pointer || '/'}`,
     ...(input.key ? [`key=${input.key}`] : []),
-    `valueHash=${normalizedValueHash(input.value)}`,
+    `valueHash=${boundedValueHash(input.value)}`,
     `valuePreview=${truncateUtf8(previewSource, JSON_VALUE_PREVIEW_BYTES)}`
   ].join('\n');
   return {
@@ -193,8 +218,14 @@ function traverseJson(input: {
   maxSpans: number;
   truncated: { value: boolean };
   indexedTextTruncated: { value: boolean };
+  depth?: number;
 }): void {
   if (input.spans.length >= input.maxSpans) {
+    input.truncated.value = true;
+    return;
+  }
+  const depth = input.depth ?? 0;
+  if (depth > MAX_JSON_TRAVERSAL_DEPTH) {
     input.truncated.value = true;
     return;
   }
@@ -217,7 +248,7 @@ function traverseJson(input: {
         text: spanText.text,
         metadata: {
           pointer: input.pointer,
-          normalizedValueHash: normalizedValueHash(input.value),
+          normalizedValueHash: boundedValueHash(input.value),
           ...spanText.metadata,
           ...primitiveMentions(input.value)
         }
@@ -242,7 +273,7 @@ function traverseJson(input: {
         metadata: {
           pointer: input.pointer,
           configKey: input.key,
-          normalizedValueHash: normalizedValueHash(input.value),
+          normalizedValueHash: boundedValueHash(input.value),
           ...spanText.metadata,
           ...(schemaFieldName ? { schemaFieldName } : {})
         }
@@ -265,7 +296,8 @@ function traverseJson(input: {
         value: child,
         pointer: pointerJoin(input.pointer, String(index)),
         key: String(index),
-        arrayItem: true
+        arrayItem: true,
+        depth: depth + 1
       });
       if (input.truncated.value) break;
     }
@@ -279,7 +311,8 @@ function traverseJson(input: {
         value: child,
         pointer: pointerJoin(input.pointer, key),
         key,
-        arrayItem: false
+        arrayItem: false,
+        depth: depth + 1
       });
       if (input.truncated.value) break;
     }

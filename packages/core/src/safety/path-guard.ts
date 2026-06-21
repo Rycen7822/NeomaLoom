@@ -1,6 +1,11 @@
-import { lstatSync, readFileSync, statSync } from 'node:fs';
-import { open, appendFile, lstat, mkdir, readFile, readdir, rename, stat, unlink, type FileHandle } from 'node:fs/promises';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, statSync } from 'node:fs';
+import { open, lstat, mkdir, readdir, rename, stat, unlink, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
+
+const O_NOFOLLOW = constants.O_NOFOLLOW ?? 0;
+const READ_NOFOLLOW_FLAGS = constants.O_RDONLY | O_NOFOLLOW;
+const APPEND_NOFOLLOW_FLAGS = constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | O_NOFOLLOW;
+const EXCLUSIVE_NOFOLLOW_FLAGS = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | O_NOFOLLOW;
 
 export class StatePathGuardError extends Error {
   readonly code = 'write_outside_state_dir';
@@ -152,13 +157,32 @@ export async function safeReadFileInsideProject(projectRoot: string, rawPath: st
 export async function safeReadFileInsideProject(projectRoot: string, rawPath: string, encoding?: BufferEncoding): Promise<string | Buffer> {
   const safePath = resolveProjectReadPath(projectRoot, rawPath);
   await assertNoProjectSymlinkEscape(projectRoot, safePath);
-  return encoding ? readFile(safePath, encoding) : readFile(safePath);
+  const handle = await open(safePath, READ_NOFOLLOW_FLAGS);
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) {
+      throw new ProjectReadPathGuardError(safePath, path.resolve(projectRoot));
+    }
+    const data = await handle.readFile();
+    return encoding ? data.toString(encoding) : data;
+  } finally {
+    await handle.close();
+  }
 }
 
 export function safeReadFileInsideProjectSync(projectRoot: string, rawPath: string, encoding: BufferEncoding): string {
   const safePath = resolveProjectReadPath(projectRoot, rawPath);
   assertNoProjectSymlinkEscapeSync(projectRoot, safePath);
-  return readFileSync(safePath, encoding);
+  const fd = openSync(safePath, READ_NOFOLLOW_FLAGS);
+  try {
+    const info = fstatSync(fd);
+    if (!info.isFile()) {
+      throw new ProjectReadPathGuardError(safePath, path.resolve(projectRoot));
+    }
+    return readFileSync(fd).toString(encoding);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 async function lstatIfExists(targetPath: string) {
@@ -240,8 +264,11 @@ export async function writeFileInsideStateDir(
   let wroteTemp = false;
   let tempHandle: FileHandle | undefined;
   try {
-    tempHandle = await open(tempPath, 'wx');
+    tempHandle = await open(tempPath, EXCLUSIVE_NOFOLLOW_FLAGS);
     wroteTemp = true;
+    if (!(await tempHandle.stat()).isFile()) {
+      throw new StatePathGuardError(tempPath, getStateDir(projectRoot));
+    }
     await tempHandle.writeFile(data);
     await tempHandle.sync();
     await tempHandle.close();
@@ -273,21 +300,45 @@ export async function appendFileInsideStateDir(
   await assertNoSymlinkEscape(projectRoot, safePath);
   await mkdir(path.dirname(safePath), { recursive: true });
   await assertNoSymlinkEscape(projectRoot, safePath);
-  await appendFile(safePath, data);
-  return safePath;
+  const handle = await open(safePath, APPEND_NOFOLLOW_FLAGS);
+  try {
+    if (!(await handle.stat()).isFile()) {
+      throw new StatePathGuardError(safePath, getStateDir(projectRoot));
+    }
+    await handle.writeFile(data);
+    return safePath;
+  } finally {
+    await handle.close();
+  }
 }
 
 export async function openExclusiveFileInsideStateDir(
   projectRoot: string,
-  targetPath: string
+  targetPath: string,
+  initialData?: string | Uint8Array
 ): Promise<FileHandle> {
   const safePath = assertWritableStatePath(projectRoot, targetPath);
   await assertNoSymlinkEscape(projectRoot, safePath);
   await mkdir(path.dirname(safePath), { recursive: true });
   await assertNoSymlinkEscape(projectRoot, safePath);
-  return open(safePath, 'wx');
+  const handle = await open(safePath, EXCLUSIVE_NOFOLLOW_FLAGS);
+  try {
+    if (!(await handle.stat()).isFile()) {
+      throw new StatePathGuardError(safePath, getStateDir(projectRoot));
+    }
+    if (initialData !== undefined) {
+      await handle.writeFile(initialData);
+      await handle.sync();
+    }
+    return handle;
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
 }
 
 export async function unlinkInsideStateDir(projectRoot: string, targetPath: string): Promise<void> {
-  await unlink(assertWritableStatePath(projectRoot, targetPath));
+  const safePath = assertWritableStatePath(projectRoot, targetPath);
+  await assertNoSymlinkEscape(projectRoot, safePath);
+  await unlink(safePath);
 }

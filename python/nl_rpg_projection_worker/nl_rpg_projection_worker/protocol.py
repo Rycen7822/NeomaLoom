@@ -28,6 +28,8 @@ def _error(command: str, code: str, message: str) -> dict[str, Any]:
 
 
 def handle_request(request: dict[str, Any], env: Mapping[str, str] | None = None) -> dict[str, Any]:
+    if not isinstance(request, dict):
+        return _error("", "invalid_request", "Feature worker request must be a JSON object.")
     command = str(request.get("command", ""))
     payload = request.get("payload") if isinstance(request.get("payload"), dict) else {}
     if command not in COMMANDS:

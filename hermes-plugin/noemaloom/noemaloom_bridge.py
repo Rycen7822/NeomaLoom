@@ -429,10 +429,19 @@ async def _call_tool_async(tool: str, args: dict[str, Any], timeout: float) -> s
     return _json(parsed)
 
 
+def _tool_timeout_seconds() -> float:
+    raw = os.environ.get("NOEMALOOM_TOOL_TIMEOUT", "600")
+    try:
+        timeout = float(raw)
+    except (TypeError, ValueError):
+        return 600.0
+    return timeout if timeout > 0 else 600.0
+
+
 def call_noemaloom_tool(tool: str, args: dict[str, Any] | None) -> str:
     payload = dict(args or {})
     project_root = _project_cwd(payload)
-    timeout = float(os.environ.get("NOEMALOOM_TOOL_TIMEOUT", "600"))
+    timeout = _tool_timeout_seconds()
     try:
         return _run_async(_call_tool_async(tool, payload, timeout))
     except TimeoutError:

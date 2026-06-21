@@ -40,6 +40,14 @@ export type ExtractCodeFactsResult = {
   spans: CodeFactSpan[];
 };
 
+const MAX_CALLSITES_PER_FILE = 1000;
+const MAX_CALLSITES_PER_LINE = 50;
+const MAX_CALLSITE_SCAN_LINE_CHARS = 20_000;
+
+type CallsiteBudget = {
+  count: number;
+};
+
 function sha1(value: string): string {
   return createHash('sha1').update(value).digest('hex');
 }
@@ -152,8 +160,16 @@ function addCallsiteSpans(input: {
   spans: CodeFactSpan[];
   callerLabel?: string;
   declarationName?: string;
+  budget: CallsiteBudget;
 }): void {
+  if (input.budget.count >= MAX_CALLSITES_PER_FILE || input.line.length > MAX_CALLSITE_SCAN_LINE_CHARS) {
+    return;
+  }
+  let lineCount = 0;
   for (const call of input.line.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)) {
+    if (input.budget.count >= MAX_CALLSITES_PER_FILE || lineCount >= MAX_CALLSITES_PER_LINE) {
+      return;
+    }
     const name = call[1];
     const zeroBasedColumn = call.index ?? input.line.indexOf(call[0]);
     const startColumn = Math.max(1, zeroBasedColumn + 1);
@@ -165,6 +181,8 @@ function addCallsiteSpans(input: {
     ) {
       continue;
     }
+    input.budget.count += 1;
+    lineCount += 1;
     input.spans.push(
       createSpan({
         projectRoot: input.projectRoot,
@@ -187,7 +205,7 @@ function addCallsiteSpans(input: {
   }
 }
 
-function addJavascriptTypescriptSpans(input: ExtractCodeFactsInput, lines: string[], spans: CodeFactSpan[]): void {
+function addJavascriptTypescriptSpans(input: ExtractCodeFactsInput, lines: string[], spans: CodeFactSpan[], budget: CallsiteBudget): void {
   let currentClass: string | undefined;
   let currentClassEndLine: number | undefined;
   let currentCallable: string | undefined;
@@ -323,7 +341,8 @@ function addJavascriptTypescriptSpans(input: ExtractCodeFactsInput, lines: strin
       lineNumber,
       spans,
       callerLabel: currentCallable,
-      declarationName
+      declarationName,
+      budget
     });
   });
 }
@@ -465,7 +484,7 @@ function addPythonSpans(input: ExtractCodeFactsInput, lines: string[], spans: Co
   });
 }
 
-function addGoSpans(input: ExtractCodeFactsInput, lines: string[], spans: CodeFactSpan[]): void {
+function addGoSpans(input: ExtractCodeFactsInput, lines: string[], spans: CodeFactSpan[], budget: CallsiteBudget): void {
   let currentCallable: string | undefined;
   lines.forEach((line, index) => {
     const lineNumber = index + 1;
@@ -495,12 +514,13 @@ function addGoSpans(input: ExtractCodeFactsInput, lines: string[], spans: CodeFa
       lineNumber,
       spans,
       callerLabel: currentCallable,
-      declarationName
+      declarationName,
+      budget
     });
   });
 }
 
-function addRustSpans(input: ExtractCodeFactsInput, lines: string[], spans: CodeFactSpan[]): void {
+function addRustSpans(input: ExtractCodeFactsInput, lines: string[], spans: CodeFactSpan[], budget: CallsiteBudget): void {
   let currentCallable: string | undefined;
   lines.forEach((line, index) => {
     const lineNumber = index + 1;
@@ -530,12 +550,13 @@ function addRustSpans(input: ExtractCodeFactsInput, lines: string[], spans: Code
       lineNumber,
       spans,
       callerLabel: currentCallable,
-      declarationName
+      declarationName,
+      budget
     });
   });
 }
 
-function addJavaFamilySpans(input: ExtractCodeFactsInput, lines: string[], spans: CodeFactSpan[]): void {
+function addJavaFamilySpans(input: ExtractCodeFactsInput, lines: string[], spans: CodeFactSpan[], budget: CallsiteBudget): void {
   let currentClass: string | undefined;
   let currentCallable: string | undefined;
   lines.forEach((line, index) => {
@@ -589,7 +610,8 @@ function addJavaFamilySpans(input: ExtractCodeFactsInput, lines: string[], spans
       lineNumber,
       spans,
       callerLabel: currentCallable,
-      declarationName
+      declarationName,
+      budget
     });
   });
 }
@@ -612,17 +634,18 @@ export function extractCodeFacts(input: ExtractCodeFactsInput): ExtractCodeFacts
       }
     })
   ];
+  const budget: CallsiteBudget = { count: 0 };
 
   if (input.language === 'typescript' || input.language === 'javascript') {
-    addJavascriptTypescriptSpans(input, lines, spans);
+    addJavascriptTypescriptSpans(input, lines, spans, budget);
   } else if (input.language === 'python') {
     addPythonSpans(input, lines, spans);
   } else if (input.language === 'go') {
-    addGoSpans(input, lines, spans);
+    addGoSpans(input, lines, spans, budget);
   } else if (input.language === 'rust') {
-    addRustSpans(input, lines, spans);
+    addRustSpans(input, lines, spans, budget);
   } else if (['java', 'kotlin', 'scala'].includes(input.language)) {
-    addJavaFamilySpans(input, lines, spans);
+    addJavaFamilySpans(input, lines, spans, budget);
   }
 
   return { spans };

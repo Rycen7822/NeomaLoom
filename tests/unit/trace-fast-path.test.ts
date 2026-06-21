@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -55,6 +56,17 @@ async function createTraceDb(projectRoot: string): Promise<void> {
 }
 
 describe('traceGraph SQL fast path', () => {
+  it('does not create a missing trace database as a side effect', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-trace-missing-db-'));
+    const dbPath = path.join(projectRoot, '.noemaloom', 'spans', 'spans.db');
+
+    const graph = traceGraph({ projectRoot, target: 'anything', targetType: 'symbol' });
+
+    expect(graph).toMatchObject({ nodes: [], edges: [], seedSpanIds: [], impactCoverage: 'none' });
+    expect(graph.requiredActions).toEqual(expect.arrayContaining([expect.stringContaining('nl_refresh')]));
+    expect(existsSync(dbPath)).toBe(false);
+  });
+
   it('applies relation filters before edge limits', async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-trace-fast-path-'));
     await createTraceDb(projectRoot);
@@ -72,5 +84,20 @@ describe('traceGraph SQL fast path', () => {
       expect.objectContaining({ edgeId: 'edge-doc', relation: 'documents_symbol', targetSpanId: 'doc-target' })
     ]);
     expect(graph.nodes.map(node => node.spanId)).toContain('doc-target');
+  });
+
+  it('escapes wildcard characters in symbol trace targets', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-trace-wildcard-'));
+    await createTraceDb(projectRoot);
+
+    const graph = traceGraph({
+      projectRoot,
+      target: '%',
+      targetType: 'symbol',
+      depth: 0
+    });
+
+    expect(graph.seedSpanIds).toEqual([]);
+    expect(graph.nodes).toEqual([]);
   });
 });

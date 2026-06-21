@@ -3,8 +3,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import {
+  appendFileInsideStateDir,
+  openExclusiveFileInsideStateDir,
   safeReadFileInsideProject,
   safeStatInsideProject,
+  unlinkInsideStateDir,
   writeFileInsideStateDir
 } from '../../packages/core/src/safety/path-guard.js';
 
@@ -47,6 +50,35 @@ describe('state write path guard', () => {
       path: escapedPath
     });
     await expect(access(path.join(outsideTarget, 'mcp.jsonl'))).rejects.toThrow();
+  });
+
+  it('rejects append and exclusive open attempts through final-path symlinks', async () => {
+    const projectRoot = await createTempProject();
+    const outsidePath = path.join(projectRoot, 'outside-log.jsonl');
+    const statePath = path.join(projectRoot, '.noemaloom', 'logs', 'mcp.jsonl');
+    await mkdir(path.dirname(statePath), { recursive: true });
+    await writeFile(outsidePath, 'outside\n', 'utf8');
+    await symlink(outsidePath, statePath);
+
+    await expect(appendFileInsideStateDir(projectRoot, statePath, 'blocked\n')).rejects.toBeTruthy();
+    await expect(openExclusiveFileInsideStateDir(projectRoot, statePath)).rejects.toBeTruthy();
+    await expect(readFile(outsidePath, 'utf8')).resolves.toBe('outside\n');
+  });
+
+  it('rejects unlink when a state parent directory is a symlink escape', async () => {
+    const projectRoot = await createTempProject();
+    const outsideTarget = path.join(projectRoot, 'outside-target');
+    await mkdir(path.join(projectRoot, '.noemaloom'), { recursive: true });
+    await mkdir(outsideTarget);
+    await writeFile(path.join(outsideTarget, 'refresh.lock'), 'outside\n', 'utf8');
+    await symlink(outsideTarget, path.join(projectRoot, '.noemaloom', 'locks'));
+
+    const escapedPath = path.join(projectRoot, '.noemaloom', 'locks', 'refresh.lock');
+
+    await expect(unlinkInsideStateDir(projectRoot, escapedPath)).rejects.toMatchObject({
+      code: 'write_outside_state_dir'
+    });
+    await expect(readFile(path.join(outsideTarget, 'refresh.lock'), 'utf8')).resolves.toBe('outside\n');
   });
 });
 

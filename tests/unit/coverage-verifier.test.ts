@@ -200,6 +200,23 @@ describe('coverage verifier', () => {
     ]);
   });
 
+  it('ignores default ignored directories while expanding directory changedPaths', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-coverage-ignore-dir-'));
+    await writeProjectFile(projectRoot, 'docs/current.md', '# Current\n\nUses newTerm.\n');
+    await writeProjectFile(projectRoot, '.venv/lib/python/site-packages/leak.md', '# Ignored\n\nStill says legacyTerm.\n');
+
+    const result = await verifyCoverage({
+      projectRoot,
+      goal: 'Rename legacyTerm to newTerm',
+      changedPaths: ['docs', '.venv'],
+      oldTerms: ['legacyTerm'],
+      newTerms: ['newTerm']
+    });
+
+    expect(result.status).toBe('pass');
+    expect(result.remainingOldTermHits).toEqual([]);
+  });
+
   it('ignores changed paths that escape the project root', async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-coverage-escape-'));
     const outsidePath = path.join(path.dirname(projectRoot), 'outside.md');

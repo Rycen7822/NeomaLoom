@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { computeImpact } from '../../impact/impact.js';
 import { readLatestRevision } from '../../state/refresh-revision.js';
 import { createEnvelope, resolveProjectRootFromInput, type NoemaLoomEnvelope } from '../envelope.js';
+import { estimateEnvelopeTokenBudget } from '../token-budget.js';
 
 export const nlImpactInputSchema = z
   .object({
@@ -24,20 +25,24 @@ export async function handleNlImpact(input: unknown): Promise<NoemaLoomEnvelope>
     depth: parsed.depth
   });
 
+  const nextActions = impact.requiredActions.length > 0
+    ? [...impact.requiredActions, 'read impacted source, docs, config, tests, examples before editing']
+    : ['read impacted source, docs, config, tests, examples before editing'];
+  const budget = estimateEnvelopeTokenBudget({
+    requested: 2500,
+    data: impact,
+    nextActions
+  });
+
   return createEnvelope({
     ok: true,
     tool: 'nl_impact',
     projectRoot,
     graphRevision,
     graphState: impact.impactCoverage === 'full' ? 'ready' : 'partial',
-    tokenBudget: {
-      requested: 2500,
-      used: Math.ceil(JSON.stringify(impact).length / 4),
-      truncated: false
-    },
+    tokenBudget: budget.tokenBudget,
+    warnings: budget.warnings,
     data: impact,
-    nextActions: impact.requiredActions.length > 0
-      ? [...impact.requiredActions, 'read impacted source, docs, config, tests, examples before editing']
-      : ['read impacted source, docs, config, tests, examples before editing']
+    nextActions
   });
 }

@@ -17,6 +17,11 @@ export type FeatureWorkerResult = {
   warnings: string[];
 };
 
+type WorkerCommandParts = {
+  executable: string;
+  args: string[];
+};
+
 const DEFAULT_WORKER_ARGS = ['-m', 'nl_rpg_projection_worker.main'] as const;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_048_576;
@@ -74,8 +79,15 @@ function parseWorkerCommand(command: string): string[] {
   return parts;
 }
 
-function commandParts(input: { workerCommand?: string; pythonExecutable?: string }): { executable: string; args: string[] } {
+function customWorkerAllowed(): boolean {
+  return process.env.NOEMALOOM_ALLOW_CUSTOM_WORKER === '1' || process.env.NOEMALOOM_ALLOW_CUSTOM_WORKER === 'true';
+}
+
+function commandParts(input: { workerCommand?: string; pythonExecutable?: string }): WorkerCommandParts {
   if (input.workerCommand?.trim()) {
+    if (!customWorkerAllowed()) {
+      throw new Error('custom featureProjection.workerCommand is disabled; set NOEMALOOM_ALLOW_CUSTOM_WORKER=1 for trusted local workers');
+    }
     const parts = parseWorkerCommand(input.workerCommand);
     if (parts.length === 0) {
       throw new Error('featureProjection.workerCommand must not be empty');
@@ -84,6 +96,19 @@ function commandParts(input: { workerCommand?: string; pythonExecutable?: string
     return { executable, args };
   }
   return { executable: input.pythonExecutable ?? 'python3', args: [...DEFAULT_WORKER_ARGS] };
+}
+
+function safeWorkerEnv(input: { projectRoot: string; stateDir: string; revision: string; pythonPath?: string }): NodeJS.ProcessEnv {
+  return {
+    ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
+    ...(process.env.HOME ? { HOME: process.env.HOME } : {}),
+    ...(process.env.LANG ? { LANG: process.env.LANG } : {}),
+    ...(process.env.LC_ALL ? { LC_ALL: process.env.LC_ALL } : {}),
+    ...(input.pythonPath ? { PYTHONPATH: input.pythonPath } : process.env.PYTHONPATH ? { PYTHONPATH: process.env.PYTHONPATH } : {}),
+    NOEMALOOM_PROJECT_ROOT: input.projectRoot,
+    NOEMALOOM_STATE_DIR: input.stateDir,
+    NOEMALOOM_GRAPH_REVISION: input.revision
+  };
 }
 
 export async function runFeatureWorkerCommand(input: {
@@ -113,32 +138,36 @@ export async function runFeatureWorkerCommand(input: {
   return new Promise(resolve => {
     let settled = false;
     let terminating = false;
+    let terminatingResult: FeatureWorkerResult | undefined;
     let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
     const settle = (result: FeatureWorkerResult): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timeoutTimer);
-      if (!terminating && forceKillTimer) clearTimeout(forceKillTimer);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
       resolve(result);
+    };
+    const terminate = (result: FeatureWorkerResult): void => {
+      if (settled || terminating) return;
+      terminating = true;
+      terminatingResult = result;
+      child.kill('SIGTERM');
+      forceKillTimer = setTimeout(() => child.kill('SIGKILL'), FORCE_KILL_GRACE_MS);
     };
 
     const child = spawn(command.executable, command.args, {
-      env: {
-        ...process.env,
-        NOEMALOOM_PROJECT_ROOT: input.projectRoot,
-        NOEMALOOM_STATE_DIR: input.stateDir,
-        NOEMALOOM_GRAPH_REVISION: input.revision,
-        ...(pythonPath ? { PYTHONPATH: pythonPath } : {})
-      },
+      env: safeWorkerEnv({
+        projectRoot: input.projectRoot,
+        stateDir: input.stateDir,
+        revision: input.revision,
+        pythonPath
+      }),
       stdio: ['pipe', 'pipe', 'pipe']
     });
     let stdout = '';
     let stderr = '';
     const timeoutTimer = setTimeout(() => {
-      terminating = true;
-      child.kill('SIGTERM');
-      forceKillTimer = setTimeout(() => child.kill('SIGKILL'), FORCE_KILL_GRACE_MS);
-      settle({ state: 'unavailable', warnings: [`Worker timed out after ${timeoutMs}ms.`] });
+      terminate({ state: 'unavailable', warnings: [`Worker timed out after ${timeoutMs}ms.`] });
     }, timeoutMs);
 
     const appendOutput = (stream: 'stdout' | 'stderr', chunk: unknown): void => {
@@ -147,10 +176,7 @@ export async function runFeatureWorkerCommand(input: {
       if (stream === 'stdout') stdout += text;
       else stderr += text;
       if (stdout.length + stderr.length > maxOutputBytes) {
-        terminating = true;
-        child.kill('SIGTERM');
-        forceKillTimer = setTimeout(() => child.kill('SIGKILL'), FORCE_KILL_GRACE_MS);
-        settle({
+        terminate({
           state: 'unavailable',
           warnings: [`Worker output exceeded maxOutputBytes=${maxOutputBytes}.`]
         });
@@ -172,7 +198,7 @@ export async function runFeatureWorkerCommand(input: {
     });
     child.on('close', code => {
       if (terminating) {
-        if (forceKillTimer) clearTimeout(forceKillTimer);
+        settle(terminatingResult ?? { state: 'unavailable', warnings: ['Worker terminated.'] });
         return;
       }
       if (code !== 0) {

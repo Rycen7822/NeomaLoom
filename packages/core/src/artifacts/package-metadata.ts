@@ -1,6 +1,8 @@
 import { createArtifactSpan, parseJsonArtifact, type ArtifactParseInput, type ArtifactParseResult, type ArtifactSpan } from './json-parser.js';
 import { parseTomlArtifact } from './toml-parser.js';
 
+const MAX_PACKAGE_EXPORT_DEPTH = 50;
+
 function lineFor(lines: string[], needle: string): number {
   const index = lines.findIndex(line => line.includes(needle));
   return index >= 0 ? index + 1 : 1;
@@ -29,7 +31,12 @@ function appendExportEntrypoints(input: {
   lines: string[];
   value: unknown;
   exportPath: string;
+  depth?: number;
 }): void {
+  const depth = input.depth ?? 0;
+  if (depth > MAX_PACKAGE_EXPORT_DEPTH) {
+    return;
+  }
   if (typeof input.value === 'string') {
     input.spans.push(
       packageEntry({
@@ -52,7 +59,8 @@ function appendExportEntrypoints(input: {
     appendExportEntrypoints({
       ...input,
       value: child,
-      exportPath: key.startsWith('.') ? `${input.exportPath}${key}` : `${input.exportPath}.${key}`
+      exportPath: key.startsWith('.') ? `${input.exportPath}${key}` : `${input.exportPath}.${key}`,
+      depth: depth + 1
     });
   }
 }

@@ -1,5 +1,4 @@
 import { access, chmod, mkdir, readFile, symlink, writeFile, mkdtemp } from 'node:fs/promises';
-import { setTimeout as delay } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -21,6 +20,17 @@ function processIsAlive(pid: number): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+async function withTrustedCustomWorker<T>(task: () => Promise<T>): Promise<T> {
+  const previous = process.env.NOEMALOOM_ALLOW_CUSTOM_WORKER;
+  process.env.NOEMALOOM_ALLOW_CUSTOM_WORKER = '1';
+  try {
+    return await task();
+  } finally {
+    if (previous === undefined) delete process.env.NOEMALOOM_ALLOW_CUSTOM_WORKER;
+    else process.env.NOEMALOOM_ALLOW_CUSTOM_WORKER = previous;
   }
 }
 
@@ -109,7 +119,7 @@ describe('feature worker client', () => {
     ).resolves.toMatchObject({ state: 'unavailable' });
   });
 
-  it('runs an explicitly configured worker command', async () => {
+  it('rejects an explicitly configured worker command unless custom workers are trusted', async () => {
     const projectRoot = await createTempProject();
     const fakeWorker = path.join(projectRoot, 'custom worker');
     await writeFile(fakeWorker, '#!/usr/bin/env bash\nread _line\nprintf "{\\\"ok\\\":true,\\\"data\\\":{\\\"source\\\":\\\"custom\\\"}}\\n"\n');
@@ -123,7 +133,40 @@ describe('feature worker client', () => {
         revision: 'rev-client',
         workerCommand: `"${fakeWorker}"`
       })
-    ).resolves.toMatchObject({ state: 'available', data: { source: 'custom' }, warnings: [] });
+    ).resolves.toMatchObject({
+      state: 'unavailable',
+      warnings: expect.arrayContaining([expect.stringContaining('custom featureProjection.workerCommand is disabled')])
+    });
+  });
+
+  it('runs a trusted custom worker without leaking token-like environment variables', async () => {
+    const previousAllow = process.env.NOEMALOOM_ALLOW_CUSTOM_WORKER;
+    const previousToken = process.env.NOEMALOOM_TEST_SECRET_TOKEN;
+    const projectRoot = await createTempProject();
+    const fakeWorker = path.join(projectRoot, 'trusted-worker');
+    await writeFile(
+      fakeWorker,
+      '#!/usr/bin/env bash\nread _line\nprintf "{\\\"ok\\\":true,\\\"data\\\":{\\\"secret\\\":\\\"%s\\\"}}\\n" "${NOEMALOOM_TEST_SECRET_TOKEN:-}"\n'
+    );
+    await chmod(fakeWorker, 0o755);
+    process.env.NOEMALOOM_ALLOW_CUSTOM_WORKER = '1';
+    process.env.NOEMALOOM_TEST_SECRET_TOKEN = 'should-not-leak';
+    try {
+      await expect(
+        projectFeatures({
+          command: 'feature.status',
+          projectRoot,
+          stateDir: path.join(projectRoot, '.noemaloom'),
+          revision: 'rev-client',
+          workerCommand: `"${fakeWorker}"`
+        })
+      ).resolves.toMatchObject({ state: 'available', data: { secret: '' }, warnings: [] });
+    } finally {
+      if (previousAllow === undefined) delete process.env.NOEMALOOM_ALLOW_CUSTOM_WORKER;
+      else process.env.NOEMALOOM_ALLOW_CUSTOM_WORKER = previousAllow;
+      if (previousToken === undefined) delete process.env.NOEMALOOM_TEST_SECRET_TOKEN;
+      else process.env.NOEMALOOM_TEST_SECRET_TOKEN = previousToken;
+    }
   });
 
   it('times out and force-kills a worker that ignores SIGTERM', async () => {
@@ -136,20 +179,18 @@ describe('feature worker client', () => {
     );
     await chmod(fakeWorker, 0o755);
 
-    const result = await projectFeatures({
+    const result = await withTrustedCustomWorker(() => projectFeatures({
       command: 'feature.status',
       projectRoot,
       stateDir: path.join(projectRoot, '.noemaloom'),
       revision: 'rev-client',
       workerCommand: `"${fakeWorker}" "${pidFile}"`,
       timeoutMs: 50
-    });
+    }));
 
     expect(result.state).toBe('unavailable');
     expect(result.warnings.join('\n')).toContain('timed out');
     const pid = Number(await readFile(pidFile, 'utf8'));
-    expect(processIsAlive(pid)).toBe(true);
-    await delay(2_500);
     expect(processIsAlive(pid)).toBe(false);
   });
 
@@ -162,14 +203,14 @@ describe('feature worker client', () => {
     );
     await chmod(fakeWorker, 0o755);
 
-    const result = await projectFeatures({
+    const result = await withTrustedCustomWorker(() => projectFeatures({
       command: 'feature.status',
       projectRoot,
       stateDir: path.join(projectRoot, '.noemaloom'),
       revision: 'rev-client',
       workerCommand: `"${fakeWorker}"`,
       maxOutputBytes: 128
-    });
+    }));
 
     expect(result.state).toBe('unavailable');
     expect(result.warnings.join('\n')).toContain('exceeded maxOutputBytes');

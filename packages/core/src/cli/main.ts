@@ -42,7 +42,16 @@ function parsePayloadText(text: string, source: string): Record<string, unknown>
 
 function projectPathFromArgv(argv: string[]): string | undefined {
   const projectIndex = argv.indexOf('--project');
-  return projectIndex >= 0 ? argv[projectIndex + 1] : undefined;
+  const value = projectIndex >= 0 ? argv[projectIndex + 1] : undefined;
+  return value && !value.startsWith('--') ? value : undefined;
+}
+
+function optionValue(argv: string[], index: number, optionName: string): string {
+  const value = argv[index + 1];
+  if (!value || value.startsWith('--')) {
+    throw new Error(`${optionName} requires a value.`);
+  }
+  return value;
 }
 
 function cliValidationEnvelope(tool: string, projectPath: string | undefined, message: string): NoemaLoomEnvelope {
@@ -69,11 +78,14 @@ async function parseAnchorArgs(argv: string[]): Promise<{ action: AnchorAction; 
   for (let index = 2; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--project') {
-      projectPath = argv[++index];
+      projectPath = optionValue(argv, index, '--project');
+      index += 1;
     } else if (arg === '--json') {
-      jsonText = argv[++index];
+      jsonText = optionValue(argv, index, '--json');
+      index += 1;
     } else if (arg === '--json-file') {
-      jsonFile = argv[++index];
+      jsonFile = optionValue(argv, index, '--json-file');
+      index += 1;
     } else {
       throw new Error(`Unknown anchor option: ${arg}`);
     }

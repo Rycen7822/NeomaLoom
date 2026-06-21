@@ -508,12 +508,14 @@ function selectSpanCandidateIds(db: Database, query: NormalizedQuery, cap: numbe
 
   for (const symbol of query.symbolTerms) {
     if (ids.length >= cap) break;
+    const symbolJsonPattern = likePattern(`"${symbol}"`);
+    const metadataPattern = likePattern(symbol);
     addSpanIdsFromRows(
       ids,
       db
         .prepare(`SELECT span_id FROM repo_spans
           WHERE kind LIKE 'code.%'
-            AND (label = ? OR symbol_path_json LIKE ? OR metadata_json LIKE ?)
+            AND (label = ? OR lower(symbol_path_json) LIKE ? ESCAPE '\\' OR lower(metadata_json) LIKE ? ESCAPE '\\')
           ORDER BY CASE WHEN label = ? THEN 0 ELSE 1 END,
                    CASE kind
                      WHEN 'code.function' THEN 0
@@ -526,7 +528,7 @@ function selectSpanCandidateIds(db: Database, query: NormalizedQuery, cap: numbe
                    END,
                    length(path) ASC, path ASC, start_line ASC
           LIMIT ?`)
-        .all(symbol, `%"${symbol}"%`, `%${symbol}%`, symbol, Math.max(10, Math.min(cap - ids.length, 50))) as Array<{ span_id: string }>,
+        .all(symbol, symbolJsonPattern, metadataPattern, symbol, Math.max(10, Math.min(cap - ids.length, 50))) as Array<{ span_id: string }>,
       cap,
       routeSourcesBySpanId,
       'code_symbol_name_signature'

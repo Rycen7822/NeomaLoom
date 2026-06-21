@@ -41,6 +41,56 @@ export type EnvelopeInput<TData> = {
   nextActions?: string[];
 };
 
+export class ProjectRootPolicyError extends Error {
+  readonly code = 'project_root_not_allowed';
+  readonly projectRoot: string;
+
+  constructor(projectRoot: string) {
+    super(`projectPath is not allowed: ${projectRoot}`);
+    this.name = 'ProjectRootPolicyError';
+    this.projectRoot = projectRoot;
+  }
+}
+
+function isInsideRoot(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function configuredAllowedRoots(): string[] {
+  return (process.env.NOEMALOOM_ALLOWED_PROJECTS ?? '')
+    .split(path.delimiter)
+    .map(value => value.trim())
+    .filter(Boolean)
+    .map(value => path.resolve(value));
+}
+
+function isUnsafeDefaultProjectRoot(projectRoot: string): boolean {
+  const resolved = path.resolve(projectRoot);
+  if (resolved === path.parse(resolved).root) {
+    return true;
+  }
+  if (process.platform === 'win32') {
+    return false;
+  }
+  const blockedRoots = ['/bin', '/boot', '/dev', '/etc', '/lib', '/lib64', '/proc', '/run', '/sbin', '/sys', '/usr', '/var'];
+  return blockedRoots.some(blocked => resolved === blocked || resolved.startsWith(`${blocked}/`));
+}
+
+function assertAllowedProjectRoot(projectRoot: string): void {
+  const resolved = path.resolve(projectRoot);
+  const allowedRoots = configuredAllowedRoots();
+  if (allowedRoots.length > 0) {
+    if (!allowedRoots.some(allowedRoot => isInsideRoot(allowedRoot, resolved))) {
+      throw new ProjectRootPolicyError(resolved);
+    }
+    return;
+  }
+  if (isUnsafeDefaultProjectRoot(resolved)) {
+    throw new ProjectRootPolicyError(resolved);
+  }
+}
+
 export function resolveProjectRootFromInput(input: unknown): string {
   if (
     typeof input === 'object' &&
@@ -49,7 +99,9 @@ export function resolveProjectRootFromInput(input: unknown): string {
     typeof input.projectPath === 'string' &&
     input.projectPath !== 'default_current_project'
   ) {
-    return path.resolve(input.projectPath);
+    const resolved = path.resolve(input.projectPath);
+    assertAllowedProjectRoot(resolved);
+    return resolved;
   }
 
   return process.cwd();
@@ -84,8 +136,7 @@ function formatErrorMessage(error: unknown, depth = 0): string {
   }
   if (error instanceof Error) {
     const cause = 'cause' in error && error.cause ? `; caused by ${formatErrorMessage(error.cause, depth + 1)}` : '';
-    const stackHead = error.stack?.split(/\r?\n/).slice(1, 4).map(line => line.trim()).join(' | ');
-    return `${error.name}: ${error.message}${cause}${stackHead ? ` (${stackHead})` : ''}`;
+    return `${error.name}: ${error.message}${cause}`;
   }
   return String(error);
 }

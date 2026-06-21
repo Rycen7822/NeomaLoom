@@ -82,8 +82,47 @@ describe('file inventory', () => {
 
     const inventory = await buildFileInventory({ projectRoot, config });
 
-    expect(inventory.files.map(file => file.path)).toEqual(['LICENSE', 'src/app.ts']);
-    expect(inventory.ignoredPaths).toEqual(['README.md', 'assets/logo.svg']);
+    expect(inventory.files.map(file => file.path)).toEqual(['src/app.ts']);
+    expect(inventory.ignoredPaths).toEqual(['LICENSE', 'README.md', 'assets/logo.svg']);
+  });
+
+  it('excludes common credential and secret paths before indexing', async () => {
+    const projectRoot = await createTempProject('noemaloom-sensitive-inventory-');
+    for (const repoPath of [
+      '.env',
+      '.env.local',
+      '.envrc',
+      '.npmrc',
+      '.netrc',
+      '.pypirc',
+      '.aws/credentials',
+      '.ssh/id_ed25519',
+      'id_rsa',
+      'certs/client.pem',
+      'certs/client.key',
+      'config/secrets.json',
+      'src/app.ts'
+    ]) {
+      await writeProjectFile(projectRoot, repoPath, `${repoPath}\n`);
+    }
+
+    const inventory = await buildFileInventory({ projectRoot });
+
+    expect(inventory.files.map(file => file.path)).toEqual(['src/app.ts']);
+    expect(inventory.ignoredPaths).toEqual([
+      '.aws/credentials',
+      '.env',
+      '.env.local',
+      '.envrc',
+      '.netrc',
+      '.npmrc',
+      '.pypirc',
+      '.ssh/id_ed25519',
+      'certs/client.key',
+      'certs/client.pem',
+      'config/secrets.json',
+      'id_rsa'
+    ]);
   });
 
   it('marks oversized files as file-only spans without normal FTS text', async () => {

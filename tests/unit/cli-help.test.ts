@@ -153,6 +153,12 @@ describe('noemaloom CLI help', () => {
     });
     expect(unknownAction.stderr).toBe('');
 
+    const missingProject = await runJson(['anchor', 'status', '--project', '--json', '{}']);
+    expect(missingProject.code).toBe(1);
+    expect(missingProject.json?.ok).toBe(false);
+    expect((missingProject.json?.warnings as Array<{ message: string }>)[0].message).toContain('--project requires a value');
+    expect(missingProject.stderr).toBe('');
+
     const badJson = await runJson(['anchor', 'status', '--json', '{']);
     expect(badJson.code).toBe(1);
     expect(badJson.json?.ok).toBe(false);

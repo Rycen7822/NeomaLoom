@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 
 import type { EdgeRelation, FileRole, SpanKind } from '../spans/enums.js';
@@ -181,12 +182,14 @@ function resolveSeedSpanIds(db: Database, target: string, targetType = 'auto'): 
     return (db.prepare('SELECT span_id FROM repo_spans WHERE path = ? ORDER BY start_line ASC, span_id ASC LIMIT ?').all(target, MAX_TRACE_SEEDS) as Array<{ span_id: string }>).map(row => row.span_id);
   }
   if (targetType === 'symbol') {
+    const symbolJsonPattern = likePattern(`"${target}"`);
+    const metadataPattern = likePattern(target);
     ids = add(
       ids,
       db
         .prepare(`SELECT span_id FROM repo_spans
           WHERE kind LIKE 'code.%'
-            AND (label = ? OR symbol_path_json LIKE ? OR metadata_json LIKE ?)
+            AND (label = ? OR lower(symbol_path_json) LIKE ? ESCAPE '\\' OR lower(metadata_json) LIKE ? ESCAPE '\\')
           ORDER BY CASE WHEN label = ? THEN 0 ELSE 1 END,
                    CASE kind
                      WHEN 'code.function' THEN 0
@@ -199,7 +202,7 @@ function resolveSeedSpanIds(db: Database, target: string, targetType = 'auto'): 
                    END,
                    length(path) ASC, path ASC, start_line ASC
           LIMIT ?`)
-        .all(target, `%"${target}"%`, `%${target}%`, target, MAX_TRACE_SEEDS) as Array<{ span_id: string }>
+        .all(target, symbolJsonPattern, metadataPattern, target, MAX_TRACE_SEEDS) as Array<{ span_id: string }>
     );
     if (ids.length > 0) return ids;
   }
@@ -292,7 +295,18 @@ export function traceGraph(input: {
   depth?: number;
   relationTypes?: string[];
 }): TraceGraph {
-  const db = openDatabase(path.join(input.projectRoot, '.noemaloom', 'spans', 'spans.db'));
+  const dbPath = path.join(input.projectRoot, '.noemaloom', 'spans', 'spans.db');
+  if (!existsSync(dbPath)) {
+    return {
+      nodes: [],
+      edges: [],
+      seedSpanIds: [],
+      impactCoverage: 'none',
+      missingUnindexedPaths: [],
+      requiredActions: ['run nl_refresh before impact tracing']
+    };
+  }
+  const db = openDatabase(dbPath);
   try {
     const relationTypes = input.relationTypes ?? ['all'];
     const direction = input.direction ?? 'both';

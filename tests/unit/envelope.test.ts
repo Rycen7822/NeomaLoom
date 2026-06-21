@@ -1,4 +1,13 @@
-import { createEnvelope, createToolUnavailableEnvelope } from '../../packages/core/src/mcp/envelope.js';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
+import {
+  createEnvelope,
+  createToolUnavailableEnvelope,
+  createUnhandledErrorEnvelope,
+  resolveProjectRootFromInput
+} from '../../packages/core/src/mcp/envelope.js';
 
 describe('MCP response envelope', () => {
   it('has the fixed top-level keys in the required order', () => {
@@ -59,5 +68,43 @@ describe('MCP response envelope', () => {
         }
       ]
     });
+  });
+
+  it('keeps stack frame paths out of public unhandled-error warnings', () => {
+    const envelope = createUnhandledErrorEnvelope('nl_status', '/tmp/noemaloom-project', new Error('boom'));
+
+    expect(envelope.warnings[0].message).toBe('Error: boom');
+    expect(envelope.warnings[0].message).not.toContain('at ');
+    expect(envelope.warnings[0].message).not.toContain(import.meta.url);
+  });
+
+  it('rejects unsafe default projectPath roots', () => {
+    const root = path.parse(process.cwd()).root;
+
+    expect(() => resolveProjectRootFromInput({ projectPath: root })).toThrow(expect.objectContaining({
+      code: 'project_root_not_allowed'
+    }));
+
+    if (process.platform !== 'win32') {
+      expect(() => resolveProjectRootFromInput({ projectPath: '/etc' })).toThrow(expect.objectContaining({
+        code: 'project_root_not_allowed'
+      }));
+    }
+  });
+
+  it('honors NOEMALOOM_ALLOWED_PROJECTS as a strict projectPath allowlist', async () => {
+    const previous = process.env.NOEMALOOM_ALLOWED_PROJECTS;
+    const allowed = await mkdtemp(path.join(tmpdir(), 'noemaloom-allowed-root-'));
+    const outside = await mkdtemp(path.join(tmpdir(), 'noemaloom-denied-root-'));
+    process.env.NOEMALOOM_ALLOWED_PROJECTS = allowed;
+    try {
+      expect(resolveProjectRootFromInput({ projectPath: path.join(allowed, 'child') })).toBe(path.join(allowed, 'child'));
+      expect(() => resolveProjectRootFromInput({ projectPath: outside })).toThrow(expect.objectContaining({
+        code: 'project_root_not_allowed'
+      }));
+    } finally {
+      if (previous === undefined) delete process.env.NOEMALOOM_ALLOWED_PROJECTS;
+      else process.env.NOEMALOOM_ALLOWED_PROJECTS = previous;
+    }
   });
 });

@@ -123,7 +123,11 @@ async function removeStaleLockIfDead(projectRoot: string, lockFile: string): Pro
 
 async function acquireRefreshLock(projectRoot: string, lockFile: string): Promise<FileHandle | undefined> {
   try {
-    return await openExclusiveFileInsideStateDir(projectRoot, lockFile);
+    return await openExclusiveFileInsideStateDir(
+      projectRoot,
+      lockFile,
+      `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })}\n`
+    );
   } catch (error) {
     if (isErrnoException(error) && error.code === 'EEXIST') {
       return undefined;
@@ -151,9 +155,6 @@ export async function withRefreshLock<T>(
   }
 
   try {
-    await lockHandle.writeFile(
-      `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })}\n`
-    );
     return {
       ok: true,
       result: await task()

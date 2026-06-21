@@ -88,4 +88,19 @@ describe('code fact extractor', () => {
     const afterClass = result.spans.find(span => span.kind === 'code.function' && span.label === 'afterClass');
     expect(afterClass).toMatchObject({ startLine: 12, endLine: 14, metadata: { qualifiedName: 'src/scheduler.ts:afterClass' } });
   });
+
+  it('bounds callsite extraction per file and skips pathological long lines', () => {
+    const repeatedCalls = Array.from({ length: 1200 }, (_, index) => `call${index}()`).join('\n');
+    const longLine = `${'x'.repeat(20001)} afterLongLine()`;
+    const result = extractCodeFacts({
+      projectRoot: '/repo',
+      path: 'src/noisy.ts',
+      language: 'typescript',
+      text: `${repeatedCalls}\n${longLine}`
+    });
+
+    const callsites = result.spans.filter(span => span.kind === 'code.callsite');
+    expect(callsites).toHaveLength(1000);
+    expect(callsites.some(span => span.label === 'afterLongLine')).toBe(false);
+  });
 });

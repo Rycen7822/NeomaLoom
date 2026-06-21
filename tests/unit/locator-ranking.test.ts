@@ -246,6 +246,13 @@ describe('locator query normalization and ranking', () => {
     expect(ranked[0].scoreBreakdown.pathRoleScore).toBeGreaterThan(ranked[1].scoreBreakdown.pathRoleScore);
   });
 
+  it('caps extremely long raw queries before regex extraction', () => {
+    const normalized = normalizeQuery({ query: `${'z'.repeat(20_000)} AlphaBeta` });
+
+    expect(normalized.raw.length).toBeLessThanOrEqual(10_000);
+    expect(normalized.exactTerms).not.toContain('alphabeta');
+  });
+
   it('gates feature-projection candidates by structured role intent instead of broad content terms', () => {
     const docQuery = normalizeQuery({ query: 'update createClient documentation', targetRoles: ['canonical_api_doc'] });
     const featureCandidate = {

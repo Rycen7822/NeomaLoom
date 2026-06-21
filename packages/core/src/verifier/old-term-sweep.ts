@@ -17,6 +17,9 @@ export type OldTermHit = {
 const TEXT_EXTENSIONS = new Set([
   '.md', '.mdx', '.rst', '.txt', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.json', '.jsonl', '.yaml', '.yml', '.toml', '.csv', '.sh', '.bash', '.zsh', '.sql', '.css', '.html', '.xml'
 ]);
+const MAX_CHANGED_PATHS = 500;
+const MAX_DIRECTORY_EXPANSION_FILES = 1000;
+const HEAVY_DIRECTORY_NAMES = new Set(['node_modules', '.git', '.noemaloom', '__pycache__', '.venv', 'venv', '.tox']);
 
 function normalizeRepoPath(repoPath: string): string {
   return repoPath.replaceAll('\\', '/').replace(/^\/+/, '');
@@ -27,11 +30,18 @@ function isTextPath(repoPath: string): boolean {
   return !isGeneratedArtifactPath(normalized) && (TEXT_EXTENSIONS.has(path.posix.extname(normalized)) || path.posix.basename(repoPath).toUpperCase() === 'AGENTS.md'.toUpperCase());
 }
 
+function isHeavyIgnoredPath(repoPath: string): boolean {
+  return normalizeRepoPath(repoPath).split('/').some(part => HEAVY_DIRECTORY_NAMES.has(part));
+}
+
 async function expandChangedPath(projectRoot: string, repoPath: string): Promise<string[]> {
   let normalized: string;
   try {
     normalized = normalizeProjectRelativePath(projectRoot, repoPath);
   } catch {
+    return [];
+  }
+  if (isHeavyIgnoredPath(normalized)) {
     return [];
   }
   const absolute = resolveProjectReadPath(projectRoot, normalized);
@@ -53,13 +63,16 @@ async function expandChangedPath(projectRoot: string, repoPath: string): Promise
   const out: string[] = [];
   async function walk(dir: string): Promise<void> {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
-      if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === '.noemaloom' || entry.name === '__pycache__') {
+      if (HEAVY_DIRECTORY_NAMES.has(entry.name)) {
         continue;
       }
       const child = path.join(dir, entry.name);
       const childRelative = path.relative(root, child).replaceAll('\\', '/');
-      if (isGeneratedArtifactPath(childRelative)) {
+      if (isHeavyIgnoredPath(childRelative) || isGeneratedArtifactPath(childRelative)) {
         continue;
+      }
+      if (out.length >= MAX_DIRECTORY_EXPANSION_FILES) {
+        return;
       }
       if (entry.isDirectory()) {
         await walk(child);
@@ -78,7 +91,8 @@ export async function sweepOldTerms(input: {
   oldTerms: string[];
 }): Promise<OldTermHit[]> {
   const hits: OldTermHit[] = [];
-  const expandedPaths = [...new Set((await Promise.all(input.changedPaths.map(changedPath => expandChangedPath(input.projectRoot, changedPath)))).flat())];
+  const changedPaths = input.changedPaths.slice(0, MAX_CHANGED_PATHS);
+  const expandedPaths = [...new Set((await Promise.all(changedPaths.map(changedPath => expandChangedPath(input.projectRoot, changedPath)))).flat())];
   for (const changedPath of expandedPaths) {
     let text = '';
     try {
