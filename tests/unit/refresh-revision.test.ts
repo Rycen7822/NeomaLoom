@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import { writeRefreshRevision } from '../../packages/core/src/state/refresh-revision.js';
 import type { InventoryFile } from '../../packages/core/src/files/file-inventory.js';
+import type { RepoEdge, RepoSpan } from '../../packages/core/src/spans/types.js';
 
 const require = createRequire(import.meta.url);
 const { DatabaseSync } = require('node:sqlite') as {
@@ -34,6 +35,48 @@ function inventoryFile(projectRoot: string): InventoryFile {
     fileOnlySpan: false,
     spanKind: 'file',
     indexedText: ''
+  };
+}
+
+function repoSpan(spanId: string): RepoSpan {
+  return {
+    spanId,
+    path: 'src/index.ts',
+    kind: 'code.function',
+    role: 'source_file',
+    label: 'duplicate',
+    startLine: 1,
+    endLine: 1,
+    language: 'typescript',
+    headingPath: [],
+    symbolPath: ['duplicate'],
+    stableLocator: {
+      path: 'src/index.ts',
+      kind: 'code.function',
+      headingPath: [],
+      blockOrdinal: 0,
+      normalizedTextHash: 'hash',
+      nearbyHeadingHash: 'heading'
+    },
+    textHash: 'hash',
+    indexedText: 'export function duplicate() {}',
+    summary: 'duplicate',
+    metadata: {},
+    source: 'test',
+    updatedAt: 1
+  };
+}
+
+function repoEdge(edgeId: string, targetSpanId: string): RepoEdge {
+  return {
+    edgeId,
+    sourceSpanId: 'file:src-index',
+    targetSpanId,
+    relation: 'contains',
+    confidence: 1,
+    source: 'test',
+    evidence: {},
+    updatedAt: 1
   };
 }
 
@@ -71,6 +114,30 @@ function scalar(dbPath: string, sql: string): number {
 }
 
 describe('refresh revision persistence', () => {
+  it('deduplicates duplicate span and edge ids instead of aborting the refresh transaction', async () => {
+    const projectRoot = await createProject();
+    await mkdir(path.join(projectRoot, 'src'), { recursive: true });
+    await writeFile(path.join(projectRoot, 'src/index.ts'), 'export function duplicate() {}\n');
+
+    await writeRefreshRevision({
+      projectRoot,
+      graphRevision: 'rev-duplicates',
+      target: 'all',
+      startedAt: 1,
+      finishedAt: 1,
+      files: [inventoryFile(projectRoot)],
+      spans: [repoSpan('span:duplicate'), repoSpan('span:duplicate')],
+      edges: [repoEdge('edge:duplicate', 'span:duplicate'), repoEdge('edge:duplicate', 'span:duplicate')],
+      warnings: []
+    });
+
+    const dbPath = path.join(projectRoot, '.noemaloom', 'spans', 'spans.db');
+    expect(scalar(dbPath, 'SELECT COUNT(*) AS value FROM repo_spans')).toBe(1);
+    expect(scalar(dbPath, 'SELECT COUNT(*) AS value FROM repo_edges')).toBe(1);
+    expect(scalar(dbPath, 'SELECT span_count AS value FROM refresh_revisions')).toBe(1);
+    expect(scalar(dbPath, 'SELECT edge_count AS value FROM refresh_revisions')).toBe(1);
+  });
+
   it('retains only the most recent refresh revisions', async () => {
     const projectRoot = await createProject();
     await mkdir(path.join(projectRoot, 'src'), { recursive: true });

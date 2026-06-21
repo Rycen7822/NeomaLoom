@@ -41,6 +41,10 @@ function sha1(value: string): string {
   return createHash('sha1').update(value).digest('hex');
 }
 
+function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error;
+}
+
 function projectRootHash(projectRoot: string): string {
   return sha1(path.resolve(projectRoot)).slice(0, 16);
 }
@@ -96,8 +100,11 @@ export async function readHotsetManifest(projectRoot: string): Promise<HotsetMan
   const paths = resolveNoemaLoomPaths(projectRoot);
   try {
     return normalizeManifest(projectRoot, JSON.parse(await readFile(path.join(paths.hotsetDir, 'hotset.json'), 'utf8')) as unknown);
-  } catch {
-    return createEmptyHotsetManifest(projectRoot);
+  } catch (error) {
+    if (isErrnoException(error) && error.code === 'ENOENT') {
+      return createEmptyHotsetManifest(projectRoot);
+    }
+    throw error;
   }
 }
 

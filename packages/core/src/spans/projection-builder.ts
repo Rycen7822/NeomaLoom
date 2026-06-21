@@ -277,6 +277,18 @@ function bySpanOrder(left: RepoSpan, right: RepoSpan): number {
   );
 }
 
+function uniqueBy<T>(items: T[], keyFor: (item: T) => string): T[] {
+  const seen = new Set<string>();
+  return items.filter(item => {
+    const key = keyFor(item);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
 export function buildProjectionGraph(input: BuildProjectionGraphInput): ProjectionGraph {
   const fileSpans = [...input.files].sort((left, right) => left.path.localeCompare(right.path)).map(file => fileSpan(input.projectRoot, file));
   const fileByPath = new Map(fileSpans.map(span => [span.path, span]));
@@ -311,9 +323,11 @@ export function buildProjectionGraph(input: BuildProjectionGraphInput): Projecti
     })
     .filter((edge): edge is RepoEdge => Boolean(edge))
     .sort((left, right) => left.edgeId.localeCompare(right.edgeId));
+  const spans = uniqueBy([...featureSpans, ...fileSpans, ...projected].sort(bySpanOrder), span => span.spanId);
+  const edges = uniqueBy(containsEdges, edge => edge.edgeId);
 
   return {
-    spans: [...featureSpans, ...fileSpans, ...projected].sort(bySpanOrder),
-    edges: containsEdges
+    spans,
+    edges
   };
 }

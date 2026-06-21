@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import { createDefaultConfig, type NoemaLoomConfig } from '../config/default-config.js';
-import { safeLstatInsideProject, safeReadFileInsideProject, safeStatInsideProject, resolveProjectReadPath } from '../safety/path-guard.js';
+import { ProjectReadPathGuardError, safeLstatInsideProject, safeReadFileInsideProject, safeStatInsideProject, resolveProjectReadPath } from '../safety/path-guard.js';
 import type { FileRole, SpanKind } from '../spans/enums.js';
 import { isGitRepository, listGitVisibleFiles } from './git-files.js';
 import { createIgnoreMatcher } from './ignore-rules.js';
@@ -109,8 +109,14 @@ async function createInventoryFile(
 async function isSymlink(projectRoot: string, repoPath: string): Promise<boolean> {
   try {
     return (await safeLstatInsideProject(projectRoot, repoPath)).isSymbolicLink();
-  } catch {
-    return true;
+  } catch (error) {
+    if (error instanceof ProjectReadPathGuardError) {
+      return true;
+    }
+    if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return true;
+    }
+    throw error;
   }
 }
 

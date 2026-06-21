@@ -61,6 +61,25 @@ describe('NoemaLoom navigation workset state', () => {
     await expect(readFile(path.join(paths.worksetDir, 'events.jsonl'), 'utf8')).resolves.toContain('navigation_query');
   });
 
+  it('serializes concurrent navigation target writes without losing anchors', async () => {
+    const projectRoot = await createTempProject();
+
+    await Promise.all([
+      recordNavigationTargets({
+        projectRoot,
+        targets: [{ spanId: 'one', path: 'src/one.ts', kind: 'code.function', role: 'source_file', label: 'one', score: 100 }]
+      }),
+      recordNavigationTargets({
+        projectRoot,
+        targets: [{ spanId: 'two', path: 'src/two.ts', kind: 'code.function', role: 'source_file', label: 'two', score: 100 }]
+      })
+    ]);
+
+    const reloaded = await readWorksetManifest(projectRoot);
+    expect(reloaded.anchors.map(anchor => anchor.path).sort()).toEqual(['src/one.ts', 'src/two.ts']);
+    expect(reloaded.counters.navigationQuerySeq).toBe(2);
+  });
+
   it('records automatic navigation observations as dormant weak candidates when requested', async () => {
     const projectRoot = await createTempProject();
 

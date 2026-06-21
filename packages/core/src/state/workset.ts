@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, type FileHandle } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import path from 'node:path';
 
-import { writeFileInsideStateDir, appendFileInsideStateDir } from '../safety/path-guard.js';
+import { appendFileInsideStateDir, openExclusiveFileInsideStateDir, unlinkInsideStateDir, writeFileInsideStateDir } from '../safety/path-guard.js';
 import { ensureStateDir } from './state-dir.js';
 import { resolveNoemaLoomPaths } from './paths.js';
 
@@ -145,6 +146,86 @@ const DEFAULT_OPTIONS: WorksetOptions = {
     mode: 'silent'
   }
 };
+
+const WORKSET_LOCK_TTL_MS = 30_000;
+
+function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error;
+}
+
+function worksetLockPath(projectRoot: string): string {
+  return path.join(resolveNoemaLoomPaths(projectRoot).worksetDir, 'anchors.json.lock');
+}
+
+function lockExpired(raw: string, now = Date.now()): boolean {
+  const parts = raw.trim().split(/\s+/);
+  const timestamp = Number(parts[1]);
+  return !Number.isFinite(timestamp) || now - timestamp * 1000 > WORKSET_LOCK_TTL_MS;
+}
+
+async function removeStaleWorksetLock(projectRoot: string, lockFile: string): Promise<boolean> {
+  let raw = '';
+  try {
+    raw = await readFile(lockFile, 'utf8');
+  } catch (error) {
+    return isErrnoException(error) && error.code === 'ENOENT';
+  }
+  if (!lockExpired(raw)) {
+    return false;
+  }
+  try {
+    await unlinkInsideStateDir(projectRoot, lockFile);
+    return true;
+  } catch (error) {
+    if (isErrnoException(error) && error.code === 'ENOENT') {
+      return true;
+    }
+    throw error;
+  }
+}
+
+async function acquireWorksetLock(projectRoot: string, lockFile: string): Promise<FileHandle | undefined> {
+  try {
+    return await openExclusiveFileInsideStateDir(projectRoot, lockFile);
+  } catch (error) {
+    if (isErrnoException(error) && error.code === 'EEXIST') {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+async function withWorksetLock<T>(projectRoot: string, task: () => Promise<T>): Promise<T> {
+  const paths = await ensureStateDir(projectRoot);
+  const lockFile = worksetLockPath(paths.projectRoot);
+  const deadline = Date.now() + 2_000;
+  let lockHandle: FileHandle | undefined;
+  while (!lockHandle && Date.now() <= deadline) {
+    lockHandle = await acquireWorksetLock(paths.projectRoot, lockFile);
+    if (!lockHandle && (await removeStaleWorksetLock(paths.projectRoot, lockFile))) {
+      lockHandle = await acquireWorksetLock(paths.projectRoot, lockFile);
+    }
+    if (!lockHandle) {
+      await delay(25);
+    }
+  }
+  if (!lockHandle) {
+    throw new Error('workset_lock_busy');
+  }
+  try {
+    await lockHandle.writeFile(`${process.pid} ${Date.now() / 1000}\n`);
+    return await task();
+  } finally {
+    await lockHandle.close();
+    try {
+      await unlinkInsideStateDir(paths.projectRoot, lockFile);
+    } catch (error) {
+      if (!isErrnoException(error) || error.code !== 'ENOENT') {
+        throw error;
+      }
+    }
+  }
+}
 
 function sha1(value: string): string {
   return createHash('sha1').update(value).digest('hex');
@@ -316,19 +397,45 @@ export function createEmptyWorksetManifest(projectRoot: string): WorksetManifest
   };
 }
 
-export async function readWorksetManifest(projectRoot: string): Promise<WorksetManifest> {
+async function readWorksetManifestUnlocked(projectRoot: string): Promise<WorksetManifest> {
   const paths = resolveNoemaLoomPaths(projectRoot);
   try {
     return normalizeManifest(projectRoot, JSON.parse(await readFile(path.join(paths.worksetDir, 'anchors.json'), 'utf8')) as unknown);
-  } catch {
-    return createEmptyWorksetManifest(projectRoot);
+  } catch (error) {
+    if (isErrnoException(error) && error.code === 'ENOENT') {
+      return createEmptyWorksetManifest(projectRoot);
+    }
+    throw error;
   }
 }
 
-export async function writeWorksetManifest(projectRoot: string, manifest: WorksetManifest): Promise<void> {
-  const paths = await ensureStateDir(projectRoot);
+async function writeWorksetManifestUnlocked(projectRoot: string, manifest: WorksetManifest): Promise<WorksetManifest> {
+  const paths = resolveNoemaLoomPaths(projectRoot);
   const normalized = normalizeManifest(paths.projectRoot, manifest);
   await writeFileInsideStateDir(paths.projectRoot, path.join(paths.worksetDir, 'anchors.json'), `${JSON.stringify(normalized, null, 2)}\n`);
+  return normalized;
+}
+
+export async function readWorksetManifest(projectRoot: string): Promise<WorksetManifest> {
+  return readWorksetManifestUnlocked(projectRoot);
+}
+
+export async function writeWorksetManifest(projectRoot: string, manifest: WorksetManifest): Promise<void> {
+  await withWorksetLock(projectRoot, async () => {
+    await writeWorksetManifestUnlocked(projectRoot, manifest);
+  });
+}
+
+export async function updateWorksetManifest<T>(
+  projectRoot: string,
+  update: (current: WorksetManifest) => Promise<{ manifest: WorksetManifest; result: T; write?: boolean }> | { manifest: WorksetManifest; result: T; write?: boolean }
+): Promise<{ manifest: WorksetManifest; result: T }> {
+  return withWorksetLock(projectRoot, async () => {
+    const current = await readWorksetManifestUnlocked(projectRoot);
+    const updated = await update(current);
+    const manifest = updated.write === false ? normalizeManifest(projectRoot, updated.manifest) : await writeWorksetManifestUnlocked(projectRoot, updated.manifest);
+    return { manifest, result: updated.result };
+  });
 }
 
 export async function appendWorksetEvent(projectRoot: string, event: Record<string, unknown>): Promise<void> {
@@ -526,19 +633,20 @@ export async function recordNavigationTargets(input: {
   reviveDormant?: boolean;
   preserveCurated?: boolean;
 }): Promise<WorksetManifest> {
-  const current = await readWorksetManifest(input.projectRoot);
-  const next = upsertNavigationTargets({
-    manifest: current,
-    targets: input.targets,
-    source: input.source,
-    reason: input.reason,
-    now: input.now,
-    maxTargets: input.maxTargets,
-    defaultState: input.defaultState,
-    reviveDormant: input.reviveDormant,
-    preserveCurated: input.preserveCurated
+  const { manifest: next } = await updateWorksetManifest(input.projectRoot, current => {
+    const nextManifest = upsertNavigationTargets({
+      manifest: current,
+      targets: input.targets,
+      source: input.source,
+      reason: input.reason,
+      now: input.now,
+      maxTargets: input.maxTargets,
+      defaultState: input.defaultState,
+      reviveDormant: input.reviveDormant,
+      preserveCurated: input.preserveCurated
+    });
+    return { manifest: nextManifest, result: nextManifest };
   });
-  await writeWorksetManifest(input.projectRoot, next);
   await appendWorksetEvent(input.projectRoot, {
     type: 'navigation_query',
     navigationQuerySeq: next.counters.navigationQuerySeq,

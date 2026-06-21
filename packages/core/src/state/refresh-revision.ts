@@ -108,6 +108,18 @@ function boundedField(value: string, maxBytes: number): string {
   return byteLength(redacted) <= maxBytes ? redacted : truncateUtf8(redacted, maxBytes);
 }
 
+function uniqueBy<T>(items: T[], keyFor: (item: T) => string): T[] {
+  const seen = new Set<string>();
+  return items.filter(item => {
+    const key = keyFor(item);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && 'code' in error;
 }
@@ -212,8 +224,8 @@ export function createGraphRevision(input: {
       target: input.target,
       nonce: input.nonce,
       files: input.files.map(file => [file.path, file.contentHash]).sort(),
-      spans: input.spans.map(span => span.spanId).sort(),
-      edges: input.edges.map(edge => edge.edgeId).sort()
+      spans: [...new Set(input.spans.map(span => span.spanId))].sort(),
+      edges: [...new Set(input.edges.map(edge => edge.edgeId))].sort()
     })
   ).slice(0, 16)}`;
 }
@@ -309,6 +321,8 @@ export async function writeRefreshRevision(input: {
   const db = openDatabase(tempDbPath);
   let wroteSuccessfully = false;
   let transactionActive = false;
+  const uniqueSpans = uniqueBy(input.spans, span => span.spanId);
+  const uniqueEdges = uniqueBy(input.edges, edge => edge.edgeId);
 
   try {
     resetSchema(db);
@@ -320,18 +334,18 @@ export async function writeRefreshRevision(input: {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
     const insertSpan = db.prepare(
-      `INSERT INTO repo_spans
+      `INSERT OR IGNORE INTO repo_spans
         (span_id, path, kind, role, label, start_line, end_line, start_column, end_column, parent_span_id, language,
          heading_path_json, symbol_path_json, anchor, stable_locator_json, text_hash, indexed_text, summary, metadata_json, source, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
     const insertSpanFts = db.prepare(
-      `INSERT INTO repo_spans_fts
+      `INSERT OR IGNORE INTO repo_spans_fts
         (span_id, path, kind, role, label, heading_path, symbol_path, indexed_text, summary)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
     const insertEdge = db.prepare(
-      `INSERT INTO repo_edges
+      `INSERT OR IGNORE INTO repo_edges
         (edge_id, source_span_id, target_span_id, relation, confidence, source, evidence_json, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     );
@@ -356,7 +370,7 @@ export async function writeRefreshRevision(input: {
         VALUES (?, ?, ?)
         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`
     );
-    const retrievalCore = buildRetrievalCoreRecords(input.spans);
+    const retrievalCore = buildRetrievalCoreRecords(uniqueSpans);
 
     for (const file of input.files) {
       insertFile.run(
@@ -373,7 +387,7 @@ export async function writeRefreshRevision(input: {
         JSON.stringify({ oversized: file.oversized, fileOnlySpan: file.fileOnlySpan })
       );
     }
-    for (const span of input.spans) {
+    for (const span of uniqueSpans) {
       const bounded = boundedIndexedText(span);
       const boundedLabel = boundedField(span.label, MAX_REPO_SPAN_LABEL_BYTES);
       const boundedSummary = boundedField(span.summary, MAX_REPO_SPAN_SUMMARY_BYTES);
@@ -412,7 +426,7 @@ export async function writeRefreshRevision(input: {
         boundedSummary
       );
     }
-    for (const edge of input.edges) {
+    for (const edge of uniqueEdges) {
       insertEdge.run(
         edge.edgeId,
         edge.sourceSpanId,
@@ -472,8 +486,8 @@ export async function writeRefreshRevision(input: {
       input.startedAt,
       input.finishedAt,
       input.files.length,
-      input.spans.length,
-      input.edges.length,
+      uniqueSpans.length,
+      uniqueEdges.length,
       JSON.stringify(input.warnings)
     );
     if (input.coverage) {
@@ -524,8 +538,8 @@ export async function writeRefreshRevision(input: {
       graphRevision: input.graphRevision,
       target: input.target,
       fileCount: input.files.length,
-      spanCount: input.spans.length,
-      edgeCount: input.edges.length,
+      spanCount: uniqueSpans.length,
+      edgeCount: uniqueEdges.length,
       coverage: input.coverage ?? null,
       warnings: input.warnings
     })}\n`

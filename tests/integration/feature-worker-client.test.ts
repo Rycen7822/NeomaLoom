@@ -30,6 +30,7 @@ describe('feature worker client', () => {
     const stateDir = path.join(projectRoot, '.noemaloom');
     await writeProjectFile(projectRoot, 'package.json', JSON.stringify({ name: 'client-demo' }));
     await writeProjectFile(projectRoot, '.venv/lib/python/site-packages/hidden_test.py', 'def test_hidden_worker_case(): pass\n');
+    await writeProjectFile(projectRoot, 'target/debug/hidden_test.py', 'def test_hidden_target_case(): pass\n');
     await writeProjectFile(projectRoot, 'docs/oversized.md', `${'# Large ignored doc\n'}${'x'.repeat(1_100_000)}`);
     await mkdir(path.join(projectRoot, 'tests'), { recursive: true });
     await writeFile(path.join(projectRoot, 'tests', 'binary.test.py'), Buffer.from([0xff, 0xfe, 0x00, 0x61]));
@@ -51,6 +52,7 @@ describe('feature worker client', () => {
     }>;
     expect(features).toContainEqual({ id: 'package:client-demo', title: 'Package client-demo', source: 'package' });
     expect(features.some(feature => feature.id.includes('hidden-worker-case'))).toBe(false);
+    expect(features.some(feature => feature.id.includes('hidden-target-case'))).toBe(false);
     expect(features.some(feature => feature.id.includes('oversized'))).toBe(false);
     await expect(access(path.join(projectRoot, '.rpgkit'))).rejects.toThrow();
   });

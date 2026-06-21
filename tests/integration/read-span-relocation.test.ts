@@ -8,7 +8,7 @@ import { callInternalTool, callRegisteredTool } from '../../packages/core/src/mc
 const require = createRequire(import.meta.url);
 const { DatabaseSync } = require('node:sqlite') as {
   DatabaseSync: new (filename: string) => {
-    prepare: (sql: string) => { run: (...params: unknown[]) => void };
+    prepare: (sql: string) => { run: (...params: unknown[]) => void; get: (...params: unknown[]) => unknown };
     close: () => void;
   };
 };
@@ -67,6 +67,17 @@ function poisonSpanPath(projectRoot: string, spanId: string, unsafePath: string)
   const db = new DatabaseSync(path.join(projectRoot, '.noemaloom', 'spans', 'spans.db'));
   try {
     db.prepare('UPDATE repo_spans SET path = ? WHERE span_id = ?').run(unsafePath, spanId);
+  } finally {
+    db.close();
+  }
+}
+
+function readSpanByPathKind(projectRoot: string, repoPath: string, kind: string): { spanId: string; metadataJson: string } | undefined {
+  const db = new DatabaseSync(path.join(projectRoot, '.noemaloom', 'spans', 'spans.db'));
+  try {
+    return db
+      .prepare('SELECT span_id AS spanId, metadata_json AS metadataJson FROM repo_spans WHERE path = ? AND kind = ? LIMIT 1')
+      .get(repoPath, kind) as { spanId: string; metadataJson: string } | undefined;
   } finally {
     db.close();
   }
@@ -249,6 +260,51 @@ describe('nl_read_span relocation and block sizing', () => {
       ])
     });
     expect(read.data.content).toContain('LARGE_MODULE_SENTINEL');
+  });
+
+  it('relocates truncated large code spans by prefix after line drift', async () => {
+    const projectRoot = await createProject();
+    await writeProjectFile(
+      projectRoot,
+      'src/truncated_module.py',
+      [
+        'TRUNCATED_PREFIX_SENTINEL = True',
+        ...Array.from({ length: 1200 }, (_, index) => `VALUE_${index} = ${index}`),
+        ''
+      ].join('\n')
+    );
+    await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'all',
+      mode: 'safe'
+    });
+    const moduleSpan = readSpanByPathKind(projectRoot, 'src/truncated_module.py', 'code.module');
+    expect(moduleSpan).toBeTruthy();
+    if (!moduleSpan) {
+      throw new Error('truncated module span was not indexed');
+    }
+    expect(JSON.parse(moduleSpan.metadataJson)).toMatchObject({ indexedTextTruncatedAtWrite: true });
+
+    const modulePath = path.join(projectRoot, 'src/truncated_module.py');
+    const original = await readFile(modulePath, 'utf8');
+    await writeFile(modulePath, ['# inserted line drift', original].join('\n'), 'utf8');
+
+    const read = await callInternalTool('nl_read_span', {
+      projectPath: projectRoot,
+      spanId: moduleSpan.spanId,
+      contextLines: 0,
+      maxLines: 80
+    });
+
+    expect(read.ok).toBe(true);
+    expect(read.graphState).toBe('stale');
+    expect(read.data).toMatchObject({
+      status: 'block_too_large',
+      path: 'src/truncated_module.py',
+      contentStatus: 'preview',
+      relocation: { used: true, method: 'truncated_prefix_search' }
+    });
+    expect(read.data.content).toContain('TRUNCATED_PREFIX_SENTINEL');
   });
 
   it('returns a clear relocation failure when a changed span cannot be found', async () => {

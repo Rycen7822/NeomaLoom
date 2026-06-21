@@ -4,39 +4,61 @@ export type IgnoreMatcher = {
 };
 
 function normalizeRepoPath(repoPath: string): string {
-  return repoPath.replaceAll('\\', '/').replace(/^\/+/, '');
+  return repoPath.replaceAll('\\', '/').replace(/^\/+/, '').replace(/\/+/g, '/');
 }
 
-function matchesPattern(pattern: string, repoPath: string): boolean {
+function escapeRegex(char: string): string {
+  return /[|\\{}()[\]^$+?.]/.test(char) ? `\\${char}` : char;
+}
+
+function globToRegex(pattern: string): RegExp {
   const normalizedPattern = normalizeRepoPath(pattern);
-  const normalizedPath = normalizeRepoPath(repoPath);
-
-  if (normalizedPattern.startsWith('**/') && normalizedPattern.endsWith('/**')) {
-    const segmentPath = normalizedPattern.slice(3, -3);
-    return normalizedPath === segmentPath || normalizedPath.startsWith(`${segmentPath}/`) || normalizedPath.includes(`/${segmentPath}/`);
+  let source = normalizedPattern.includes('/') ? '^' : '^(?:.*/)?';
+  for (let index = 0; index < normalizedPattern.length;) {
+    const char = normalizedPattern[index];
+    const next = normalizedPattern[index + 1];
+    if (char === '*') {
+      if (next === '*') {
+        index += 2;
+        if (normalizedPattern[index] === '/') {
+          source += '(?:.*/)?';
+          index += 1;
+        } else {
+          source += '.*';
+        }
+        continue;
+      }
+      source += '[^/]*';
+      index += 1;
+      continue;
+    }
+    if (char === '?') {
+      source += '[^/]';
+      index += 1;
+      continue;
+    }
+    if (char === '/') {
+      source += '/';
+      index += 1;
+      continue;
+    }
+    source += escapeRegex(char);
+    index += 1;
   }
-
-  if (normalizedPattern.endsWith('/**')) {
-    const prefix = normalizedPattern.slice(0, -3);
-    return normalizedPath === prefix || normalizedPath.startsWith(`${prefix}/`);
-  }
-
-  if (normalizedPattern.startsWith('*.')) {
-    return normalizedPath.endsWith(normalizedPattern.slice(1));
-  }
-
-  return normalizedPath === normalizedPattern;
+  return new RegExp(`${source}$`);
 }
 
 export function createIgnoreMatcher(patterns: string[], options: { includeVendor?: boolean } = {}): IgnoreMatcher {
   const effectivePatterns = [...patterns, '.noemaloom/**'].filter(
     pattern => !(options.includeVendor && pattern === 'vendor/**')
   );
+  const compiledPatterns = effectivePatterns.map(pattern => globToRegex(pattern));
 
   return {
     patterns: effectivePatterns,
     ignores(repoPath: string): boolean {
-      return effectivePatterns.some(pattern => matchesPattern(pattern, repoPath));
+      const normalizedPath = normalizeRepoPath(repoPath);
+      return compiledPatterns.some(pattern => pattern.test(normalizedPath));
     }
   };
 }

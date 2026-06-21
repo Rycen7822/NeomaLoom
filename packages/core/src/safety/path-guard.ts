@@ -1,5 +1,5 @@
 import { lstatSync, readFileSync, statSync } from 'node:fs';
-import { open, appendFile, lstat, mkdir, readFile, readdir, stat, unlink, writeFile, type FileHandle } from 'node:fs/promises';
+import { open, appendFile, lstat, mkdir, readFile, readdir, rename, stat, unlink, writeFile, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 
 export class StatePathGuardError extends Error {
@@ -219,8 +219,30 @@ export async function writeFileInsideStateDir(
   await assertNoSymlinkEscape(projectRoot, safePath);
   await mkdir(path.dirname(safePath), { recursive: true });
   await assertNoSymlinkEscape(projectRoot, safePath);
-  await writeFile(safePath, data);
-  return safePath;
+  const tempBaseName = path.basename(safePath).replace(/^\.+/, '') || 'state';
+  const tempPath = assertWritableStatePath(
+    projectRoot,
+    path.join(path.dirname(safePath), `.tmp-${tempBaseName}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`)
+  );
+  await assertNoSymlinkEscape(projectRoot, tempPath);
+  let wroteTemp = false;
+  try {
+    await writeFile(tempPath, data, { flag: 'wx' });
+    wroteTemp = true;
+    await rename(tempPath, safePath);
+    wroteTemp = false;
+    return safePath;
+  } finally {
+    if (wroteTemp) {
+      try {
+        await unlink(tempPath);
+      } catch (error) {
+        if (!isErrnoException(error) || error.code !== 'ENOENT') {
+          throw error;
+        }
+      }
+    }
+  }
 }
 
 export async function appendFileInsideStateDir(

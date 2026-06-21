@@ -18,6 +18,7 @@ IGNORED_DIRS = {
     "node_modules",
     "dist",
     "build",
+    "target",
     "coverage",
     "vendor",
     "__pycache__",

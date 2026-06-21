@@ -9,9 +9,9 @@ import {
   retireAnchor,
   setNavigationEnabled,
   updateAnchorState,
+  updateWorksetManifest,
   upsertNavigationTargets,
   worksetRevision,
-  writeWorksetManifest,
   type NavigationAnchor,
   type NavigationAnchorLifecycleState,
   type WorksetManifest
@@ -180,8 +180,7 @@ export function anchorStatusData(manifest: WorksetManifest, includeRetired: bool
   };
 }
 
-async function writeAndReturn(tool: string, projectRoot: string, manifest: WorksetManifest, includeRetired = false): Promise<NoemaLoomEnvelope> {
-  await writeWorksetManifest(projectRoot, manifest);
+function anchorEnvelope(tool: string, projectRoot: string, manifest: WorksetManifest, includeRetired = false): NoemaLoomEnvelope {
   return createEnvelope({
     ok: true,
     tool,
@@ -190,6 +189,19 @@ async function writeAndReturn(tool: string, projectRoot: string, manifest: Works
     graphState: anchorGraphStateFor(manifest),
     data: anchorStatusData(manifest, includeRetired, true)
   });
+}
+
+async function updateAndReturn(
+  tool: string,
+  projectRoot: string,
+  update: (manifest: WorksetManifest) => WorksetManifest,
+  includeRetired = false
+): Promise<NoemaLoomEnvelope> {
+  const { manifest } = await updateWorksetManifest(projectRoot, current => {
+    const next = update(current);
+    return { manifest: next, result: next };
+  });
+  return anchorEnvelope(tool, projectRoot, manifest, includeRetired);
 }
 
 export async function handleNlAnchorStatus(input: unknown): Promise<NoemaLoomEnvelope> {
@@ -209,7 +221,7 @@ export async function handleNlAnchorStatus(input: unknown): Promise<NoemaLoomEnv
 export async function handleNlAnchorPromote(input: unknown): Promise<NoemaLoomEnvelope> {
   const parsed = nlAnchorPromoteInputSchema.parse(input ?? {});
   const projectRoot = resolveProjectRootFromInput(parsed);
-  let manifest = await readWorksetManifest(projectRoot);
+  const manifest = await readWorksetManifest(projectRoot);
   const validationWarning = await validateAnchorProjectPath(projectRoot, parsed.path);
   if (validationWarning) {
     return createEnvelope({
@@ -223,38 +235,40 @@ export async function handleNlAnchorPromote(input: unknown): Promise<NoemaLoomEn
     });
   }
 
-  manifest = upsertNavigationTargets({
-    manifest,
-    source: 'agent_curated',
-    reason: parsed.reason,
-    maxTargets: 1,
-    preserveCurated: false,
-    targets: [
-      {
-        path: parsed.path,
-        label: parsed.label ?? parsed.path,
-        kind: parsed.kind,
-        role: parsed.role,
-        startLine: parsed.startLine,
-        endLine: parsed.endLine,
-        score: 100,
-        confidence: 1,
-        reason: parsed.reason
-      }
-    ]
+  return updateAndReturn('nl_anchor_promote', projectRoot, current => {
+    let next = upsertNavigationTargets({
+      manifest: current,
+      source: 'agent_curated',
+      reason: parsed.reason,
+      maxTargets: 1,
+      preserveCurated: false,
+      targets: [
+        {
+          path: parsed.path,
+          label: parsed.label ?? parsed.path,
+          kind: parsed.kind,
+          role: parsed.role,
+          startLine: parsed.startLine,
+          endLine: parsed.endLine,
+          score: 100,
+          confidence: 1,
+          reason: parsed.reason
+        }
+      ]
+    });
+    if (parsed.pinned) {
+      next = {
+        ...next,
+        anchors: next.anchors.map(anchor => anchorMatchesInput(anchor, parsed)
+          ? { ...anchor, pinned: true }
+          : anchor)
+      };
+    }
+    if (typeof parsed.enableNavigation === 'boolean') {
+      next = setNavigationEnabled(next, parsed.enableNavigation);
+    }
+    return next;
   });
-  if (parsed.pinned) {
-    manifest = {
-      ...manifest,
-      anchors: manifest.anchors.map(anchor => anchorMatchesInput(anchor, parsed)
-        ? { ...anchor, pinned: true }
-        : anchor)
-    };
-  }
-  if (typeof parsed.enableNavigation === 'boolean') {
-    manifest = setNavigationEnabled(manifest, parsed.enableNavigation);
-  }
-  return writeAndReturn('nl_anchor_promote', projectRoot, manifest);
 }
 
 export async function handleNlAnchorDemote(input: unknown): Promise<NoemaLoomEnvelope> {
@@ -273,7 +287,10 @@ export async function handleNlAnchorDemote(input: unknown): Promise<NoemaLoomEnv
       data: anchorStatusData(manifest, true, true)
     });
   }
-  return writeAndReturn('nl_anchor_demote', projectRoot, updateAnchorState(manifest, anchor.id, parsed.state, parsed.reason));
+  return updateAndReturn('nl_anchor_demote', projectRoot, current => {
+    const currentAnchor = findAnchor(current, parsed);
+    return currentAnchor ? updateAnchorState(current, currentAnchor.id, parsed.state, parsed.reason) : current;
+  });
 }
 
 export async function handleNlAnchorManage(input: unknown): Promise<NoemaLoomEnvelope> {
@@ -310,7 +327,10 @@ export async function handleNlAnchorRetire(input: unknown): Promise<NoemaLoomEnv
       data: anchorStatusData(manifest, true, true)
     });
   }
-  return writeAndReturn('nl_anchor_retire', projectRoot, retireAnchor(manifest, anchor.id, parsed.reason), true);
+  return updateAndReturn('nl_anchor_retire', projectRoot, current => {
+    const currentAnchor = findAnchor(current, parsed);
+    return currentAnchor ? retireAnchor(current, currentAnchor.id, parsed.reason) : current;
+  }, true);
 }
 
 export async function handleNlAnchorRepair(input: unknown): Promise<NoemaLoomEnvelope> {
@@ -343,47 +363,52 @@ export async function handleNlAnchorRepair(input: unknown): Promise<NoemaLoomEnv
       });
     }
   }
-  const nextCounters = {
-    ...manifest.counters,
-    projectActivitySeq: manifest.counters.projectActivitySeq + 1
-  };
-  const next: WorksetManifest = {
-    ...manifest,
-    counters: nextCounters,
-    anchors: manifest.anchors.map(candidate => candidate.id === anchor.id
-      ? {
-          ...candidate,
-          path: parsed.newPath ?? candidate.path,
-          label: parsed.label ?? candidate.label,
-          startLine: parsed.startLine ?? candidate.startLine,
-          endLine: parsed.endLine ?? candidate.endLine,
-          kind: parsed.kind ?? candidate.kind,
-          role: parsed.role ?? candidate.role,
-          state: 'active' as NavigationAnchorLifecycleState,
-          source: 'agent_curated' as const,
-          reason: parsed.reason,
-          updatedAt: new Date().toISOString(),
-          lastSeenSeq: nextCounters.projectActivitySeq
-        }
-      : candidate)
-  };
-  return writeAndReturn('nl_anchor_repair', projectRoot, next);
+  return updateAndReturn('nl_anchor_repair', projectRoot, current => {
+    const currentAnchor = findAnchor(current, parsed);
+    if (!currentAnchor) {
+      return current;
+    }
+    const nextCounters = {
+      ...current.counters,
+      projectActivitySeq: current.counters.projectActivitySeq + 1
+    };
+    return {
+      ...current,
+      counters: nextCounters,
+      anchors: current.anchors.map(candidate => candidate.id === currentAnchor.id
+        ? {
+            ...candidate,
+            path: parsed.newPath ?? candidate.path,
+            label: parsed.label ?? candidate.label,
+            startLine: parsed.startLine ?? candidate.startLine,
+            endLine: parsed.endLine ?? candidate.endLine,
+            kind: parsed.kind ?? candidate.kind,
+            role: parsed.role ?? candidate.role,
+            state: 'active' as NavigationAnchorLifecycleState,
+            source: 'agent_curated' as const,
+            reason: parsed.reason,
+            updatedAt: new Date().toISOString(),
+            lastSeenSeq: nextCounters.projectActivitySeq
+          }
+        : candidate)
+    };
+  });
 }
 
 export async function handleNlAnchorCheckpoint(input: unknown): Promise<NoemaLoomEnvelope> {
   const parsed = nlAnchorCheckpointInputSchema.parse(input ?? {});
   const projectRoot = resolveProjectRootFromInput(parsed);
-  let manifest = await readWorksetManifest(projectRoot);
-  if (manifest.version !== 1) manifest = createEmptyWorksetManifest(projectRoot);
-  if (typeof parsed.enabled === 'boolean' || parsed.mode) {
-    manifest = setNavigationEnabled(manifest, parsed.enabled ?? manifest.options.navigation.enabled, parsed.mode ?? manifest.options.navigation.mode);
-  }
-  manifest = {
-    ...manifest,
-    counters: {
-      ...manifest.counters,
-      projectActivitySeq: manifest.counters.projectActivitySeq + 1
+  return updateAndReturn('nl_anchor_checkpoint', projectRoot, current => {
+    let next = current.version === 1 ? current : createEmptyWorksetManifest(projectRoot);
+    if (typeof parsed.enabled === 'boolean' || parsed.mode) {
+      next = setNavigationEnabled(next, parsed.enabled ?? next.options.navigation.enabled, parsed.mode ?? next.options.navigation.mode);
     }
-  };
-  return writeAndReturn('nl_anchor_checkpoint', projectRoot, manifest);
+    return {
+      ...next,
+      counters: {
+        ...next.counters,
+        projectActivitySeq: next.counters.projectActivitySeq + 1
+      }
+    };
+  });
 }

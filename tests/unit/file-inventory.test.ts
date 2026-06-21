@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -129,6 +129,7 @@ describe('file inventory', () => {
       'node_modules/pkg/index.js',
       'dist/app.js',
       'build/app.js',
+      'target/debug/app.js',
       '.venv/bin/python',
       'coverage/summary.json',
       'src/__pycache__/app.cpython-312.pyc',
@@ -149,12 +150,60 @@ describe('file inventory', () => {
       'dist/app.js',
       'node_modules/pkg/index.js',
       'src/__pycache__/app.cpython-312.pyc',
+      'target/debug/app.js',
       'vendor/pkg/index.js'
     ]);
 
     const withVendor = await buildFileInventory({ projectRoot, includeVendor: true });
     expect(withVendor.files.map(file => file.path)).toEqual(['src/app.ts', 'vendor/pkg/index.js']);
     expect(withVendor.files.find(file => file.path === 'vendor/pkg/index.js')?.role).toBe('vendor_file');
+  });
+
+  it('supports common glob patterns in custom ignore rules', async () => {
+    const projectRoot = await createTempProject('noemaloom-common-glob-inventory-');
+    for (const repoPath of [
+      'README.md',
+      'src/app.ts',
+      'src/nested/app.ts',
+      'src/app.js',
+      'tests/client.test.ts',
+      'foo.js',
+      'lib/foo.js',
+      'dir/direct.ts',
+      'dir/nested/keep.ts'
+    ]) {
+      await writeProjectFile(projectRoot, repoPath, `${repoPath}\n`);
+    }
+    const config = createDefaultConfig(projectRoot);
+    config.fileInventory.ignoreGlobs = ['src/**/*.ts', '*.test.ts', '**/foo.js', 'dir/*'];
+
+    const inventory = await buildFileInventory({ projectRoot, config });
+
+    expect(inventory.files.map(file => file.path)).toEqual(['README.md', 'dir/nested/keep.ts', 'src/app.js']);
+    expect(inventory.ignoredPaths).toEqual([
+      'dir/direct.ts',
+      'foo.js',
+      'lib/foo.js',
+      'src/app.ts',
+      'src/nested/app.ts',
+      'tests/client.test.ts'
+    ]);
+  });
+
+  it('does not hide unexpected lstat failures as symlink ignores', async () => {
+    if (process.platform === 'win32') {
+      return;
+    }
+    const projectRoot = await createTempProject('noemaloom-lstat-error-inventory-');
+    await execFileAsync('git', ['init'], { cwd: projectRoot });
+    await writeProjectFile(projectRoot, 'blocked/file.ts', 'export const blocked = true;\n');
+    await execFileAsync('git', ['add', 'blocked/file.ts'], { cwd: projectRoot });
+    await chmod(path.join(projectRoot, 'blocked'), 0o000);
+    try {
+      await expect(buildFileInventory({ projectRoot })).rejects.toMatchObject({ code: 'EACCES' });
+    } finally {
+      await chmod(path.join(projectRoot, 'blocked'), 0o700);
+    }
   });
 
   it('does not follow symlinked files outside the repository', async () => {

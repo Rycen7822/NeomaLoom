@@ -33,10 +33,12 @@ type SpanRow = {
   stable_locator_json: string;
   text_hash: string;
   indexed_text: string;
+  metadata_json: string;
   file_content_hash: string | null;
 };
 
 const require = createRequire(import.meta.url);
+const TRUNCATION_SUFFIX = '\n…[truncated]';
 
 function openDatabase(filename: string): Database {
   const sqlite = require('node:sqlite') as { DatabaseSync: new (filename: string) => Database };
@@ -74,7 +76,7 @@ function readSpanRow(projectRoot: string, spanId: string): SpanRow | undefined {
       .prepare(
         `SELECT s.span_id, s.path, s.kind, s.role, s.label, s.start_line, s.end_line,
                 s.heading_path_json, s.anchor, s.stable_locator_json, s.text_hash, s.indexed_text,
-                f.content_hash AS file_content_hash
+                s.metadata_json, f.content_hash AS file_content_hash
          FROM repo_spans s
          LEFT JOIN repo_files f ON f.path = s.path
          WHERE s.span_id = ?`
@@ -137,6 +139,14 @@ function boundedReadRange(input: {
   };
 }
 
+function indexedTextForRelocation(row: SpanRow): string {
+  const metadata = parseJson<Record<string, unknown>>(row.metadata_json, {});
+  if (metadata.indexedTextTruncatedAtWrite === true && row.indexed_text.endsWith(TRUNCATION_SUFFIX)) {
+    return row.indexed_text.slice(0, -TRUNCATION_SUFFIX.length);
+  }
+  return row.indexed_text;
+}
+
 function previousRelocatable(row: SpanRow): RelocatableSpan {
   const headingPath = parseJson<string[]>(row.heading_path_json, []);
   const stableLocator = parseJson<{ blockOrdinal?: number; nearbyHeadingHash?: string }>(row.stable_locator_json, {});
@@ -148,7 +158,7 @@ function previousRelocatable(row: SpanRow): RelocatableSpan {
     anchor: row.anchor ?? undefined,
     headingPath,
     blockOrdinal: stableLocator.blockOrdinal ?? 0,
-    normalizedText: row.indexed_text,
+    normalizedText: indexedTextForRelocation(row),
     nearbyHeadingHash: stableLocator.nearbyHeadingHash ?? sha1(JSON.stringify(headingPath))
   };
 }
@@ -194,6 +204,36 @@ function exactTextLineRange(currentText: string, indexedText: string): { startLi
   };
 }
 
+function textSearchLineRange(row: SpanRow, currentText: string): { startLine: number; endLine: number; text: string; method: string } | undefined {
+  const exact = exactTextLineRange(currentText, row.indexed_text);
+  if (exact) {
+    return { ...exact, method: 'text_search' };
+  }
+
+  const metadata = parseJson<Record<string, unknown>>(row.metadata_json, {});
+  if (metadata.indexedTextTruncatedAtWrite !== true || !row.indexed_text.endsWith(TRUNCATION_SUFFIX)) {
+    return undefined;
+  }
+  const prefix = row.indexed_text.slice(0, -TRUNCATION_SUFFIX.length);
+  if (!prefix) {
+    return undefined;
+  }
+  const index = currentText.indexOf(prefix);
+  if (index < 0) {
+    return undefined;
+  }
+  const before = currentText.slice(0, index);
+  const startLine = lineCount(before);
+  const spanLineCount = Math.max(1, row.end_line - row.start_line + 1);
+  const endLine = Math.min(lineCount(currentText), startLine + spanLineCount - 1);
+  return {
+    startLine,
+    endLine,
+    text: sliceLines(currentText, startLine, endLine),
+    method: 'truncated_prefix_search'
+  };
+}
+
 async function relocateIfNeeded(input: {
   row: SpanRow;
   currentText: string;
@@ -228,13 +268,13 @@ async function relocateIfNeeded(input: {
     }
   }
 
-  const exact = exactTextLineRange(input.currentText, input.row.indexed_text);
-  if (exact) {
+  const textSearch = textSearchLineRange(input.row, input.currentText);
+  if (textSearch) {
     return {
-      startLine: exact.startLine,
-      endLine: exact.endLine,
-      spanText: exact.text,
-      relocation: { used: true, method: 'text_search' }
+      startLine: textSearch.startLine,
+      endLine: textSearch.endLine,
+      spanText: textSearch.text,
+      relocation: { used: true, method: textSearch.method }
     };
   }
 
