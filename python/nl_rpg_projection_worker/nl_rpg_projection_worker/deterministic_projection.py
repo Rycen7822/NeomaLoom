@@ -52,6 +52,8 @@ def _iter_repo_files(project_root: Path) -> Iterable[Path]:
 def _read_text(project_root: Path, relative: Path) -> str:
     target = project_root / relative
     try:
+        if target.is_symlink() or not target.is_file():
+            return ""
         if target.stat().st_size > MAX_WORKER_FILE_BYTES:
             return ""
         return target.read_text(encoding="utf-8", errors="replace")
@@ -64,12 +66,12 @@ def _slug(value: str) -> str:
 
 
 def _package_features(project_root: Path) -> list[dict[str, str]]:
-    package_file = project_root / "package.json"
-    if not package_file.exists():
+    text = _read_text(project_root, Path("package.json"))
+    if not text:
         return []
     try:
-        data = json.loads(package_file.read_text(encoding="utf-8", errors="replace"))
-    except (OSError, json.JSONDecodeError):
+        data = json.loads(text)
+    except json.JSONDecodeError:
         return []
     name = str(data.get("name") or "package")
     return [{"id": f"package:{name}", "title": f"Package {name}", "source": "package"}]

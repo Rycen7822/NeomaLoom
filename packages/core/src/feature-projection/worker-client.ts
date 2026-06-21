@@ -115,7 +115,7 @@ export async function runFeatureWorkerCommand(input: {
       if (settled) return;
       settled = true;
       clearTimeout(timeoutTimer);
-      if (forceKillTimer) clearTimeout(forceKillTimer);
+      if (!timedOut && forceKillTimer) clearTimeout(forceKillTimer);
       resolve(result);
     };
 
@@ -153,6 +153,7 @@ export async function runFeatureWorkerCommand(input: {
     });
     child.on('close', code => {
       if (timedOut) {
+        if (forceKillTimer) clearTimeout(forceKillTimer);
         return;
       }
       if (code !== 0) {

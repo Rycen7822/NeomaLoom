@@ -157,10 +157,26 @@ async function indexTestExampleFiles(files: InventoryFile[]): Promise<TestExampl
   return spans;
 }
 
-async function readFeatures(projectRoot: string): Promise<FeatureProjectionRecord[]> {
-  const paths = resolveNoemaLoomPaths(projectRoot);
+type FeatureProjectionLocation = {
+  stateDir: string;
+  featuresFile: string;
+  featurePath: string;
+};
+
+function featureProjectionLocation(projectRoot: string, config: NoemaLoomConfig): FeatureProjectionLocation {
+  const stateDir = resolveFeatureProjectionStateDir(projectRoot, config.featureProjection.stateDir);
+  const featuresFile = path.join(stateDir, 'planning', 'features.json');
+  const relative = path.relative(path.resolve(projectRoot), featuresFile).replaceAll('\\', '/');
+  const featurePath = relative && !relative.startsWith('../') && relative !== '..' && !path.isAbsolute(relative)
+    ? relative
+    : '.noemaloom/planning/features.json';
+  return { stateDir, featuresFile, featurePath };
+}
+
+async function readFeatures(projectRoot: string, config: NoemaLoomConfig): Promise<FeatureProjectionRecord[]> {
+  const location = featureProjectionLocation(projectRoot, config);
   try {
-    const parsed = JSON.parse(await readFile(path.join(paths.planningDir, 'features.json'), 'utf8')) as unknown;
+    const parsed = JSON.parse(await readFile(location.featuresFile, 'utf8')) as unknown;
     if (!Array.isArray(parsed)) {
       return [];
     }
@@ -170,7 +186,8 @@ async function readFeatures(projectRoot: string): Promise<FeatureProjectionRecor
       .map(item => ({
         id: String(item.id ?? item.title ?? 'feature.unknown'),
         title: String(item.title ?? item.id ?? 'Untitled feature'),
-        source: String(item.source ?? 'feature-projection')
+        source: String(item.source ?? 'feature-projection'),
+        featurePath: location.featurePath
       }));
   } catch {
     return [];
@@ -334,12 +351,13 @@ function resolveFeatureProjectionStateDir(projectRoot: string, configuredStateDi
 async function runFeatureProjection(projectRoot: string, graphRevision: string, config: NoemaLoomConfig): Promise<string[]> {
   const workerCommand = config.featureProjection.workerCommand.trim();
   const usesDefaultWorker = DEFAULT_FEATURE_WORKER_COMMANDS.has(workerCommand);
+  const location = featureProjectionLocation(projectRoot, config);
   const result = await projectFeatures({
     command: 'feature.project_from_repo',
     projectRoot,
-    stateDir: resolveFeatureProjectionStateDir(projectRoot, config.featureProjection.stateDir),
+    stateDir: location.stateDir,
     revision: graphRevision,
-    pythonExecutable: usesDefaultWorker ? process.env.PYTHON ?? workerCommand.split(/\s+/, 1)[0] : undefined,
+    pythonExecutable: usesDefaultWorker ? process.env.PYTHON ?? 'python3' : undefined,
     workerCommand: usesDefaultWorker ? undefined : workerCommand,
     pythonPath: process.env.NOEMALOOM_PYTHONPATH
   });
@@ -575,7 +593,7 @@ async function runRefresh(input: {
   });
   const featureProjectionEnabled = !selection.scoped && input.config.featureProjection.enabled;
   const featureWarnings = featureProjectionEnabled ? await runFeatureProjection(input.projectRoot, graphRevisionSeed, input.config) : [];
-  const features = featureProjectionEnabled ? await readFeatures(input.projectRoot) : [];
+  const features = featureProjectionEnabled ? await readFeatures(input.projectRoot, input.config) : [];
   const projection = buildProjectionGraph({
     projectRoot: input.projectRoot,
     files: selection.deepFiles,

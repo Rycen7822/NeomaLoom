@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, readdir, writeFile, mkdtemp } from 'node:fs/promises';
+import { access, chmod, mkdir, readFile, readdir, writeFile, mkdtemp } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -102,6 +102,66 @@ describe('nl_refresh target all', () => {
     expect(result.warnings).toEqual([]);
     const dbPath = path.join(projectRoot, '.noemaloom', 'spans', 'spans.db');
     expect(scalar(dbPath, "SELECT COUNT(*) AS value FROM repo_spans WHERE kind = 'feature.node'")).toBe(0);
+  });
+
+  it('honors custom featureProjection stateDir and does not read stale default features', async () => {
+    const projectRoot = await createProject();
+    const config = createDefaultConfig(projectRoot);
+    config.featureProjection.stateDir = '.noemaloom/custom-feature-state';
+    await mkdir(path.join(projectRoot, '.noemaloom', 'planning'), { recursive: true });
+    await writeFile(path.join(projectRoot, '.noemaloom', 'config.json'), `${JSON.stringify(config, null, 2)}\n`);
+    await writeFile(
+      path.join(projectRoot, '.noemaloom', 'planning', 'features.json'),
+      `${JSON.stringify([{ id: 'feature:stale-default', title: 'Stale default feature', source: 'test' }], null, 2)}\n`
+    );
+
+    const previousPythonPath = process.env.NOEMALOOM_PYTHONPATH;
+    process.env.NOEMALOOM_PYTHONPATH = path.join(process.cwd(), 'python', 'nl_rpg_projection_worker');
+    try {
+      const result = await callRegisteredTool('nl_refresh', { projectPath: projectRoot, target: 'all', mode: 'safe' });
+
+      expect(result.ok).toBe(true);
+      const dbPath = path.join(projectRoot, '.noemaloom', 'spans', 'spans.db');
+      expect(scalar(dbPath, "SELECT COUNT(*) AS value FROM repo_spans WHERE kind = 'feature.node' AND path = '.noemaloom/custom-feature-state/planning/features.json'")).toBeGreaterThan(0);
+      expect(scalar(dbPath, "SELECT COUNT(*) AS value FROM repo_spans WHERE kind = 'feature.node' AND label = 'Stale default feature'")).toBe(0);
+    } finally {
+      if (previousPythonPath === undefined) delete process.env.NOEMALOOM_PYTHONPATH;
+      else process.env.NOEMALOOM_PYTHONPATH = previousPythonPath;
+    }
+  });
+
+  it('keeps old generated default workerCommand on python3 when PYTHON is unset', async () => {
+    const projectRoot = await createProject();
+    const config = createDefaultConfig(projectRoot);
+    config.featureProjection.workerCommand = 'python -m nl_rpg_projection_worker.main';
+    const binDir = path.join(projectRoot, 'bin');
+    await mkdir(binDir, { recursive: true });
+    const fakePython = path.join(binDir, 'python');
+    await writeFile(fakePython, '#!/usr/bin/env bash\necho should-not-use-python >&2\nexit 77\n');
+    await chmod(fakePython, 0o755);
+    await mkdir(path.join(projectRoot, '.noemaloom'), { recursive: true });
+    await writeFile(path.join(projectRoot, '.noemaloom', 'config.json'), `${JSON.stringify(config, null, 2)}\n`);
+
+    const previousPython = process.env.PYTHON;
+    const previousPath = process.env.PATH;
+    const previousPythonPath = process.env.NOEMALOOM_PYTHONPATH;
+    delete process.env.PYTHON;
+    process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ''}`;
+    process.env.NOEMALOOM_PYTHONPATH = path.join(process.cwd(), 'python', 'nl_rpg_projection_worker');
+    try {
+      const result = await callRegisteredTool('nl_refresh', { projectPath: projectRoot, target: 'all', mode: 'safe' });
+      expect(result.ok).toBe(true);
+      expect((result.warnings ?? []).join('\n')).not.toContain('should-not-use-python');
+      const dbPath = path.join(projectRoot, '.noemaloom', 'spans', 'spans.db');
+      expect(scalar(dbPath, "SELECT COUNT(*) AS value FROM repo_spans WHERE kind = 'feature.node'")).toBeGreaterThan(0);
+    } finally {
+      if (previousPython === undefined) delete process.env.PYTHON;
+      else process.env.PYTHON = previousPython;
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (previousPythonPath === undefined) delete process.env.NOEMALOOM_PYTHONPATH;
+      else process.env.NOEMALOOM_PYTHONPATH = previousPythonPath;
+    }
   });
 
   it('cleans stale codegraph temp DB artifacts before writing a new codegraph', async () => {

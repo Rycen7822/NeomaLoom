@@ -21,6 +21,7 @@ export type FeatureProjectionRecord = {
   id: string;
   title: string;
   source: string;
+  featurePath?: string;
 };
 
 export type ProjectionGraph = {
@@ -231,14 +232,15 @@ function projectTestExampleSpan(projectRoot: string, span: TestExampleSpan): Rep
 }
 
 function projectFeature(projectRoot: string, feature: FeatureProjectionRecord): RepoSpan {
+  const featurePath = repoPath(feature.featurePath ?? '.noemaloom/planning/features.json');
   return createRepoSpan({
     spanId: createFeatureSpanId({
       projectRoot,
-      featurePath: '.noemaloom/planning/features.json',
+      featurePath,
       featureLabel: feature.title,
       sourceId: feature.id
     }),
-    path: '.noemaloom/planning/features.json',
+    path: featurePath,
     kind: 'feature.node',
     role: 'feature_plan',
     label: feature.title,
@@ -247,7 +249,7 @@ function projectFeature(projectRoot: string, feature: FeatureProjectionRecord): 
     language: 'json',
     indexedText: `${feature.id} ${feature.title}`,
     summary: feature.title,
-    metadata: { id: feature.id, source: feature.source },
+    metadata: { id: feature.id, source: feature.source, featurePath },
     source: 'feature-projection'
   });
 }

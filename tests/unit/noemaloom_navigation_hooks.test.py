@@ -11,7 +11,14 @@ from noemaloom import register
 from noemaloom.navigation_hooks import _manifest_lock_path, post_tool_call, pre_llm_call
 
 
-def write_manifest(project_root: Path, *, enabled: bool = False, mode: str = "silent") -> Path:
+def write_manifest(
+    project_root: Path,
+    *,
+    enabled: bool = False,
+    mode: str = "silent",
+    anchor_path: str = "src/client.ts",
+    label: str = "createClient",
+) -> Path:
     workset = project_root / ".noemaloom" / "workset"
     workset.mkdir(parents=True)
     manifest = {
@@ -31,8 +38,8 @@ def write_manifest(project_root: Path, *, enabled: bool = False, mode: str = "si
         "anchors": [
             {
                 "id": "nav-one",
-                "path": "src/client.ts",
-                "label": "createClient",
+                "path": anchor_path,
+                "label": label,
                 "kind": "code.function",
                 "role": "source_file",
                 "startLine": 10,
@@ -70,6 +77,22 @@ def test_pre_llm_hook_requires_explicit_enabled_inject_mode(tmp_path):
     assert "NoemaLoom navigation anchors" in result["context"]
     assert "src/client.ts:10-18" in result["context"]
     assert len(result["context"]) < 650
+
+
+def test_pre_llm_hook_selects_new_nearest_manifest_after_outer_root_was_cached(tmp_path):
+    outer = tmp_path / "outer"
+    nested = outer / "packages" / "app"
+    nested.mkdir(parents=True)
+    write_manifest(outer, enabled=True, mode="inject", anchor_path="outer.ts", label="outerAnchor")
+
+    first = pre_llm_call({"projectPath": str(nested / "src" / "client.ts")})
+    assert "outer.ts:10-18" in first["context"]
+
+    write_manifest(nested, enabled=True, mode="inject", anchor_path="nested.ts", label="nestedAnchor")
+    second = pre_llm_call({"projectPath": str(nested / "src" / "client.ts")})
+
+    assert "nested.ts:10-18" in second["context"]
+    assert "outer.ts:10-18" not in second["context"]
 
 
 def test_post_tool_call_marks_matching_anchor_useful(tmp_path):

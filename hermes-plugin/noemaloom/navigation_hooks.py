@@ -72,9 +72,10 @@ def _find_project_root(context: Any = None, **kwargs: Any) -> Path | None:
             current = current.parent
         cache_key = str(current)
         cached = _ROOT_CACHE.get(cache_key)
-        if cached and (_manifest_path(cached)).exists():
-            return cached
+        cached_manifest = (_manifest_path(cached)).exists() if cached else False
         for candidate in [current, *current.parents]:
+            if cached and cached_manifest and candidate == cached:
+                return cached
             manifest = candidate / ".noemaloom" / "workset" / "anchors.json"
             if manifest.exists():
                 _ROOT_CACHE[cache_key] = candidate
