@@ -33,6 +33,7 @@ def make_source(root: Path) -> Path:
     (plugin_dir / "schemas.py").write_text("SCHEMA = {}\n", encoding="utf-8")
     (source / ".noemaloom-hermes-build" / "cli").mkdir(parents=True)
     (source / ".noemaloom-hermes-build" / "cli" / "main.js").write_text("console.log('built');\n", encoding="utf-8")
+    (source / "node_modules" / "zod").mkdir(parents=True)
     return source
 
 
@@ -79,6 +80,9 @@ def test_copy_install_copies_runtime_build_under_destination(tmp_path):
 
     assert rc == 0
     assert (dest / ".noemaloom-hermes-build" / "cli" / "main.js").exists()
+    assert json.loads((dest / ".noemaloom-hermes-build" / "package.json").read_text(encoding="utf-8")) == {"type": "module"}
+    assert (dest / ".noemaloom-hermes-build" / "node_modules").is_symlink()
+    assert (dest / ".noemaloom-hermes-build" / "node_modules").resolve() == (source / "node_modules").resolve()
     metadata = json.loads((dest / "INSTALL_METADATA.json").read_text(encoding="utf-8"))
     assert metadata["installMode"] == "copy"
     assert metadata["buildMainSha256"] is not None

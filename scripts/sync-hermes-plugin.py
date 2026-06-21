@@ -100,6 +100,23 @@ def copy_runtime_migrations(source: Path, build_dest: Path) -> None:
             shutil.copy2(migration, migration_dest / migration.name)
 
 
+def ensure_runtime_build_layout(source: Path, build_dest: Path) -> None:
+    """Make copied Hermes runtime builds resolve package metadata and repository dependencies."""
+    (build_dest / "package.json").write_text('{"type":"module"}\n', encoding="utf-8")
+    source_node_modules = source / "node_modules"
+    if not source_node_modules.exists():
+        return
+    build_node_modules = build_dest / "node_modules"
+    if build_node_modules.is_symlink() and build_node_modules.resolve() == source_node_modules.resolve():
+        return
+    if build_node_modules.exists() or build_node_modules.is_symlink():
+        if build_node_modules.is_dir() and not build_node_modules.is_symlink():
+            shutil.rmtree(build_node_modules)
+        else:
+            build_node_modules.unlink()
+    build_node_modules.symlink_to(source_node_modules, target_is_directory=True)
+
+
 def copy_runtime_build_if_present(source: Path, dest: Path) -> None:
     build_src = source / ".noemaloom-hermes-build"
     if not (build_src / "cli" / "main.js").exists():
@@ -109,6 +126,7 @@ def copy_runtime_build_if_present(source: Path, dest: Path) -> None:
         shutil.rmtree(build_dest)
     shutil.copytree(build_src, build_dest, symlinks=True, ignore=shutil.ignore_patterns("*.map", "node_modules"))
     copy_runtime_migrations(source, build_dest)
+    ensure_runtime_build_layout(source, build_dest)
 
 
 def symlink_plugin(source: Path, dest: Path) -> None:
