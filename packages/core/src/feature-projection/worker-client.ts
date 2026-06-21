@@ -49,6 +49,10 @@ export async function runFeatureWorkerCommand(input: {
     child.stderr.on('data', chunk => {
       stderr += String(chunk);
     });
+    child.stdin.on('error', () => {
+      // The worker may exit before consuming stdin (for example malformed-output probes).
+      // The close handler reports the actual worker result; avoid surfacing EPIPE as an unhandled process error.
+    });
     child.on('error', error => {
       resolve({ state: 'unavailable', warnings: [error.message] });
     });

@@ -10,7 +10,7 @@ import {
   handleNlAnchorRetire
 } from '../mcp/tools/nl-anchor.js';
 import { handleNlStatus } from '../mcp/tools/nl-status.js';
-import { createValidationErrorEnvelope, resolveProjectRootFromInput, type NoemaLoomEnvelope } from '../mcp/envelope.js';
+import { createEnvelope, createUnhandledErrorEnvelope, createValidationErrorEnvelope, resolveProjectRootFromInput, type NoemaLoomEnvelope } from '../mcp/envelope.js';
 import { serveMcp } from '../mcp/server.js';
 import { getHelpText } from './help.js';
 
@@ -38,6 +38,23 @@ function parsePayloadText(text: string, source: string): Record<string, unknown>
     throw new Error(`${source} must contain a JSON object payload.`);
   }
   return parsed as Record<string, unknown>;
+}
+
+function projectPathFromArgv(argv: string[]): string | undefined {
+  const projectIndex = argv.indexOf('--project');
+  return projectIndex >= 0 ? argv[projectIndex + 1] : undefined;
+}
+
+function cliValidationEnvelope(tool: string, projectPath: string | undefined, message: string): NoemaLoomEnvelope {
+  return createEnvelope({
+    ok: false,
+    tool,
+    projectRoot: resolveProjectRootFromInput(projectPath ? { projectPath } : {}),
+    graphState: 'error',
+    warnings: [{ code: 'validation_error', severity: 'error', message }],
+    data: { status: 'validation_error', issues: [{ path: '', code: 'invalid_input', message }] },
+    nextActions: ['rerun with --help for supported commands and payload shape']
+  });
 }
 
 async function parseAnchorArgs(argv: string[]): Promise<{ action: AnchorAction; payload: Record<string, unknown> }> {
@@ -77,7 +94,9 @@ async function runAnchorCommand(argv: string[], io: CliIo): Promise<number> {
   try {
     parsed = await parseAnchorArgs(argv);
   } catch (error) {
-    io.stderr.write(`${error instanceof Error ? error.message : String(error)}\n\n${getHelpText()}\n`);
+    const message = error instanceof Error ? error.message : String(error);
+    io.stdout.write(`${JSON.stringify(cliValidationEnvelope('noemaloom_anchor_cli', projectPathFromArgv(argv), message), null, 2)}\n`);
+    io.stderr.write(`${getHelpText()}\n`);
     return 1;
   }
 
@@ -121,7 +140,8 @@ export async function runCli(argv = process.argv.slice(2), io = defaultIo): Prom
     return runAnchorCommand(argv, io);
   }
 
-  io.stderr.write(`Unknown command.\n\n${getHelpText()}\n`);
+  io.stdout.write(`${JSON.stringify(cliValidationEnvelope('noemaloom_cli', undefined, 'Unknown command.'), null, 2)}\n`);
+  io.stderr.write(`${getHelpText()}\n`);
   return 1;
 }
 
@@ -131,7 +151,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       process.exitCode = exitCode;
     },
     error => {
-      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+      process.stdout.write(`${JSON.stringify(createUnhandledErrorEnvelope('noemaloom_cli', process.cwd(), error), null, 2)}\n`);
       process.exitCode = 1;
     }
   );

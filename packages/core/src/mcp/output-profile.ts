@@ -216,6 +216,7 @@ function shapeNavigationPrepareContextData(value: unknown): unknown {
     coveragePlan: value.coveragePlan,
     readSpans: asArray(value.readSpans).slice(0, 3).map(shapeReadSpan),
     requiredActions: value.requiredActions,
+    stateEffects: value.stateEffects,
     steps: value.steps
   };
 }
@@ -233,6 +234,7 @@ export function shapePrepareContextData(value: unknown, profile: ResponseProfile
     ...(profile === 'standard' ? { normalizedQuery: value.normalizedQuery } : {}),
     context: shapeContextData(value.context, profile),
     readSpans: asArray(value.readSpans).map(shapeReadSpan),
+    stateEffects: value.stateEffects,
     steps: value.steps
   };
 }

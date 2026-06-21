@@ -127,12 +127,12 @@ describe('locator query normalization and ranking', () => {
     expect(rankCandidates([generated], normalized, { includeGeneratedVendor: true })).toHaveLength(1);
   });
 
-  it('keeps file extension tokens out of exact terms while preserving explicit path terms', () => {
+  it('keeps file extension tokens out of exact terms while preserving explicit Unicode path terms', () => {
     const normalized = normalizeQuery({
-      query: 'Find H1 Gate-4 in v2h/h1修改执行清单.md claim alignment table'
+      query: 'Find Gate-4 in docs/甲乙丙.md claim alignment table row'
     });
 
-    expect(normalized.pathTerms).toContain('v2h/h1修改执行清单.md');
+    expect(normalized.pathTerms).toContain('docs/甲乙丙.md');
     expect(normalized.pathTerms).not.toContain('.md');
     expect(normalized.pathTerms).not.toContain('md');
     expect(normalized.exactTerms).not.toContain('.md');
@@ -141,24 +141,24 @@ describe('locator query normalization and ranking', () => {
   });
 
   it('ranks table rows above whole tables for table-row intent', () => {
-    const normalized = normalizeQuery({ query: 'Find Gate-4 H1 claim alignment table row' });
+    const normalized = normalizeQuery({ query: 'Find Gate-4 claim alignment table row' });
     const table = {
       ...baseCandidate,
       spanId: 'span-table',
-      path: 'v2h/h1修改执行清单.md',
+      path: 'docs/甲乙丙.md',
       kind: 'doc.table',
       label: 'table',
-      indexedText: 'Gate-4 H1 claim alignment top-k route weights pass condition',
-      summary: 'H1 claim alignment table'
+      indexedText: 'Gate-4 claim alignment top-k route weights pass condition',
+      summary: 'claim alignment table'
     };
     const tableRow = {
       ...baseCandidate,
       spanId: 'span-table-row',
-      path: 'v2h/h1修改执行清单.md',
+      path: 'docs/甲乙丙.md',
       kind: 'doc.table_row',
-      label: 'Gate-4 | H1 claim alignment | top-k route weights',
-      indexedText: 'Gate-4 | H1 claim alignment | top-k route weights pass condition',
-      summary: 'Gate-4 H1 claim alignment row'
+      label: 'Gate-4 | claim alignment | top-k route weights',
+      indexedText: 'Gate-4 | claim alignment | top-k route weights pass condition',
+      summary: 'Gate-4 claim alignment row'
     };
 
     const ranked = rankCandidates([table, tableRow], normalized);
@@ -167,11 +167,11 @@ describe('locator query normalization and ranking', () => {
   });
 
   it('prefers exact relative path matches over same-basename matches', () => {
-    const normalized = normalizeQuery({ query: 'Inspect v2h/tools/train_g8_ddp.py model config resolution' });
+    const normalized = normalizeQuery({ query: 'Inspect packages/active/src/config_loader.ts model config resolution' });
     const exactPath = {
       ...baseCandidate,
       spanId: 'span-exact-path',
-      path: 'v2h/tools/train_g8_ddp.py',
+      path: 'packages/active/src/config_loader.ts',
       role: 'source_file',
       kind: 'code.module',
       indexedText: 'model config resolution'
@@ -179,11 +179,55 @@ describe('locator query normalization and ranking', () => {
     const sameBasename = {
       ...exactPath,
       spanId: 'span-same-basename',
-      path: 'v2/tools/train_g8_ddp.py'
+      path: 'packages/legacy/src/config_loader.ts'
     };
 
     const ranked = rankCandidates([sameBasename, exactPath], normalized);
     expect(ranked[0].spanId).toBe('span-exact-path');
     expect(ranked[0].scoreBreakdown.pathRoleScore).toBeGreaterThan(ranked[1].scoreBreakdown.pathRoleScore);
+  });
+
+  it('uses compact Unicode basename identity for spaced non-ASCII title fragments', () => {
+    const normalized = normalizeQuery({ query: '甲乙 丙丁', targetRoles: ['document'] });
+    const exactUnicodeBasename = {
+      ...baseCandidate,
+      spanId: 'span-compact-unicode-basename',
+      path: 'docs/甲乙丙丁.md',
+      role: 'design_doc',
+      label: '甲乙丙丁',
+      indexedText: 'shared unicode body'
+    };
+    const neighboringUnicodeBasename = {
+      ...baseCandidate,
+      spanId: 'span-neighboring-unicode-basename',
+      path: 'docs/甲乙丙戊.md',
+      role: 'design_doc',
+      label: '甲乙丙戊',
+      indexedText: 'shared unicode body 甲乙 丙丁'
+    };
+
+    const ranked = rankCandidates([neighboringUnicodeBasename, exactUnicodeBasename], normalized);
+
+    expect(ranked[0].spanId).toBe('span-compact-unicode-basename');
+    expect(ranked[0].scoreBreakdown.pathRoleScore).toBeGreaterThan(ranked[1].scoreBreakdown.pathRoleScore);
+  });
+
+  it('gates feature-projection candidates by structured role intent instead of broad content terms', () => {
+    const docQuery = normalizeQuery({ query: 'update createClient documentation', targetRoles: ['canonical_api_doc'] });
+    const featureCandidate = {
+      ...baseCandidate,
+      spanId: 'span-feature-node',
+      path: '.noemaloom/planning/features.json',
+      kind: 'feature.node',
+      role: 'feature_plan',
+      label: 'createClient documentation',
+      sourcePlanSources: ['feature_projection'],
+      indexedText: 'createClient documentation'
+    };
+
+    expect(rankCandidates([featureCandidate, baseCandidate], docQuery).map(candidate => candidate.spanId)).toEqual(['span-doc-client']);
+
+    const featureRoleQuery = normalizeQuery({ query: 'createClient documentation', targetRoles: ['feature_plan'] });
+    expect(rankCandidates([featureCandidate], featureRoleQuery).map(candidate => candidate.spanId)).toEqual(['span-feature-node']);
   });
 });

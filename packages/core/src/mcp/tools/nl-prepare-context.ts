@@ -49,9 +49,40 @@ export const nlPrepareContextInputSchema = z
     readTopSpans: z.boolean().default(false),
     maxReadSpans: z.number().int().min(0).max(10).default(3),
     contextLines: z.number().int().min(0).max(80).default(10),
+    recordNavigation: z.boolean().default(true),
     responseProfile: z.enum(RESPONSE_PROFILES).default('compact')
   })
   .passthrough();
+
+function queryTargetCard(target: LocateData['targets'][number]): Record<string, unknown> {
+  const hasLines = typeof target.startLine === 'number' && typeof target.endLine === 'number';
+  return {
+    spanId: target.spanId,
+    path: target.path,
+    label: target.label,
+    kind: target.kind,
+    role: target.role,
+    lines: hasLines ? `${target.startLine}-${target.endLine}` : undefined,
+    decision: target.decision,
+    indexed: target.indexed ?? true
+  };
+}
+
+function estimateOutputTokenBudget(input: {
+  requested: number;
+  data: Record<string, unknown>;
+  evidence: unknown[];
+  warnings: EnvelopeWarning[];
+  nextActions: string[];
+  truncated: boolean;
+}) {
+  const used = Math.ceil(JSON.stringify({ data: input.data, evidence: input.evidence, warnings: input.warnings, nextActions: input.nextActions }).length / 4);
+  return {
+    requested: input.requested,
+    used,
+    truncated: input.truncated
+  };
+}
 
 export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomEnvelope> {
   const parsed = nlPrepareContextInputSchema.parse(input ?? {});
@@ -124,33 +155,48 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
     : [];
   const responseProfile = parsed.responseProfile as ResponseProfile;
   const worksetWarnings: EnvelopeWarning[] = [];
+  const stateEffects: string[] = [];
   let navigation: Record<string, unknown> = {
     revision: null,
     cards: [],
+    queryTargetCards: locateData.targets.slice(0, Math.min(parsed.limit, 10)).map(queryTargetCard),
+    worksetCards: [],
     text: '',
+    worksetText: '',
     enabled: false,
     charBudget: 0,
     truncated: false
   };
   try {
     const currentWorkset = await readWorksetManifest(projectRoot);
-    const activateObservedTargets = currentWorkset.options.navigation.enabled && currentWorkset.options.navigation.mode === 'inject';
-    const workset = await recordNavigationTargets({
-      projectRoot,
-      targets: locateData.targets,
-      reason: 'nl_prepare_context target',
-      maxTargets: Math.min(parsed.limit, 10),
-      defaultState: activateObservedTargets ? 'active' : 'dormant',
-      reviveDormant: activateObservedTargets,
-      preserveCurated: true
-    });
+    const navigationEnabled = currentWorkset.options.navigation.enabled;
+    const activateObservedTargets = navigationEnabled && currentWorkset.options.navigation.mode === 'inject';
+    const shouldRecordNavigation = parsed.recordNavigation && navigationEnabled;
+    const workset = shouldRecordNavigation
+      ? await recordNavigationTargets({
+          projectRoot,
+          targets: locateData.targets,
+          reason: 'nl_prepare_context target',
+          maxTargets: Math.min(parsed.limit, 10),
+          defaultState: activateObservedTargets ? 'active' : 'dormant',
+          reviveDormant: activateObservedTargets,
+          preserveCurated: true
+        })
+      : currentWorkset;
+    if (shouldRecordNavigation) {
+      stateEffects.push('workset.navigation_query_recorded');
+    }
     const rendered = renderNavigationCards(workset, { includeDisabled: responseProfile === 'navigation' });
+    const queryTargetCards = locateData.targets.slice(0, Math.min(parsed.limit, 10)).map(queryTargetCard);
     navigation = {
       revision: worksetRevision(workset),
       enabled: workset.options.navigation.enabled,
       counters: workset.counters,
-      cards: rendered.cards,
-      text: rendered.text,
+      cards: queryTargetCards,
+      queryTargetCards,
+      worksetCards: rendered.cards,
+      text: queryTargetCards.map(card => `- ${card.path}${card.lines ? `:${card.lines}` : ''} [${card.kind}/${card.role}] ${card.label} — ${card.decision}`).join('\n'),
+      worksetText: rendered.text,
       charBudget: rendered.charBudget,
       truncated: rendered.truncated
     };
@@ -173,9 +219,21 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
     context: contextData,
     readSpans: readResults.map(result => result.data),
     requiredActions: nextActions,
+    stateEffects,
     steps: ['nl_locate', 'nl_context_from_located', ...readResults.map(result => result.tool)]
   };
   const evidence = [...routedLocated.targets.flatMap(target => target.evidence), ...combineEvidence(readResults)];
+  const shapedData = shapePrepareContextData(data, responseProfile) as Record<string, unknown>;
+  const shapedEvidence = shapeEvidence(evidence, responseProfile);
+  const warnings = [...located.warnings, ...readWarnings, ...worksetWarnings];
+  const tokenBudget = estimateOutputTokenBudget({
+    requested: located.tokenBudget.requested,
+    data: shapedData,
+    evidence: shapedEvidence,
+    warnings,
+    nextActions,
+    truncated: located.tokenBudget.truncated
+  });
 
   return createEnvelope({
     ok,
@@ -183,10 +241,10 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
     projectRoot,
     graphRevision: located.graphRevision,
     graphState,
-    tokenBudget: located.tokenBudget,
-    warnings: [...located.warnings, ...readWarnings, ...worksetWarnings],
-    data: shapePrepareContextData(data, responseProfile) as Record<string, unknown>,
-    evidence: shapeEvidence(evidence, responseProfile),
+    tokenBudget,
+    warnings,
+    data: shapedData,
+    evidence: shapedEvidence,
     nextActions
   });
 }

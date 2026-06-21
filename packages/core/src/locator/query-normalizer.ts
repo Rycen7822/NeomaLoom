@@ -42,7 +42,7 @@ function unique<T>(values: T[]): T[] {
 
 function words(query: string): string[] {
   return query
-    .split(/[^A-Za-z0-9_./:-]+/)
+    .split(/[^\p{L}\p{N}_./:-]+/u)
     .map(term => term.trim())
     .filter(Boolean);
 }
@@ -60,6 +60,19 @@ function isSymbolLike(term: string): boolean {
 
 function isPathLike(term: string): boolean {
   return term.includes('/') || /\.[A-Za-z0-9]+$/.test(term);
+}
+
+function compactIdentifier(value: string): string {
+  return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function compactPathIntentTerms(terms: string[]): string[] {
+  const compactTerms = terms.map(compactIdentifier).filter(term => term.length >= 4);
+  const adjacent = terms.flatMap((term, index) => {
+    const next = terms[index + 1];
+    return next ? [compactIdentifier(`${term}${next}`)] : [];
+  }).filter(term => term.length >= 4);
+  return unique([...compactTerms, ...adjacent]);
 }
 
 function rawPathLikeTerms(query: string): string[] {
@@ -128,11 +141,7 @@ function isFileExtensionOnly(term: string): boolean {
 }
 
 function tableIntentTerms(raw: string, exactTerms: string[]): string[] {
-  const lower = raw.toLowerCase();
-  const hasTableIntent =
-    exactTerms.some(term => ['table', 'row', 'rows'].includes(term)) ||
-    /\b(claim|alignment|gate)\b/.test(lower) ||
-    /[表行对应执行清单通过条件]/.test(raw);
+  const hasTableIntent = exactTerms.some(term => ['table', 'row', 'rows'].includes(term));
   return hasTableIntent ? ['table', 'row'] : [];
 }
 
@@ -148,7 +157,11 @@ export function normalizeQuery(input: { query: string; targetRoles?: string[] })
       .filter(term => term.length >= 2 && !STOP_WORDS.has(term) && !isFileExtensionOnly(term))
   );
   const configTerms = unique(terms.filter(isConfigLike));
-  const pathTerms = unique([...rawPathLikeTerms(raw), ...terms.filter(isPathLike)]).filter(term => !isFileExtensionOnly(term));
+  const pathTerms = unique([
+    ...rawPathLikeTerms(raw),
+    ...terms.filter(isPathLike),
+    ...compactPathIntentTerms(cleanedTerms)
+  ]).filter(term => !isFileExtensionOnly(term));
   const symbolTerms = unique([
     ...terms.filter(isSymbolLike),
     ...oldTerms,

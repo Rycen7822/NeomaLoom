@@ -29,6 +29,7 @@ export type UnverifiedLinkedTest = {
   path: string;
   sourcePath: string;
   relation: 'tests';
+  source?: 'graph' | 'heuristic';
 };
 
 export type UnsyncedDocRole = {
@@ -123,6 +124,73 @@ function readInventoryDocRoles(input: {
   }
 }
 
+function inventoryTestPathsFromSnapshot(projectRoot: string): string[] {
+  try {
+    const parsed = JSON.parse(readFileSync(path.join(projectRoot, '.noemaloom', 'files', 'inventory.json'), 'utf8')) as {
+      files?: Array<{ path: string }>;
+    };
+    return Array.isArray(parsed.files)
+      ? parsed.files
+          .filter(file => typeof file.path === 'string' && classifyFileRole(file.path) === 'test_file')
+          .map(file => file.path)
+          .sort()
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function readInventoryTestPaths(projectRoot: string): string[] {
+  let db: Database | undefined;
+  try {
+    db = openDatabase(path.join(projectRoot, '.noemaloom', 'spans', 'spans.db'));
+    return (db.prepare(`SELECT DISTINCT path FROM repo_files WHERE role = 'test_file' ORDER BY path ASC`).all() as Array<{ path: string }>).map(row => row.path);
+  } catch {
+    return inventoryTestPathsFromSnapshot(projectRoot);
+  } finally {
+    db?.close();
+  }
+}
+
+function stem(repoPath: string): string {
+  let value = path.posix.basename(repoPath);
+  const extension = path.posix.extname(value);
+  if (extension) value = value.slice(0, -extension.length);
+  for (const suffix of ['.test', '.spec', '_test', '-test', '_spec', '-spec']) {
+    if (value.endsWith(suffix)) {
+      return value.slice(0, -suffix.length);
+    }
+  }
+  return value;
+}
+
+function likelyTestForSource(sourcePath: string, testPath: string): boolean {
+  const sourceStem = stem(sourcePath).toLowerCase();
+  const testStem = stem(testPath).toLowerCase();
+  return sourceStem.length > 0 && (testStem === sourceStem || testStem.includes(sourceStem) || testPath.toLowerCase().includes(`/${sourceStem}.`));
+}
+
+function findHeuristicLinkedTests(input: {
+  projectRoot: string;
+  changedPaths: string[];
+  alreadyReported: UnverifiedLinkedTest[];
+}): UnverifiedLinkedTest[] {
+  const changedSet = new Set(input.changedPaths);
+  const existing = new Set(input.alreadyReported.map(item => `${item.sourcePath}\n${item.path}`));
+  const tests = readInventoryTestPaths(input.projectRoot).filter(testPath => !changedSet.has(testPath));
+  const suggestions: UnverifiedLinkedTest[] = [];
+  for (const sourcePath of input.changedPaths.filter(changedPath => classifyFileRole(changedPath) === 'source_file')) {
+    for (const testPath of tests) {
+      const key = `${sourcePath}\n${testPath}`;
+      if (!existing.has(key) && likelyTestForSource(sourcePath, testPath)) {
+        existing.add(key);
+        suggestions.push({ path: testPath, sourcePath, relation: 'tests', source: 'heuristic' });
+      }
+    }
+  }
+  return suggestions.slice(0, 25);
+}
+
 function findUnsyncedDocRoles(input: {
   projectRoot: string;
   changedPaths: string[];
@@ -171,7 +239,7 @@ function findUnverifiedLinkedTests(input: {
          ORDER BY test.path ASC, source.path ASC`
       )
       .all(...input.changedPaths, ...input.changedPaths) as Array<{ path: string; sourcePath: string }>;
-    return rows.map(row => ({ path: row.path, sourcePath: row.sourcePath, relation: 'tests' as const }));
+    return rows.map(row => ({ path: row.path, sourcePath: row.sourcePath, relation: 'tests' as const, source: 'graph' as const }));
   } catch {
     return [];
   } finally {
@@ -202,10 +270,18 @@ export async function verifyCoverage(input: {
     changedPaths: input.changedPaths,
     newTerms
   });
-  const unverifiedLinkedTests = findUnverifiedLinkedTests({
+  const graphLinkedTests = findUnverifiedLinkedTests({
     projectRoot: input.projectRoot,
     changedPaths: input.changedPaths
   });
+  const unverifiedLinkedTests = [
+    ...graphLinkedTests,
+    ...findHeuristicLinkedTests({
+      projectRoot: input.projectRoot,
+      changedPaths: input.changedPaths,
+      alreadyReported: graphLinkedTests
+    })
+  ];
   const unsyncedDocRoles = findUnsyncedDocRoles({
     projectRoot: input.projectRoot,
     changedPaths: input.changedPaths,

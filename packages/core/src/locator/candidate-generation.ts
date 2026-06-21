@@ -7,6 +7,7 @@ import { classifyFileRole } from '../files/role-classifier.js';
 import { languageForPath } from '../files/language.js';
 import type { EnvelopeWarning, GraphState } from '../mcp/envelope.js';
 import { safeReadFileInsideProject } from '../safety/path-guard.js';
+import { detectProjectBoundaryWarnings } from '../projects/boundary-warnings.js';
 import type { FileRole, SpanKind } from '../spans/enums.js';
 import { readHotsetManifest, type HotsetManifest } from '../state/hotset.js';
 import { readIndexCoverage, readLatestRevision, type IndexCoverage } from '../state/refresh-revision.js';
@@ -729,6 +730,7 @@ export async function generateCandidates(input: {
   let files: FileRow[] = [];
   let dbCoverage: IndexCoverage | undefined;
   const warnings: EnvelopeWarning[] = [];
+  warnings.push(...(await detectProjectBoundaryWarnings(input.projectRoot)));
 
   try {
     const rows = rowsFromDb(dbPath, normalizedQuery, input.limit);

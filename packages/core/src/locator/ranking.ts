@@ -92,21 +92,85 @@ function normalizedPathTerm(term: string): string {
   return term.replaceAll('\\', '/').replace(/^\.\//, '').replace(/^\/+/, '');
 }
 
+function compactIdentifier(value: string): string {
+  return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function basenameStem(repoPath: string): string {
+  const basename = repoPath.split('/').at(-1) ?? repoPath;
+  return basename.replace(/\.[^.]+$/, '');
+}
+
 function pathMatchStrength(candidate: LocatorCandidate, query: NormalizedQuery): number {
   let best = 0;
+  const candidatePath = candidate.path.toLowerCase();
+  const basename = candidatePath.split('/').at(-1) ?? candidatePath;
+  const compactRaw = compactIdentifier(query.raw);
+  const compactStem = compactIdentifier(basenameStem(candidate.path));
+  if (compactStem.length >= 4 && compactRaw.includes(compactStem)) {
+    best = Math.max(best, 36);
+  }
   for (const term of query.pathTerms) {
     const normalized = normalizedPathTerm(term).toLowerCase();
-    const candidatePath = candidate.path.toLowerCase();
-    const basename = candidatePath.split('/').at(-1) ?? candidatePath;
+    const compactTerm = compactIdentifier(normalized);
     if (candidatePath === normalized || candidatePath.endsWith(`/${normalized}`)) {
       best = Math.max(best, 42);
     } else if (basename === normalized) {
       best = Math.max(best, 24);
     } else if (candidatePath.includes(normalized)) {
       best = Math.max(best, 10);
+    } else if (compactTerm.length >= 4 && compactStem === compactTerm) {
+      best = Math.max(best, 34);
+    } else if (compactTerm.length >= 6 && (compactStem.includes(compactTerm) || compactTerm.includes(compactStem))) {
+      best = Math.max(best, 18);
     }
   }
   return best;
+}
+
+function isDigit(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return code >= 48 && code <= 57;
+}
+
+function splitStructuredTokens(value: string): string[] {
+  const tokens: string[] = [];
+  let current = '';
+  for (const char of value.toLowerCase()) {
+    const isSeparator = char === '_' || char === '-' || char === '.' || char === ':';
+    const isLetter = char.toLocaleLowerCase() !== char.toLocaleUpperCase();
+    const isTokenChar = !isSeparator && (isLetter || isDigit(char));
+    if (isTokenChar) {
+      current += char;
+    } else if (current) {
+      tokens.push(current);
+      current = '';
+    }
+  }
+  if (current) tokens.push(current);
+  return tokens.filter(token => token.length >= 3);
+}
+
+function queryAllowsFeatureCandidate(query: NormalizedQuery, candidate: LocatorCandidate): boolean {
+  if (query.targetRoles.includes(candidate.role as FileRole)) {
+    return true;
+  }
+  const candidateSurfaceTokens = new Set([
+    ...splitStructuredTokens(String(candidate.role)),
+    ...splitStructuredTokens(String(candidate.kind)),
+    ...candidate.sourcePlanSources.flatMap(splitStructuredTokens)
+  ]);
+  const queryTokens = new Set([
+    ...query.exactTerms,
+    ...query.pathTerms,
+    ...query.symbolTerms,
+    ...query.configTerms
+  ].map(term => term.toLowerCase()));
+  return [...candidateSurfaceTokens].some(token => queryTokens.has(token));
+}
+
+function isFeatureCandidate(candidate: LocatorCandidate): boolean {
+  return String(candidate.kind).startsWith('feature.') || candidate.role === 'feature_plan' || candidate.sourcePlanSources.includes('feature_projection');
 }
 
 function exactPathOrBasenameMatch(candidate: LocatorCandidate, query: NormalizedQuery): boolean {
@@ -123,12 +187,11 @@ function exactSymbolLabel(candidate: LocatorCandidate, query: NormalizedQuery): 
 
 function queryWantsParagraph(query: NormalizedQuery): boolean {
   const raw = query.raw.toLowerCase();
-  return raw.includes('paragraph') || raw.includes('段落');
+  return raw.includes('paragraph');
 }
 
 function queryWantsTableRow(query: NormalizedQuery): boolean {
-  const raw = query.raw.toLowerCase();
-  return query.docTerms.some(term => ['table', 'row', 'rows'].includes(term)) || /[表行对应执行清单通过条件]/.test(raw);
+  return query.docTerms.some(term => ['table', 'row', 'rows'].includes(term));
 }
 
 const CONTENT_INTENT_NOISE = new Set([
@@ -251,6 +314,7 @@ export function rankCandidates(
 ): RankedCandidate[] {
   return candidates
     .filter(candidate => options.includeGeneratedVendor || (!candidate.file.generated && !candidate.file.vendor && !['generated_file', 'vendor_file'].includes(candidate.role)))
+    .filter(candidate => !isFeatureCandidate(candidate) || queryAllowsFeatureCandidate(query, candidate))
     .map(candidate => {
       const scoreBreakdown = scoreCandidate(candidate, query);
       return {

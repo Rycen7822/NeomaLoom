@@ -293,6 +293,8 @@ export async function handleNlReadSpan(input: unknown): Promise<NoemaLoomEnvelop
     ['doc.table', 'doc.list', 'doc.code_fence', 'doc.section', 'code.module'].includes(row.kind) && spanLineCount > parsed.maxLines;
 
   if (blockTooLarge) {
+    const ranges = segmentRanges(relocated.startLine, relocated.endLine, parsed.maxLines);
+    const previewRange = ranges[0] ?? { startLine: relocated.startLine, endLine: Math.min(relocated.endLine, relocated.startLine + parsed.maxLines - 1) };
     return createEnvelope({
       ok: true,
       tool: 'nl_read_span',
@@ -302,15 +304,16 @@ export async function handleNlReadSpan(input: unknown): Promise<NoemaLoomEnvelop
       data: {
         status: 'block_too_large',
         path: row.path,
-        startLine: relocated.startLine,
-        endLine: relocated.endLine,
+        startLine: previewRange.startLine,
+        endLine: previewRange.endLine,
         spanStartLine: relocated.startLine,
         spanEndLine: relocated.endLine,
-        content: '',
+        content: sliceLines(currentText, previewRange.startLine, previewRange.endLine),
+        contentStatus: 'preview',
         spanTextHash: sha1(relocated.spanText),
         fileContentHash: sha1(currentText),
         relocation: relocated.relocation,
-        segmentRanges: segmentRanges(relocated.startLine, relocated.endLine, parsed.maxLines)
+        segmentRanges: ranges
       }
     });
   }

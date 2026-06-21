@@ -134,4 +134,25 @@ describe('noemaloom CLI help', () => {
     expect((result.json?.data as { status: string }).status).toBe('validation_error');
     expect((result.json?.warnings as Array<{ code: string }>)[0].code).toBe('validation_error');
   });
+
+  it('returns JSON envelopes for CLI parse errors before handler dispatch', async () => {
+    const unknownAction = await runJson(['anchor', 'unknown-action']);
+    expect(unknownAction.code).toBe(1);
+    expect(unknownAction.json?.ok).toBe(false);
+    expect(unknownAction.json?.tool).toBe('noemaloom_anchor_cli');
+    expect((unknownAction.json?.warnings as Array<{ code: string; message: string }>)[0]).toMatchObject({
+      code: 'validation_error',
+      message: 'Unknown anchor action: unknown-action'
+    });
+
+    const badJson = await runJson(['anchor', 'status', '--json', '{']);
+    expect(badJson.code).toBe(1);
+    expect(badJson.json?.ok).toBe(false);
+    expect((badJson.json?.data as { status: string }).status).toBe('validation_error');
+
+    const unknownCommand = await runJson(['frobnicate']);
+    expect(unknownCommand.code).toBe(1);
+    expect(unknownCommand.json?.ok).toBe(false);
+    expect(unknownCommand.json?.tool).toBe('noemaloom_cli');
+  });
 });

@@ -9,6 +9,7 @@ import { inspectRefreshLock } from '../../state/refresh-lock.js';
 import { readIndexCoverage, readLatestRevision, type IndexCoverage } from '../../state/refresh-revision.js';
 import { resolveNoemaLoomPaths } from '../../state/paths.js';
 import { readWorksetManifest } from '../../state/workset.js';
+import { detectProjectBoundaryWarnings } from '../../projects/boundary-warnings.js';
 import { createEnvelope, resolveProjectRootFromInput, type EnvelopeWarning, type NoemaLoomEnvelope } from '../envelope.js';
 import { anchorStatusData } from './nl-anchor.js';
 
@@ -270,7 +271,10 @@ export async function handleNlStatus(input: unknown): Promise<NoemaLoomEnvelope>
     readLatestRevision(projectRoot)
   ]);
 
-  const warnings = collectWarnings(fileInventory, spanIndex, factIndex, documentIndex, featureProjection, derivedMap);
+  const warnings = [
+    ...collectWarnings(fileInventory, spanIndex, factIndex, documentIndex, featureProjection, derivedMap),
+    ...(await detectProjectBoundaryWarnings(projectRoot))
+  ];
   if (refreshLock.state === 'stale') {
     warnings.push({
       code: 'refresh_lock_stale',

@@ -6,6 +6,7 @@ import {
   createEmptyWorksetManifest,
   markAnchorUseful,
   markAnchorsInjected,
+  normalizeNavigationAnchorPath,
   readWorksetManifest,
   recordNavigationTargets,
   renderNavigationCards,
@@ -93,6 +94,45 @@ describe('NoemaLoom navigation workset state', () => {
     const enabled = setNavigationEnabled(manifest, true);
     expect(renderNavigationCards(enabled).cards).toEqual([]);
     expect(renderNavigationCards(enabled, { includeDormant: true }).cards[0]).toMatchObject({ path: 'docs/plan.md', state: 'dormant' });
+  });
+
+  it('filters NoemaLoom state paths and escaping paths from automatic workset anchors', async () => {
+    const projectRoot = await createTempProject();
+    let manifest = createEmptyWorksetManifest(projectRoot);
+
+    expect(normalizeNavigationAnchorPath('.noemaloom/workset/anchors.json')).toBeUndefined();
+    expect(normalizeNavigationAnchorPath('../outside.md')).toBeUndefined();
+    expect(normalizeNavigationAnchorPath('docs/../src/client.ts')).toBe('src/client.ts');
+
+    manifest = upsertNavigationTargets({
+      manifest,
+      targets: [
+        { path: '.noemaloom/planning/features.json', kind: 'feature.node', role: 'feature_plan', label: 'internal feature node', score: 99 },
+        { path: '../outside.md', kind: 'doc.section', role: 'design_doc', label: 'outside', score: 98 },
+        { path: 'docs/../src/client.ts', kind: 'code.function', role: 'source_file', label: 'createClient', score: 97 }
+      ],
+      defaultState: 'dormant',
+      preserveCurated: true
+    });
+
+    expect(manifest.anchors).toHaveLength(1);
+    expect(manifest.anchors[0]).toMatchObject({ path: 'src/client.ts', state: 'dormant' });
+
+    await writeWorksetManifest(projectRoot, {
+      ...manifest,
+      anchors: [
+        ...manifest.anchors,
+        {
+          ...manifest.anchors[0],
+          id: 'nav-bad-state-path',
+          path: '.noemaloom/planning/features.json',
+          label: 'bad legacy state path'
+        }
+      ]
+    });
+
+    const reloaded = await readWorksetManifest(projectRoot);
+    expect(reloaded.anchors.map(anchor => anchor.path)).toEqual(['src/client.ts']);
   });
 
   it('uses stable path/range/kind identity and preserves curated provenance from automatic observations', () => {

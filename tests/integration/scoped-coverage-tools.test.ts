@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { callRegisteredTool } from '../../packages/core/src/mcp/tool-registry.js';
+import { createEmptyWorksetManifest, setNavigationEnabled, writeWorksetManifest } from '../../packages/core/src/state/workset.js';
 
 async function writeProjectFile(projectRoot: string, repoPath: string, text: string): Promise<void> {
   const absolutePath = path.join(projectRoot, repoPath);
@@ -181,7 +182,7 @@ describe('scoped coverage tool semantics', () => {
     expect(JSON.stringify(compact).length).toBeLessThan(JSON.stringify(debug).length * 0.75);
   });
 
-  it('nl_prepare_context navigation profile emits anchor cards and records project-local workset state', async () => {
+  it('nl_prepare_context navigation profile emits query cards without recording while navigation is disabled', async () => {
     const projectRoot = await createLoopLikeProject();
 
     const result = await callRegisteredTool('nl_prepare_context', {
@@ -197,35 +198,88 @@ describe('scoped coverage tool semantics', () => {
     });
 
     const data = result.data as {
-      navigation: { cards: Array<{ path: string; label: string }>; text: string; enabled: boolean; charBudget: number };
+      navigation: {
+        cards: Array<{ path: string; label: string }>;
+        queryTargetCards: Array<{ path: string; label: string }>;
+        worksetCards: Array<{ path: string }>;
+        text: string;
+        worksetText: string;
+        enabled: boolean;
+        charBudget: number;
+      };
       targets: Array<{ path: string; startLine: number; endLine: number }>;
+      stateEffects: string[];
       context?: unknown;
     };
     expect(result.ok).toBe(true);
     expect(data.navigation.enabled).toBe(false);
     expect(data.navigation.charBudget).toBe(650);
-    expect(data.navigation.cards).toEqual([]);
-    expect(data.navigation.text).toBe('');
+    expect(data.navigation.cards[0]).toMatchObject({ path: 'DeepScientist/quests/001/STAGE10_推进规划.md' });
+    expect(data.navigation.queryTargetCards[0]).toMatchObject({ path: 'DeepScientist/quests/001/STAGE10_推进规划.md' });
+    expect(data.navigation.worksetCards).toEqual([]);
+    expect(data.navigation.text).toContain('DeepScientist/quests/001/STAGE10_推进规划.md');
+    expect(data.navigation.worksetText).toBe('');
+    expect(data.stateEffects).toEqual([]);
     expect(data.targets[0]).toMatchObject({ path: 'DeepScientist/quests/001/STAGE10_推进规划.md', startLine: 7, endLine: 7 });
     expect(data.context).toBeUndefined();
     expect(JSON.stringify(result.data)).not.toContain('scoreBreakdown');
     expect(JSON.stringify(result.evidence)).toBe('[]');
+
+    await expect(readFile(path.join(projectRoot, '.noemaloom', 'workset', 'anchors.json'), 'utf8')).rejects.toThrow();
+
+    const status = await callRegisteredTool('nl_status', { projectPath: projectRoot, includeAnchors: true });
+    expect((status.data as { anchorWorkset: { navigation: { cards: unknown[]; text: string } } }).anchorWorkset.navigation.cards).toEqual([]);
+    expect((status.data as { anchorWorkset: { navigation: { text: string } } }).anchorWorkset.navigation.text).toBe('');
+  });
+
+  it('nl_prepare_context records dormant query observations when navigation is explicitly enabled in silent mode', async () => {
+    const projectRoot = await createLoopLikeProject();
+    await writeWorksetManifest(projectRoot, setNavigationEnabled(createEmptyWorksetManifest(projectRoot), true, 'silent'));
+
+    const result = await callRegisteredTool('nl_prepare_context', {
+      projectPath: projectRoot,
+      goal: 'Find the document paragraph that defines Stage10 LoopCert portfolio selector tags and the score-side no-target constraint',
+      scope: 'STAGE10_推进规划.md LoopCert score selector tags no-target recovery CE',
+      targetRoles: ['document'],
+      limit: 5,
+      responseProfile: 'navigation'
+    });
+
+    const data = result.data as { stateEffects: string[]; navigation: { enabled: boolean; queryTargetCards: Array<{ path: string }> } };
+    expect(result.ok).toBe(true);
+    expect(data.navigation.enabled).toBe(true);
+    expect(data.navigation.queryTargetCards[0]).toMatchObject({ path: 'DeepScientist/quests/001/STAGE10_推进规划.md' });
+    expect(data.stateEffects).toEqual(expect.arrayContaining(['workset.navigation_query_recorded']));
 
     const workset = JSON.parse(await readFile(path.join(projectRoot, '.noemaloom', 'workset', 'anchors.json'), 'utf8')) as {
       anchors: Array<{ path: string; state: string; source: string }>;
       counters: { navigationQuerySeq: number };
       options: { navigation: { enabled: boolean; mode: string } };
     };
+    expect(workset.options.navigation).toMatchObject({ enabled: true, mode: 'silent' });
     expect(workset.counters.navigationQuerySeq).toBeGreaterThan(0);
-    expect(workset.options.navigation).toMatchObject({ enabled: false, mode: 'silent' });
     expect(workset.anchors.find(anchor => anchor.path === 'DeepScientist/quests/001/STAGE10_推进规划.md')).toMatchObject({
       state: 'dormant',
       source: 'nl_prepare_context'
     });
+  });
 
-    const status = await callRegisteredTool('nl_status', { projectPath: projectRoot, includeAnchors: true });
-    expect((status.data as { anchorWorkset: { navigation: { cards: unknown[]; text: string } } }).anchorWorkset.navigation.cards).toEqual([]);
-    expect((status.data as { anchorWorkset: { navigation: { text: string } } }).anchorWorkset.navigation.text).toBe('');
+  it('can locate context without recording navigation workset state', async () => {
+    const projectRoot = await createScopedProject();
+
+    const result = await callRegisteredTool('nl_prepare_context', {
+      projectPath: projectRoot,
+      goal: 'update docs/api/client.md createClient documentation',
+      responseProfile: 'navigation',
+      recordNavigation: false,
+      limit: 5
+    });
+
+    const data = result.data as { stateEffects: string[]; navigation: { queryTargetCards: Array<{ path: string }> } };
+    expect(result.ok).toBe(true);
+    expect(data.stateEffects).toEqual([]);
+    expect(data.navigation.queryTargetCards[0]).toMatchObject({ path: 'docs/api/client.md' });
+    await expect(readFile(path.join(projectRoot, '.noemaloom', 'workset', 'anchors.json'), 'utf8')).rejects.toThrow();
   });
 
   it('nl_plan_change compact output summarizes trace while debug keeps full trace edges', async () => {

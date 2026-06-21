@@ -187,11 +187,12 @@ describe('nl_read_span relocation and block sizing', () => {
       path: 'docs/api/client.md',
       spanStartLine: fence.startLine,
       spanEndLine: fence.endLine,
+      contentStatus: 'preview',
       segmentRanges: expect.arrayContaining([
         expect.objectContaining({ startLine: fence.startLine, endLine: expect.any(Number) })
       ])
     });
-    expect(read.data.content).toBe('');
+    expect(read.data.content).toContain('```ts');
   });
 
   it('returns segment ranges instead of whole content for oversized code modules', async () => {
@@ -232,11 +233,12 @@ describe('nl_read_span relocation and block sizing', () => {
       path: 'src/large_module.py',
       spanStartLine: moduleSpan.startLine,
       spanEndLine: moduleSpan.endLine,
+      contentStatus: 'preview',
       segmentRanges: expect.arrayContaining([
         expect.objectContaining({ startLine: moduleSpan.startLine, endLine: expect.any(Number) })
       ])
     });
-    expect(read.data.content).toBe('');
+    expect(read.data.content).toContain('LARGE_MODULE_SENTINEL');
   });
 
   it('returns a clear relocation failure when a changed span cannot be found', async () => {

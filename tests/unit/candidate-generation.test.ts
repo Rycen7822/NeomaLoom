@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { generateCandidates } from '../../packages/core/src/locator/candidate-generation.js';
+import { handleNlStatus } from '../../packages/core/src/mcp/tools/nl-status.js';
 import { applySpanMigrations } from '../../packages/core/src/spans/db.js';
 
 type Statement = {
@@ -198,6 +199,31 @@ async function createLargeScopedInventoryDb(projectRoot: string): Promise<void> 
 }
 
 describe('candidate generation', () => {
+  it('warns when the selected root appears to contain multiple child projects and artifact noise', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-parent-root-warning-'));
+    await mkdir(path.join(projectRoot, 'child-a'), { recursive: true });
+    await mkdir(path.join(projectRoot, 'child-b'), { recursive: true });
+    await mkdir(path.join(projectRoot, 'artifacts'), { recursive: true });
+    await writeFile(path.join(projectRoot, 'child-a', 'package.json'), JSON.stringify({ name: 'child-a' }), 'utf8');
+    await writeFile(path.join(projectRoot, 'child-b', 'pyproject.toml'), '[project]\nname = "child-b"\n', 'utf8');
+
+    const generated = await generateCandidates({
+      projectRoot,
+      query: 'update client docs'
+    });
+
+    expect(generated.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'multi_project_root_suspected' }),
+      expect.objectContaining({ code: 'artifact_or_backup_noise_detected' })
+    ]));
+
+    const status = await handleNlStatus({ projectPath: projectRoot });
+    expect(status.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'multi_project_root_suspected' }),
+      expect.objectContaining({ code: 'artifact_or_backup_noise_detected' })
+    ]));
+  });
+
   it('does not drop relevant spans that sort after the first five thousand rows', async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-many-spans-'));
     await mkdir(path.join(projectRoot, 'docs/api'), { recursive: true });

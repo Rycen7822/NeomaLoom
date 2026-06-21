@@ -177,6 +177,24 @@ function anchorIdFor(target: Pick<NavigationTargetLike, 'spanId' | 'path' | 'sta
   return `nav-${sha1(stable).slice(0, 16)}`;
 }
 
+export function normalizeNavigationAnchorPath(repoPath: string): string | undefined {
+  const normalized = path.posix.normalize(repoPath.replaceAll('\\', '/'));
+  if (
+    normalized.length === 0 ||
+    normalized === '.' ||
+    normalized === '..' ||
+    normalized.startsWith('../') ||
+    path.posix.isAbsolute(normalized)
+  ) {
+    return undefined;
+  }
+  const firstSegment = normalized.split('/')[0];
+  if (firstSegment === '.noemaloom') {
+    return undefined;
+  }
+  return normalized;
+}
+
 function normalizeBudgets(value: unknown): WorksetBudgets {
   const raw = value && typeof value === 'object' ? value as Partial<WorksetBudgets> : {};
   return {
@@ -226,12 +244,14 @@ function normalizeAnchor(value: unknown, counters: WorksetCounters, at: string):
   if (!value || typeof value !== 'object') return undefined;
   const raw = value as Partial<NavigationAnchor>;
   if (typeof raw.path !== 'string' || raw.path.length === 0) return undefined;
+  const anchorPath = normalizeNavigationAnchorPath(raw.path);
+  if (!anchorPath) return undefined;
   const startLine = finiteNumber(raw.startLine, Number.NaN);
   const endLine = finiteNumber(raw.endLine, Number.NaN);
   return {
-    id: typeof raw.id === 'string' && raw.id.length > 0 ? raw.id : anchorIdFor(raw),
-    path: raw.path,
-    label: typeof raw.label === 'string' && raw.label.length > 0 ? raw.label : raw.path,
+    id: typeof raw.id === 'string' && raw.id.length > 0 ? raw.id : anchorIdFor({ ...raw, path: anchorPath }),
+    path: anchorPath,
+    label: typeof raw.label === 'string' && raw.label.length > 0 ? raw.label : anchorPath,
     kind: typeof raw.kind === 'string' && raw.kind.length > 0 ? raw.kind : 'file',
     role: typeof raw.role === 'string' && raw.role.length > 0 ? raw.role : 'source_file',
     startLine: Number.isFinite(startLine) ? startLine : undefined,
@@ -385,7 +405,10 @@ function targetToAnchor(
   options: { defaultState?: Extract<NavigationAnchorLifecycleState, 'active' | 'dormant'>; reviveDormant?: boolean; preserveCurated?: boolean } = {}
 ): NavigationAnchor | undefined {
   if (typeof target.path !== 'string' || target.path.length === 0) return undefined;
-  const id = anchorIdFor(target);
+  const anchorPath = normalizeNavigationAnchorPath(target.path);
+  if (!anchorPath) return undefined;
+  const normalizedTarget = { ...target, path: anchorPath };
+  const id = anchorIdFor(normalizedTarget);
   if (existing?.state === 'tombstoned' || existing?.state === 'retired') {
     return existing;
   }
@@ -413,8 +436,8 @@ function targetToAnchor(
 
   return {
     id,
-    path: target.path,
-    label: preservedExisting ? preservedExisting.label : (typeof target.label === 'string' && target.label.length > 0 ? target.label : target.path),
+    path: anchorPath,
+    label: preservedExisting ? preservedExisting.label : (typeof target.label === 'string' && target.label.length > 0 ? target.label : anchorPath),
     kind: typeof target.kind === 'string' && target.kind.length > 0 ? target.kind : existing?.kind ?? 'file',
     role: typeof target.role === 'string' && target.role.length > 0 ? target.role : existing?.role ?? 'source_file',
     startLine: typeof target.startLine === 'number' ? target.startLine : existing?.startLine,
@@ -462,12 +485,17 @@ export function upsertNavigationTargets(input: {
   const tombstoneIds = new Set(manifest.tombstones.map(entry => entry.id));
   const tombstonePaths = new Set(manifest.tombstones.map(entry => entry.path));
   for (const target of input.targets.slice(0, input.maxTargets ?? manifest.budgets.injectionDebugAnchors)) {
-    const id = anchorIdFor(target);
-    if (tombstoneIds.has(id) || (typeof target.path === 'string' && tombstonePaths.has(target.path))) {
+    const anchorPath = typeof target.path === 'string' ? normalizeNavigationAnchorPath(target.path) : undefined;
+    if (!anchorPath) {
+      continue;
+    }
+    const normalizedTarget = { ...target, path: anchorPath };
+    const id = anchorIdFor(normalizedTarget);
+    if (tombstoneIds.has(id) || tombstonePaths.has(anchorPath)) {
       continue;
     }
     const anchor = targetToAnchor(
-      target,
+      normalizedTarget,
       byId.get(id),
       manifest.counters,
       at,

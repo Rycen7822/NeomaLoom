@@ -47,6 +47,34 @@ async function createProject(): Promise<string> {
 }
 
 describe('aggregated impact planning and coverage verification after edits', () => {
+  it('uses heuristic same-basename test verification when trace edges are unavailable', async () => {
+    const projectRoot = await createProject();
+    const refresh = await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'files',
+      mode: 'safe'
+    });
+    expect(refresh.ok).toBe(true);
+
+    const result = await callRegisteredTool('nl_verify_task', {
+      projectPath: projectRoot,
+      goal: 'Update createClient implementation',
+      changedPaths: ['src/client.ts'],
+      oldTerms: [],
+      newTerms: [],
+      includeImpact: false
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.data).toMatchObject({
+      status: 'needs_attention',
+      coverage: {
+        status: 'needs_attention',
+        unverifiedLinkedTests: [expect.objectContaining({ path: 'tests/client.test.ts', sourcePath: 'src/client.ts', source: 'heuristic' })]
+      }
+    });
+  });
+
   it('traces cross-surface edges, groups impact, and verifies current changed file contents', async () => {
     const projectRoot = await createProject();
     const refresh = await callRegisteredTool('nl_refresh', {
