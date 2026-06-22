@@ -100,11 +100,8 @@ export async function readHotsetManifest(projectRoot: string): Promise<HotsetMan
   const paths = resolveNoemaLoomPaths(projectRoot);
   try {
     return normalizeManifest(projectRoot, JSON.parse(await readFile(path.join(paths.hotsetDir, 'hotset.json'), 'utf8')) as unknown);
-  } catch (error) {
-    if (isErrnoException(error) && error.code === 'ENOENT') {
-      return createEmptyHotsetManifest(projectRoot);
-    }
-    throw error;
+  } catch {
+    return createEmptyHotsetManifest(projectRoot);
   }
 }
 

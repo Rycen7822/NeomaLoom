@@ -92,4 +92,24 @@ describe('NoemaLoom config loader', () => {
     expect(stored.featureProjection.timeoutMs).toBeUndefined();
     expect(stored.fileInventory.ignoreGlobs).toEqual(['node_modules/**', 'custom-cache/**']);
   });
+
+  it('rejects featureProjection.stateDir outside the project root', async () => {
+    const projectRoot = await createTempProject();
+    const paths = resolveNoemaLoomPaths(projectRoot);
+    await ensureStateDir(projectRoot);
+    const invalidConfig = createDefaultConfig(projectRoot);
+    invalidConfig.featureProjection.stateDir = path.join(tmpdir(), 'noemaloom-outside-planning');
+    await writeFile(paths.configFile, `${JSON.stringify(invalidConfig, null, 2)}\n`);
+
+    const result = await loadOrCreateConfig(projectRoot);
+
+    expect(result).toMatchObject({ ok: false, status: 'config_invalid' });
+    if (result.ok) return;
+    expect(result.errors).toEqual(expect.arrayContaining([
+      {
+        field: 'featureProjection.stateDir',
+        message: 'featureProjection.stateDir must resolve inside the project root'
+      }
+    ]));
+  });
 });

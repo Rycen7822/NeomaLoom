@@ -30,6 +30,17 @@ def test_main_rejects_oversized_stdin_line(monkeypatch) -> None:
     assert response["error"]["code"] == "request_too_large"
 
 
+def test_read_bounded_stdin_line_rejects_before_unbounded_newline_buffer() -> None:
+    stream = io.BytesIO(b"x" * 32)
+
+    try:
+        worker_main.read_bounded_stdin_line(stream, max_bytes=10)
+    except ValueError as exc:
+        assert "stdin line too large" in str(exc)
+    else:
+        raise AssertionError("oversized stdin line was accepted")
+
+
 def test_graph_query_ignores_invalid_or_non_list_features_json(tmp_path: Path) -> None:
     planning = tmp_path / "planning"
     planning.mkdir()

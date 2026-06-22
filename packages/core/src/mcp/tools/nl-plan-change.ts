@@ -142,7 +142,7 @@ export async function handleNlPlanChange(input: unknown): Promise<NoemaLoomEnvel
         });
       })
     : null;
-  const impact = await handleNlImpact({
+  let impact = await handleNlImpact({
     projectPath: parsed.projectPath,
     target: parsed.target,
     targetType: parsed.targetType,
@@ -164,6 +164,24 @@ export async function handleNlPlanChange(input: unknown): Promise<NoemaLoomEnvel
       requiredActions: skippedActions
     });
   });
+  const rawImpactData = impact.data as (ImpactData & { impactCoverage?: string });
+  if (
+    rawImpactData.impactCoverage === 'none' &&
+    (rawImpactData.requiredActions ?? []).includes('run nl_refresh before impact tracing')
+  ) {
+    impact = skippedPlanEnvelope({
+      tool: 'nl_impact',
+      projectRoot,
+      graphRevision: locate.graphRevision,
+      graphState: locate.graphState,
+      warning: {
+        code: 'plan_change_impact_skipped',
+        severity: 'warning',
+        message: 'impact skipped because span index is unavailable; promote indexed paths before final impact claims'
+      },
+      requiredActions: skippedActions
+    });
+  }
   const envelopes = [locate, trace, impact];
   const traceData = trace?.data as (PlanSkippedData | Record<string, unknown> | undefined);
   const impactData = impact.data as (ImpactData & Partial<PlanSkippedData>);

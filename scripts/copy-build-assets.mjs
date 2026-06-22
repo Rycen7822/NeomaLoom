@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -20,4 +20,13 @@ for (const asset of assets) {
   const destinationPath = path.join(repoRoot, asset.destination);
   mkdirSync(path.dirname(destinationPath), { recursive: true });
   copyFileSync(sourcePath, destinationPath);
+}
+
+const cliMain = path.join(repoRoot, 'packages/core/dist/cli/main.js');
+if (existsSync(cliMain)) {
+  const content = readFileSync(cliMain, 'utf8');
+  if (!content.startsWith('#!/usr/bin/env node')) {
+    writeFileSync(cliMain, `#!/usr/bin/env node\n${content}`);
+  }
+  chmodSync(cliMain, 0o755);
 }

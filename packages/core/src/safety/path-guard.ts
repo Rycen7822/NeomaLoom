@@ -342,3 +342,13 @@ export async function unlinkInsideStateDir(projectRoot: string, targetPath: stri
   await assertNoSymlinkEscape(projectRoot, safePath);
   await unlink(safePath);
 }
+
+export async function renameInsideStateDir(projectRoot: string, sourcePath: string, targetPath: string): Promise<void> {
+  const safeSource = assertWritableStatePath(projectRoot, sourcePath);
+  const safeTarget = assertWritableStatePath(projectRoot, targetPath);
+  await assertNoSymlinkEscape(projectRoot, safeSource);
+  await mkdir(path.dirname(safeTarget), { recursive: true });
+  await assertNoSymlinkEscape(projectRoot, safeTarget);
+  await rename(safeSource, safeTarget);
+  await syncDirectoryBestEffort(path.dirname(safeTarget));
+}

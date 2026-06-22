@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import { applySpanMigrations } from '../../packages/core/src/spans/db.js';
 import { verifyCoverage } from '../../packages/core/src/verifier/coverage-verifier.js';
+import { nlVerifyCoverageInputSchema } from '../../packages/core/src/mcp/tools/nl-verify-coverage.js';
 
 const require = createRequire(import.meta.url);
 const { DatabaseSync } = require('node:sqlite') as {
@@ -72,6 +73,13 @@ async function createInventoryDbWithGeneratedDocRole(projectRoot: string): Promi
 }
 
 describe('coverage verifier', () => {
+  it('caps public nl_verify_coverage changedPaths arrays at the traversal policy boundary', () => {
+    expect(() => nlVerifyCoverageInputSchema.parse({
+      goal: 'bound changed paths',
+      changedPaths: Array.from({ length: 501 }, (_, index) => `docs/${index}.md`)
+    })).toThrow();
+  });
+
   it('fails while current changed files contain old terms or broken links and passes after they are fixed', async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-coverage-unit-'));
     await writeProjectFile(projectRoot, 'docs/api/client.md', [

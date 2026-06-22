@@ -3,6 +3,8 @@ import { type NoemaLoomPaths, resolveNoemaLoomPaths } from './paths.js';
 
 export const STATE_GITIGNORE_CONTENT = '*\n!.gitignore\n';
 
+const ensuredGitignoreRoots = new Set<string>();
+
 export async function ensureStateDir(projectRoot: string): Promise<NoemaLoomPaths> {
   const paths = resolveNoemaLoomPaths(projectRoot);
 
@@ -23,6 +25,9 @@ export async function ensureStateDir(projectRoot: string): Promise<NoemaLoomPath
     await mkdirInsideStateDir(paths.projectRoot, directory);
   }
 
-  await writeFileInsideStateDir(paths.projectRoot, paths.stateGitignoreFile, STATE_GITIGNORE_CONTENT);
+  if (!ensuredGitignoreRoots.has(paths.projectRoot)) {
+    await writeFileInsideStateDir(paths.projectRoot, paths.stateGitignoreFile, STATE_GITIGNORE_CONTENT);
+    ensuredGitignoreRoots.add(paths.projectRoot);
+  }
   return paths;
 }

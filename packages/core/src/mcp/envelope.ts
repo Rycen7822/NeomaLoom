@@ -104,7 +104,9 @@ export function resolveProjectRootFromInput(input: unknown): string {
     return resolved;
   }
 
-  return process.cwd();
+  const cwd = process.cwd();
+  assertAllowedProjectRoot(cwd);
+  return cwd;
 }
 
 export function createEnvelope<TData>(input: EnvelopeInput<TData>): NoemaLoomEnvelope<TData> {

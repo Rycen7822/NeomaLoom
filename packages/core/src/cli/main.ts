@@ -27,6 +27,7 @@ const defaultIo: CliIo = {
 type AnchorAction = 'status' | 'promote' | 'demote' | 'repair' | 'retire' | 'checkpoint';
 
 const ANCHOR_ACTIONS = new Set<AnchorAction>(['status', 'promote', 'demote', 'repair', 'retire', 'checkpoint']);
+const CLI_VERSION = '0.0.0';
 
 function isAnchorAction(value: string | undefined): value is AnchorAction {
   return typeof value === 'string' && ANCHOR_ACTIONS.has(value as AnchorAction);
@@ -142,7 +143,16 @@ export async function runCli(argv = process.argv.slice(2), io = defaultIo): Prom
     return 0;
   }
 
-  if (argv.length === 2 && argv[0] === 'serve' && argv[1] === '--mcp') {
+  if (argv.length === 1 && (argv[0] === '--version' || argv[0] === '-v')) {
+    io.stdout.write(`${CLI_VERSION}\n`);
+    return 0;
+  }
+
+  if (argv[0] === 'serve') {
+    if (!argv.includes('--mcp')) {
+      io.stdout.write(`${JSON.stringify(cliValidationEnvelope('noemaloom_cli', projectPathFromArgv(argv), 'serve requires --mcp flag.'), null, 2)}\n`);
+      return 1;
+    }
     await serveMcp();
     return 0;
   }

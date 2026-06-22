@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
-import { readFile, type FileHandle } from 'node:fs/promises';
+import { readFile, stat, type FileHandle } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import path from 'node:path';
 
-import { appendFileInsideStateDir, openExclusiveFileInsideStateDir, unlinkInsideStateDir, writeFileInsideStateDir } from '../safety/path-guard.js';
+import { appendFileInsideStateDir, openExclusiveFileInsideStateDir, renameInsideStateDir, unlinkInsideStateDir, writeFileInsideStateDir } from '../safety/path-guard.js';
+import { processIsAlive } from './refresh-lock.js';
 import { ensureStateDir } from './state-dir.js';
 import { resolveNoemaLoomPaths } from './paths.js';
 
@@ -147,7 +148,8 @@ const DEFAULT_OPTIONS: WorksetOptions = {
   }
 };
 
-const WORKSET_LOCK_TTL_MS = 30_000;
+const WORKSET_LOCK_TTL_MS = 5 * 60_000;
+const WORKSET_EVENTS_MAX_BYTES = 5 * 1024 * 1024;
 
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && 'code' in error;
@@ -159,8 +161,15 @@ function worksetLockPath(projectRoot: string): string {
 
 function lockExpired(raw: string, now = Date.now()): boolean {
   const parts = raw.trim().split(/\s+/);
+  const pid = Number(parts[0]);
   const timestamp = Number(parts[1]);
-  return !Number.isFinite(timestamp) || now - timestamp * 1000 > WORKSET_LOCK_TTL_MS;
+  if (!Number.isFinite(timestamp)) {
+    return true;
+  }
+  if (now - timestamp * 1000 <= WORKSET_LOCK_TTL_MS) {
+    return false;
+  }
+  return !Number.isFinite(pid) || !processIsAlive(pid);
 }
 
 async function removeStaleWorksetLock(projectRoot: string, lockFile: string): Promise<boolean> {
@@ -173,8 +182,19 @@ async function removeStaleWorksetLock(projectRoot: string, lockFile: string): Pr
   if (!lockExpired(raw)) {
     return false;
   }
+  const graveyard = `${lockFile}.stale.${process.pid}.${Date.now()}`;
   try {
-    await unlinkInsideStateDir(projectRoot, lockFile);
+    await renameInsideStateDir(projectRoot, lockFile, graveyard);
+    const quarantinedRaw = await readFile(graveyard, 'utf8').catch(() => '');
+    if (quarantinedRaw !== raw) {
+      await renameInsideStateDir(projectRoot, graveyard, lockFile).catch(() => undefined);
+      return false;
+    }
+    await unlinkInsideStateDir(projectRoot, graveyard).catch(error => {
+      if (!isErrnoException(error) || error.code !== 'ENOENT') {
+        throw error;
+      }
+    });
     return true;
   } catch (error) {
     if (isErrnoException(error) && error.code === 'ENOENT') {
@@ -186,7 +206,7 @@ async function removeStaleWorksetLock(projectRoot: string, lockFile: string): Pr
 
 async function acquireWorksetLock(projectRoot: string, lockFile: string): Promise<FileHandle | undefined> {
   try {
-    return await openExclusiveFileInsideStateDir(projectRoot, lockFile);
+    return await openExclusiveFileInsideStateDir(projectRoot, lockFile, `${process.pid} ${Date.now() / 1000}\n`);
   } catch (error) {
     if (isErrnoException(error) && error.code === 'EEXIST') {
       return undefined;
@@ -213,7 +233,6 @@ async function withWorksetLock<T>(projectRoot: string, task: () => Promise<T>): 
     throw new Error('workset_lock_busy');
   }
   try {
-    await lockHandle.writeFile(`${process.pid} ${Date.now() / 1000}\n`);
     return await task();
   } finally {
     await lockHandle.close();
@@ -402,10 +421,10 @@ async function readWorksetManifestUnlocked(projectRoot: string): Promise<Workset
   try {
     return normalizeManifest(projectRoot, JSON.parse(await readFile(path.join(paths.worksetDir, 'anchors.json'), 'utf8')) as unknown);
   } catch (error) {
-    if (isErrnoException(error) && error.code === 'ENOENT') {
+    if (isErrnoException(error) && error.code !== 'ENOENT') {
       return createEmptyWorksetManifest(projectRoot);
     }
-    throw error;
+    return createEmptyWorksetManifest(projectRoot);
   }
 }
 
@@ -438,9 +457,33 @@ export async function updateWorksetManifest<T>(
   });
 }
 
-export async function appendWorksetEvent(projectRoot: string, event: Record<string, unknown>): Promise<void> {
+async function rotateWorksetEventsIfLarge(projectRoot: string, eventsFile: string): Promise<void> {
+  try {
+    const current = await stat(eventsFile);
+    if (!current.isFile() || current.size < WORKSET_EVENTS_MAX_BYTES) {
+      return;
+    }
+  } catch (error) {
+    if (isErrnoException(error) && error.code === 'ENOENT') {
+      return;
+    }
+    throw error;
+  }
+  const suffix = nowIso().replace(/[:.]/g, '-');
+  await renameInsideStateDir(projectRoot, eventsFile, path.join(path.dirname(eventsFile), `events.${suffix}.jsonl`));
+}
+
+async function appendWorksetEventUnlocked(projectRoot: string, event: Record<string, unknown>): Promise<void> {
   const paths = await ensureStateDir(projectRoot);
-  await appendFileInsideStateDir(paths.projectRoot, path.join(paths.worksetDir, 'events.jsonl'), `${JSON.stringify({ ...event, at: nowIso() })}\n`);
+  const eventsFile = path.join(paths.worksetDir, 'events.jsonl');
+  await rotateWorksetEventsIfLarge(paths.projectRoot, eventsFile);
+  await appendFileInsideStateDir(paths.projectRoot, eventsFile, `${JSON.stringify({ ...event, at: nowIso() })}\n`);
+}
+
+export async function appendWorksetEvent(projectRoot: string, event: Record<string, unknown>): Promise<void> {
+  await withWorksetLock(projectRoot, async () => {
+    await appendWorksetEventUnlocked(projectRoot, event);
+  });
 }
 
 function rankAnchor(anchor: NavigationAnchor): number {
@@ -633,8 +676,9 @@ export async function recordNavigationTargets(input: {
   reviveDormant?: boolean;
   preserveCurated?: boolean;
 }): Promise<WorksetManifest> {
-  const { manifest: next } = await updateWorksetManifest(input.projectRoot, current => {
-    const nextManifest = upsertNavigationTargets({
+  return withWorksetLock(input.projectRoot, async () => {
+    const current = await readWorksetManifestUnlocked(input.projectRoot);
+    const next = await writeWorksetManifestUnlocked(input.projectRoot, upsertNavigationTargets({
       manifest: current,
       targets: input.targets,
       source: input.source,
@@ -644,16 +688,15 @@ export async function recordNavigationTargets(input: {
       defaultState: input.defaultState,
       reviveDormant: input.reviveDormant,
       preserveCurated: input.preserveCurated
+    }));
+    await appendWorksetEventUnlocked(input.projectRoot, {
+      type: 'navigation_query',
+      navigationQuerySeq: next.counters.navigationQuerySeq,
+      projectActivitySeq: next.counters.projectActivitySeq,
+      targetCount: input.targets.length
     });
-    return { manifest: nextManifest, result: nextManifest };
+    return next;
   });
-  await appendWorksetEvent(input.projectRoot, {
-    type: 'navigation_query',
-    navigationQuerySeq: next.counters.navigationQuerySeq,
-    projectActivitySeq: next.counters.projectActivitySeq,
-    targetCount: input.targets.length
-  });
-  return next;
 }
 
 export function setNavigationEnabled(manifest: WorksetManifest, enabled: boolean, mode: WorksetOptions['navigation']['mode'] = enabled ? 'inject' : 'silent'): WorksetManifest {

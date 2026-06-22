@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -65,6 +65,19 @@ describe('traceGraph SQL fast path', () => {
     expect(graph).toMatchObject({ nodes: [], edges: [], seedSpanIds: [], impactCoverage: 'none' });
     expect(graph.requiredActions).toEqual(expect.arrayContaining([expect.stringContaining('nl_refresh')]));
     expect(existsSync(dbPath)).toBe(false);
+  });
+
+  it('returns an empty warning graph when spans.db is corrupt instead of throwing', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-trace-corrupt-db-'));
+    const spansDir = path.join(projectRoot, '.noemaloom', 'spans');
+    await mkdir(spansDir, { recursive: true });
+    await writeFile(path.join(spansDir, 'spans.db'), 'not sqlite');
+
+    const graph = traceGraph({ projectRoot, target: 'anything', targetType: 'symbol' });
+
+    expect(graph).toMatchObject({ nodes: [], edges: [], seedSpanIds: [], impactCoverage: 'none' });
+    expect(graph.requiredActions).toEqual(expect.arrayContaining([expect.stringContaining('nl_refresh')]));
+    expect((graph as typeof graph & { warnings?: string[] }).warnings).toEqual(expect.arrayContaining([expect.stringContaining('spans.db unreadable')]));
   });
 
   it('applies relation filters before edge limits', async () => {

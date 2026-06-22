@@ -107,4 +107,22 @@ describe('MCP response envelope', () => {
       else process.env.NOEMALOOM_ALLOWED_PROJECTS = previous;
     }
   });
+
+  it('applies project-root allowlist policy to the process.cwd fallback', async () => {
+    const previousAllowed = process.env.NOEMALOOM_ALLOWED_PROJECTS;
+    const previousCwd = process.cwd();
+    const allowed = await mkdtemp(path.join(tmpdir(), 'noemaloom-cwd-allowed-'));
+    const outside = await mkdtemp(path.join(tmpdir(), 'noemaloom-cwd-denied-'));
+    process.env.NOEMALOOM_ALLOWED_PROJECTS = allowed;
+    process.chdir(outside);
+    try {
+      expect(() => resolveProjectRootFromInput({})).toThrow(expect.objectContaining({
+        code: 'project_root_not_allowed'
+      }));
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAllowed === undefined) delete process.env.NOEMALOOM_ALLOWED_PROJECTS;
+      else process.env.NOEMALOOM_ALLOWED_PROJECTS = previousAllowed;
+    }
+  });
 });

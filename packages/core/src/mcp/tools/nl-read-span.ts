@@ -40,6 +40,9 @@ type SpanRow = {
 
 const require = createRequire(import.meta.url);
 const TRUNCATION_SUFFIX = '\n…[truncated]';
+const MAX_RELOCATION_SCAN_BYTES = 5 * 1024 * 1024;
+const MAX_RELOCATION_SCAN_LINES = 500_000;
+const MAX_RELOCATION_CANDIDATES = 20_000;
 
 function openDatabase(filename: string): Database {
   const sqlite = require('node:sqlite') as { DatabaseSync: new (filename: string) => Database };
@@ -164,7 +167,7 @@ function boundedReadRange(input: {
 }): { startLine: number; endLine: number } {
   const spanLineCount = input.spanEndLine - input.spanStartLine + 1;
   if (spanLineCount >= input.maxLines) {
-    return { startLine: input.spanStartLine, endLine: input.spanEndLine };
+    return { startLine: input.spanStartLine, endLine: Math.min(input.spanEndLine, input.spanStartLine + input.maxLines - 1) };
   }
 
   const availableContext = input.maxLines - spanLineCount;
@@ -222,13 +225,17 @@ function lineFingerprintLineRange(row: SpanRow, currentText: string): { startLin
     return undefined;
   }
 
+  if (currentText.length > MAX_RELOCATION_SCAN_BYTES) {
+    return undefined;
+  }
   const lines = fingerprintLines(currentText);
-  if (spanLineCount > lines.length) {
+  if (spanLineCount > lines.length || lines.length > MAX_RELOCATION_SCAN_LINES) {
     return undefined;
   }
 
   const candidates: Array<{ startLine: number; score: number; distance: number }> = [];
-  for (let startIndex = 0; startIndex <= lines.length - spanLineCount; startIndex += 1) {
+  const maxStartIndex = Math.min(lines.length - spanLineCount, MAX_RELOCATION_CANDIDATES - 1);
+  for (let startIndex = 0; startIndex <= maxStartIndex; startIndex += 1) {
     const suffixStartIndex = startIndex + spanLineCount - fingerprintLineCount;
     let score = 0;
     if (prefixHash && hashLines(lines.slice(startIndex, startIndex + fingerprintLineCount)) === prefixHash) score += 4;
@@ -237,6 +244,15 @@ function lineFingerprintLineRange(row: SpanRow, currentText: string): { startLin
     if (lastLineHash && hashLines(lines.slice(startIndex + spanLineCount - 1, startIndex + spanLineCount)) === lastLineHash) score += 1;
     if (score >= 4) {
       const startLine = startIndex + 1;
+      if (score >= 8) {
+        const endLine = Math.min(lines.length, startLine + spanLineCount - 1);
+        return {
+          startLine,
+          endLine,
+          text: sliceLines(currentText, startLine, endLine),
+          method: 'line_fingerprint_search'
+        };
+      }
       candidates.push({ startLine, score, distance: Math.abs(startLine - row.start_line) });
     }
   }
@@ -482,8 +498,7 @@ export async function handleNlReadSpan(input: unknown): Promise<NoemaLoomEnvelop
     });
   }
   const spanLineCount = relocated.endLine - relocated.startLine + 1;
-  const blockTooLarge =
-    ['doc.table', 'doc.list', 'doc.code_fence', 'doc.section', 'code.module'].includes(row.kind) && spanLineCount > parsed.maxLines;
+  const blockTooLarge = spanLineCount > parsed.maxLines;
 
   if (blockTooLarge) {
     const ranges = segmentRanges(relocated.startLine, relocated.endLine, parsed.maxLines);

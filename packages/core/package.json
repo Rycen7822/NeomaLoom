@@ -5,6 +5,9 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "noemaloom": "dist/cli/main.js"
+  },
   "scripts": {
     "build": "tsc -p ../../tsconfig.build.json && node ../../scripts/copy-build-assets.mjs",
     "typecheck": "tsc --noEmit"

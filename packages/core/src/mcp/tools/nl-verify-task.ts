@@ -1,6 +1,9 @@
 import { z } from 'zod';
 
 import { createEnvelope, resolveProjectRootFromInput, type NoemaLoomEnvelope } from '../envelope.js';
+import { shapeImpact } from '../output-profile.js';
+import { estimateEnvelopeTokenBudget } from '../token-budget.js';
+import { MAX_CHANGED_PATHS } from '../../files/bounded-changed-paths.js';
 import { mergeRequiredVerification, requiredVerificationPaths } from '../../verifier/required-verification.js';
 import {
   aggregateOk,
@@ -31,10 +34,10 @@ function verifyTaskNextActions(status: CoverageData['status'], graphState: Noema
 export const nlVerifyTaskInputSchema = z
   .object({
     projectPath: z.string().optional(),
-    goal: z.string().min(1),
-    changedPaths: z.array(z.string()).default([]),
-    oldTerms: z.array(z.string()).default([]),
-    newTerms: z.array(z.string()).default([]),
+    goal: z.string().min(1).max(10_000),
+    changedPaths: z.array(z.string()).max(MAX_CHANGED_PATHS).default([]),
+    oldTerms: z.array(z.string()).max(MAX_CHANGED_PATHS).default([]),
+    newTerms: z.array(z.string()).max(MAX_CHANGED_PATHS).default([]),
     oldTermPolicy: z.enum(['changed_paths', 'changed_paths_plus_advisory_docs', 'strict_global']).default('changed_paths_plus_advisory_docs'),
     target: z.string().optional(),
     targetType: z.enum(['auto', 'span', 'symbol', 'file', 'feature', 'config', 'doc']).default('auto'),
@@ -82,24 +85,39 @@ export async function handleNlVerifyTask(input: unknown): Promise<NoemaLoomEnvel
     coverage: coverage.data
   });
 
+  let data: Record<string, unknown> = {
+    status: coverageData.status ?? 'unknown',
+    coverage: coverage.data,
+    impact: impact?.data ?? null,
+    trace: trace?.data ?? null,
+    requiredVerification: requiredVerificationPaths(requiredVerificationDetails),
+    requiredVerificationDetails,
+    steps: summarizeSteps(envelopes)
+  };
+  const nextActions = verifyTaskNextActions(coverageData.status, coverage.graphState);
+  let tokenBudget = combineTokenBudget(envelopes);
+  let warnings = combineWarnings(envelopes);
+  const finalBudget = estimateEnvelopeTokenBudget({ requested: 2500, data, nextActions });
+  if (finalBudget.tokenBudget.truncated) {
+    data = {
+      ...data,
+      impact: impact?.data ? shapeImpact(impact.data, 'compact') : null
+    };
+    const shapedBudget = estimateEnvelopeTokenBudget({ requested: 2500, data, nextActions });
+    tokenBudget = { ...shapedBudget.tokenBudget, truncated: true };
+    warnings = [...warnings, ...finalBudget.warnings, ...shapedBudget.warnings];
+  }
+
   return createEnvelope({
     ok: aggregateOk(envelopes),
     tool: 'nl_verify_task',
     projectRoot,
     graphRevision: combineGraphRevision(envelopes),
     graphState: combineGraphState(envelopes),
-    tokenBudget: combineTokenBudget(envelopes),
-    warnings: combineWarnings(envelopes),
-    data: {
-      status: coverageData.status ?? 'unknown',
-      coverage: coverage.data,
-      impact: impact?.data ?? null,
-      trace: trace?.data ?? null,
-      requiredVerification: requiredVerificationPaths(requiredVerificationDetails),
-      requiredVerificationDetails,
-      steps: summarizeSteps(envelopes)
-    },
+    tokenBudget,
+    warnings,
+    data,
     evidence: combineEvidence(envelopes),
-    nextActions: verifyTaskNextActions(coverageData.status, coverage.graphState)
+    nextActions
   });
 }

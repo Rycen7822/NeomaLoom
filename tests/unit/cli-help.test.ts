@@ -171,4 +171,23 @@ describe('noemaloom CLI help', () => {
     expect(unknownCommand.json?.tool).toBe('noemaloom_cli');
     expect(unknownCommand.stderr).toBe('');
   });
+
+  it('returns specific validation for serve without --mcp instead of an unknown command', async () => {
+    const result = await runJson(['serve', '--project', process.cwd()]);
+
+    expect(result.code).toBe(1);
+    expect(result.json?.tool).toBe('noemaloom_cli');
+    expect((result.json?.warnings as Array<{ message: string }>)[0].message).toContain('serve requires --mcp');
+  });
+
+  it('prints the package version for --version', async () => {
+    const captured = captureIo();
+
+    const code = await runCli(['--version'], captured.io);
+    const { stdout, stderr } = captured.output();
+
+    expect(code).toBe(0);
+    expect(stdout.trim()).toBe('0.0.0');
+    expect(stderr).toBe('');
+  });
 });

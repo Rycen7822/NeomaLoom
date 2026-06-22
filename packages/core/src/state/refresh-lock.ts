@@ -1,6 +1,6 @@
 import { readFile, type FileHandle } from 'node:fs/promises';
 
-import { openExclusiveFileInsideStateDir, unlinkInsideStateDir } from '../safety/path-guard.js';
+import { openExclusiveFileInsideStateDir, renameInsideStateDir, unlinkInsideStateDir } from '../safety/path-guard.js';
 import { ensureStateDir } from './state-dir.js';
 
 export type RefreshLockResult<T> =
@@ -19,7 +19,7 @@ function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && 'code' in error;
 }
 
-function processIsAlive(pid: number): boolean {
+export function processIsAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) {
     return false;
   }
@@ -110,8 +110,19 @@ async function removeStaleLockIfDead(projectRoot: string, lockFile: string): Pro
     return false;
   }
 
+  const graveyard = `${lockFile}.stale.${process.pid}.${Date.now()}`;
   try {
-    await unlinkInsideStateDir(projectRoot, lockFile);
+    await renameInsideStateDir(projectRoot, lockFile, graveyard);
+    const quarantinedRaw = await readFile(graveyard, 'utf8').catch(() => '');
+    if (quarantinedRaw !== raw) {
+      await renameInsideStateDir(projectRoot, graveyard, lockFile).catch(() => undefined);
+      return false;
+    }
+    await unlinkInsideStateDir(projectRoot, graveyard).catch(error => {
+      if (!isErrnoException(error) || error.code !== 'ENOENT') {
+        throw error;
+      }
+    });
     return true;
   } catch (error) {
     if (isErrnoException(error) && error.code === 'ENOENT') {

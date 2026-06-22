@@ -159,7 +159,7 @@ function slimImpactNode(node: unknown): unknown {
   };
 }
 
-function shapeImpact(value: unknown, profile: Exclude<ResponseProfile, 'debug'>): unknown {
+export function shapeImpact(value: unknown, profile: Exclude<ResponseProfile, 'debug'>): unknown {
   if (!isRecord(value)) return value;
   const limit = profile === 'compact' ? 12 : 25;
   const shaped: Record<string, unknown> = {

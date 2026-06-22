@@ -82,7 +82,16 @@ hermes tools list
 
 这是给 Codex 或其他直接消费 stdio MCP server 的客户端使用的兼容路径。Hermes 用户默认应优先使用上面的原生 plugin，除非明确需要把 NoemaLoom 配成单独的 MCP server。
 
-先让当前仓库工作区中的 `noemaloom` 命令在环境中可用，然后用下面的命令启动 MCP stdio server：
+先在源码工作区安装依赖、构建并用 `npm link` 让 `noemaloom` 命令在环境中可用：
+
+```bash
+npm ci --include=dev
+npm run build
+npm link
+noemaloom --version
+```
+
+然后用下面的命令启动 MCP stdio server：
 
 ```bash
 noemaloom serve --mcp
@@ -135,7 +144,7 @@ args = ["serve", "--mcp"]
 
 兼容 MCP 安装：
 - 只在 Codex 或其他仅支持 MCP 的客户端中使用。
-- 验证或建立一种用户本地方式，让 `noemaloom` 命令从 <NOEMALOOM_REPO> 运行。不要假设已经存在发布到 npm 的包。
+- 验证或建立一种用户本地方式，让 `noemaloom` 命令从 <NOEMALOOM_REPO> 运行。源码 checkout 中执行 `npm ci --include=dev`、`npm run build` 和 `npm link`，并在添加 MCP 配置前用 `noemaloom --version` 验证。不要假设已经存在发布到 npm 的包。
 - 添加 MCP server entry，command 使用 `noemaloom`，args 使用 `["serve", "--mcp"]`。
 
 规则：

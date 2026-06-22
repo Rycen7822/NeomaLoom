@@ -81,7 +81,16 @@ Then call `nl_status` in the target project before any refresh or localization w
 
 Use this compatibility path for Codex or other clients that consume stdio MCP servers directly. Hermes users should prefer the native plugin above unless they specifically want NoemaLoom as a separate MCP server.
 
-Make the `noemaloom` command available from this repository workspace, then start the MCP stdio server with:
+Make the `noemaloom` command available from this repository workspace with `npm link` after installing dependencies and building the package:
+
+```bash
+npm ci --include=dev
+npm run build
+npm link
+noemaloom --version
+```
+
+Then start the MCP stdio server with:
 
 ```bash
 noemaloom serve --mcp
@@ -134,7 +143,7 @@ Project-level installation:
 
 Compatibility MCP installation:
 - Use this only for Codex or other MCP-only clients.
-- Verify or create a user-local way to run the `noemaloom` command from <NOEMALOOM_REPO>. Do not assume a published npm package.
+- Verify or create a user-local way to run the `noemaloom` command from <NOEMALOOM_REPO>. From the source checkout, run `npm ci --include=dev`, `npm run build`, and `npm link`; verify `noemaloom --version` before adding MCP config. Do not assume a published npm package.
 - Add the MCP server entry with command `noemaloom` and args `["serve", "--mcp"]`.
 
 Rules:

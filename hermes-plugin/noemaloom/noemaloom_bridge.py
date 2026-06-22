@@ -316,7 +316,7 @@ def ensure_runtime_build(repo: Path) -> Path:
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=int(os.environ.get("NOEMALOOM_BUILD_TIMEOUT", "120")),
+            timeout=_build_timeout_seconds(),
             check=False,
         )
         if result.returncode != 0:
@@ -357,11 +357,23 @@ def _project_cwd(args: dict[str, Any]) -> str:
 
 
 def _runtime_env(repo: Path) -> dict[str, str]:
-    env = dict(os.environ)
+    allowed = {
+        "PATH",
+        "HOME",
+        "USER",
+        "USERNAME",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TERM",
+        "SHELL",
+        "SYSTEMROOT",
+        "WINDIR",
+    }
+    env = {key: value for key, value in os.environ.items() if key in allowed or key.startswith("NOEMALOOM_")}
     worker_root = str(repo / "python" / "nl_rpg_projection_worker")
-    existing_pythonpath = env.get("PYTHONPATH")
     env["NOEMALOOM_PYTHONPATH"] = worker_root
-    env["PYTHONPATH"] = worker_root if not existing_pythonpath else f"{worker_root}{os.pathsep}{existing_pythonpath}"
+    env["PYTHONPATH"] = worker_root
     env.setdefault("PYTHON", shutil.which("python3") or "python3")
     return env
 
@@ -427,6 +439,15 @@ async def _call_tool_async(tool: str, args: dict[str, Any], timeout: float) -> s
     if isinstance(parsed["data"], dict):
         parsed["data"].setdefault("runtime", _runtime_metadata(repo, build_dir))
     return _json(parsed)
+
+
+def _build_timeout_seconds() -> float:
+    raw = os.environ.get("NOEMALOOM_BUILD_TIMEOUT", "120")
+    try:
+        timeout = float(raw)
+    except (TypeError, ValueError):
+        return 120.0
+    return timeout if timeout > 0 else 120.0
 
 
 def _tool_timeout_seconds() -> float:

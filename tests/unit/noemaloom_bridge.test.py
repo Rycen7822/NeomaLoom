@@ -10,6 +10,7 @@ from noemaloom_bridge import (
     _copy_runtime_migrations,
     _default_build_dir,
     _format_exception,
+    _runtime_env,
     _runtime_metadata,
     _runtime_migrations_ready,
     _source_mtime,
@@ -91,3 +92,28 @@ def test_bridge_copies_all_runtime_migrations(tmp_path):
     assert (build_dir / "spans" / "migrations" / "001_initial.sql").exists()
     assert (build_dir / "spans" / "migrations" / "002_retrieval_core.sql").exists()
     assert _source_mtime(repo) >= (migrations / "002_retrieval_core.sql").stat().st_mtime
+
+
+def test_runtime_env_excludes_secret_host_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "secret-token")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret-token")
+    monkeypatch.setenv("NOEMALOOM_TOOL_TIMEOUT", "123")
+    monkeypatch.setenv("PATH", "/usr/bin")
+
+    env = _runtime_env(tmp_path)
+
+    assert env["NOEMALOOM_TOOL_TIMEOUT"] == "123"
+    assert env["PATH"] == "/usr/bin"
+    assert "PYTHONPATH" in env
+    assert "PYTHON" in env
+    assert "OPENAI_API_KEY" not in env
+    assert "AWS_SECRET_ACCESS_KEY" not in env
+
+
+def test_bridge_invalid_build_timeout_falls_back(monkeypatch):
+    monkeypatch.setenv("NOEMALOOM_BUILD_TIMEOUT", "not-a-number")
+
+    assert noemaloom_bridge._build_timeout_seconds() == 120.0
+
+    monkeypatch.setenv("NOEMALOOM_BUILD_TIMEOUT", "0")
+    assert noemaloom_bridge._build_timeout_seconds() == 120.0

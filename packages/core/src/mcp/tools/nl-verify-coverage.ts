@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
-import path from 'node:path';
 import { z } from 'zod';
 
+import { boundedCollectChangedPathFiles, MAX_CHANGED_PATHS } from '../../files/bounded-changed-paths.js';
 import { verifyCoverage } from '../../verifier/coverage-verifier.js';
-import { normalizeProjectRelativePath, safeReadFileInsideProject, safeReaddirInsideProject, safeStatInsideProject } from '../../safety/path-guard.js';
+import { normalizeProjectRelativePath, safeReadFileInsideProject, safeStatInsideProject } from '../../safety/path-guard.js';
 import { readInventorySnapshot } from '../../state/changed-detection.js';
 import { readLatestRevision } from '../../state/refresh-revision.js';
 import { createEnvelope, resolveProjectRootFromInput, type EnvelopeWarning, type GraphState, type NoemaLoomEnvelope } from '../envelope.js';
@@ -11,10 +11,10 @@ import { createEnvelope, resolveProjectRootFromInput, type EnvelopeWarning, type
 export const nlVerifyCoverageInputSchema = z
   .object({
     projectPath: z.string().optional(),
-    goal: z.string().min(1),
-    changedPaths: z.array(z.string()).default([]),
-    oldTerms: z.array(z.string()).default([]),
-    newTerms: z.array(z.string()).default([]),
+    goal: z.string().min(1).max(10_000),
+    changedPaths: z.array(z.string()).max(MAX_CHANGED_PATHS).default([]),
+    oldTerms: z.array(z.string()).max(MAX_CHANGED_PATHS).default([]),
+    newTerms: z.array(z.string()).max(MAX_CHANGED_PATHS).default([]),
     oldTermPolicy: z.enum(['changed_paths', 'changed_paths_plus_advisory_docs', 'strict_global']).default('changed_paths_plus_advisory_docs')
   })
   .passthrough();
@@ -29,46 +29,8 @@ function sha1(data: string | Uint8Array): string {
   return createHash('sha1').update(data).digest('hex');
 }
 
-async function collectFilesUnder(projectRoot: string, repoPath: string): Promise<string[]> {
-  const entries = await safeReaddirInsideProject(projectRoot, repoPath, { withFileTypes: true });
-  const files: string[] = [];
-  for (const entry of entries) {
-    if (entry.name === '.noemaloom') {
-      continue;
-    }
-    const childRepoPath = normalizeProjectRelativePath(projectRoot, path.posix.join(repoPath, entry.name));
-    if (entry.isDirectory()) {
-      files.push(...(await collectFilesUnder(projectRoot, childRepoPath)));
-    } else if (entry.isFile()) {
-      files.push(childRepoPath);
-    }
-  }
-  return files;
-}
-
 async function expandChangedPaths(projectRoot: string, changedPaths: string[]): Promise<string[]> {
-  const expanded = new Set<string>();
-  for (const rawChangedPath of changedPaths.map(toRepoPath).filter(Boolean)) {
-    let changedPath: string;
-    try {
-      changedPath = normalizeProjectRelativePath(projectRoot, rawChangedPath);
-    } catch {
-      continue;
-    }
-    try {
-      const fileStat = await safeStatInsideProject(projectRoot, changedPath);
-      if (fileStat.isDirectory()) {
-        for (const childPath of await collectFilesUnder(projectRoot, changedPath)) {
-          expanded.add(childPath);
-        }
-      } else if (fileStat.isFile()) {
-        expanded.add(changedPath);
-      }
-    } catch {
-      expanded.add(changedPath);
-    }
-  }
-  return [...expanded].sort();
+  return (await boundedCollectChangedPathFiles({ projectRoot, changedPaths })).files;
 }
 
 async function currentHash(projectRoot: string, repoPath: string, expectedHash: string): Promise<string | undefined> {

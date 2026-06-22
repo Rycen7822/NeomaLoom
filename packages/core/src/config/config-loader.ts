@@ -55,6 +55,16 @@ function validateString(value: unknown, field: string, errors: ConfigValidationE
   }
 }
 
+function resolvedFeatureStateRoot(projectRoot: string, stateDir: string): string {
+  const absolute = path.isAbsolute(stateDir) ? path.resolve(stateDir) : path.resolve(projectRoot, stateDir);
+  return path.basename(absolute) === 'planning' ? path.dirname(absolute) : absolute;
+}
+
+function isInsideProject(projectRoot: string, targetPath: string): boolean {
+  const relative = path.relative(path.resolve(projectRoot), path.resolve(targetPath));
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values)];
 }
@@ -137,6 +147,12 @@ export function validateConfig(rawValue: unknown, projectRoot: string): ConfigLo
     validateBoolean(featureProjection.enabled, 'featureProjection.enabled', errors);
     validateString(featureProjection.workerCommand, 'featureProjection.workerCommand', errors);
     validateString(featureProjection.stateDir, 'featureProjection.stateDir', errors);
+    if (typeof featureProjection.stateDir === 'string' && featureProjection.stateDir.length > 0) {
+      const stateRoot = resolvedFeatureStateRoot(projectRoot, featureProjection.stateDir);
+      if (!isInsideProject(projectRoot, stateRoot)) {
+        errors.push({ field: 'featureProjection.stateDir', message: 'featureProjection.stateDir must resolve inside the project root' });
+      }
+    }
     validatePositiveInteger(featureProjection.timeoutMs, 'featureProjection.timeoutMs', errors);
     validatePositiveInteger(featureProjection.maxOutputBytes, 'featureProjection.maxOutputBytes', errors);
   }

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -78,6 +78,45 @@ describe('NoemaLoom navigation workset state', () => {
     const reloaded = await readWorksetManifest(projectRoot);
     expect(reloaded.anchors.map(anchor => anchor.path).sort()).toEqual(['src/one.ts', 'src/two.ts']);
     expect(reloaded.counters.navigationQuerySeq).toBe(2);
+  });
+
+  it('does not steal an expired workset lock while the recorded process is still alive', async () => {
+    const projectRoot = await createTempProject();
+    const paths = resolveNoemaLoomPaths(projectRoot);
+    await mkdir(paths.worksetDir, { recursive: true });
+    await writeFile(path.join(paths.worksetDir, 'anchors.json.lock'), `${process.pid} 0\n`);
+
+    await expect(writeWorksetManifest(projectRoot, createEmptyWorksetManifest(projectRoot))).rejects.toThrow('workset_lock_busy');
+  });
+
+  it('rotates oversized workset event logs before appending a new navigation event', async () => {
+    const projectRoot = await createTempProject();
+    const paths = resolveNoemaLoomPaths(projectRoot);
+    await mkdir(paths.worksetDir, { recursive: true });
+    await writeFile(path.join(paths.worksetDir, 'events.jsonl'), `${'x'.repeat(5 * 1024 * 1024 + 32)}\n`);
+
+    await recordNavigationTargets({
+      projectRoot,
+      targets: [{ spanId: 'rotated', path: 'src/rotated.ts', kind: 'code.function', role: 'source_file', label: 'rotated', score: 100 }]
+    });
+
+    const worksetFiles = await readdir(paths.worksetDir);
+    expect(worksetFiles.some(file => file.startsWith('events.') && file.endsWith('.jsonl'))).toBe(true);
+    const currentEvents = await readFile(path.join(paths.worksetDir, 'events.jsonl'), 'utf8');
+    expect(currentEvents.length).toBeLessThan(1024 * 1024);
+    expect(currentEvents).toContain('navigation_query');
+  });
+
+  it('falls back to an empty workset manifest when anchors.json is corrupt', async () => {
+    const projectRoot = await createTempProject();
+    const paths = resolveNoemaLoomPaths(projectRoot);
+    await mkdir(paths.worksetDir, { recursive: true });
+    await writeFile(path.join(paths.worksetDir, 'anchors.json'), '{not json');
+
+    const manifest = await readWorksetManifest(projectRoot);
+
+    expect(manifest.anchors).toEqual([]);
+    expect(manifest.counters.navigationQuerySeq).toBe(0);
   });
 
   it('records automatic navigation observations as dormant weak candidates when requested', async () => {

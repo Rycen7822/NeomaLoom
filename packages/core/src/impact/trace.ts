@@ -51,6 +51,7 @@ export type TraceGraph = {
   impactCoverage: 'full' | 'scoped' | 'none';
   missingUnindexedPaths: string[];
   requiredActions: string[];
+  warnings?: string[];
 };
 
 type SpanRow = {
@@ -287,6 +288,18 @@ function missingUnindexedPaths(db: Database, coverage: 'full' | 'scoped' | 'none
   }
 }
 
+function emptyTraceGraph(requiredAction: string, warnings: string[] = []): TraceGraph {
+  return {
+    nodes: [],
+    edges: [],
+    seedSpanIds: [],
+    impactCoverage: 'none',
+    missingUnindexedPaths: [],
+    requiredActions: [requiredAction],
+    ...(warnings.length > 0 ? { warnings } : {})
+  };
+}
+
 export function traceGraph(input: {
   projectRoot: string;
   target: string;
@@ -297,16 +310,15 @@ export function traceGraph(input: {
 }): TraceGraph {
   const dbPath = path.join(input.projectRoot, '.noemaloom', 'spans', 'spans.db');
   if (!existsSync(dbPath)) {
-    return {
-      nodes: [],
-      edges: [],
-      seedSpanIds: [],
-      impactCoverage: 'none',
-      missingUnindexedPaths: [],
-      requiredActions: ['run nl_refresh before impact tracing']
-    };
+    return emptyTraceGraph('run nl_refresh before impact tracing');
   }
-  const db = openDatabase(dbPath);
+  let db: ReturnType<typeof openDatabase>;
+  try {
+    db = openDatabase(dbPath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return emptyTraceGraph('run nl_refresh before impact tracing', [`spans.db unreadable; run nl_refresh target="files" (${message})`]);
+  }
   try {
     const relationTypes = input.relationTypes ?? ['all'];
     const direction = input.direction ?? 'both';
@@ -359,6 +371,9 @@ export function traceGraph(input: {
       missingUnindexedPaths: missingPaths,
       requiredActions: missingPaths.length > 0 ? ['promote missingUnindexedPaths with nl_refresh target="paths" before final impact claims'] : []
     };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return emptyTraceGraph('run nl_refresh before impact tracing', [`spans.db unreadable; run nl_refresh target="files" (${message})`]);
   } finally {
     db.close();
   }

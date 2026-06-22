@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "noemaloom": "packages/core/dist/cli/main.js"
+  },
   "workspaces": [
     "packages/core"
   ],
@@ -15,7 +18,7 @@
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
     "test:e2e": "vitest run tests/e2e",
-    "test:all": "vitest run",
+    "test:all": "vitest run && python3 -m pytest tests && (cd python/nl_rpg_projection_worker && python3 -m pytest tests)",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

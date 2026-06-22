@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { computeImpact } from '../../impact/impact.js';
 import { readLatestRevision } from '../../state/refresh-revision.js';
 import { createEnvelope, resolveProjectRootFromInput, type NoemaLoomEnvelope } from '../envelope.js';
+import { shapeImpact } from '../output-profile.js';
 import { estimateEnvelopeTokenBudget } from '../token-budget.js';
 
 export const nlImpactInputSchema = z
@@ -28,11 +29,20 @@ export async function handleNlImpact(input: unknown): Promise<NoemaLoomEnvelope>
   const nextActions = impact.requiredActions.length > 0
     ? [...impact.requiredActions, 'read impacted source, docs, config, tests, examples before editing']
     : ['read impacted source, docs, config, tests, examples before editing'];
-  const budget = estimateEnvelopeTokenBudget({
+  let data: Record<string, unknown> = impact as unknown as Record<string, unknown>;
+  let budget = estimateEnvelopeTokenBudget({
     requested: 2500,
-    data: impact,
+    data,
     nextActions
   });
+  if (budget.tokenBudget.truncated) {
+    data = shapeImpact(impact, 'compact') as Record<string, unknown>;
+    const shapedBudget = estimateEnvelopeTokenBudget({ requested: 2500, data, nextActions });
+    budget = {
+      tokenBudget: { ...shapedBudget.tokenBudget, truncated: true },
+      warnings: [...budget.warnings, ...shapedBudget.warnings]
+    };
+  }
 
   return createEnvelope({
     ok: true,
@@ -42,7 +52,7 @@ export async function handleNlImpact(input: unknown): Promise<NoemaLoomEnvelope>
     graphState: impact.impactCoverage === 'full' ? 'ready' : 'partial',
     tokenBudget: budget.tokenBudget,
     warnings: budget.warnings,
-    data: impact,
+    data,
     nextActions
   });
 }
