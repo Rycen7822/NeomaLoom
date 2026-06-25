@@ -26,6 +26,17 @@ function hasSegmentMatching(repoPath: string, pattern: RegExp): boolean {
   return segments(repoPath).some(part => pattern.test(part));
 }
 
+function directorySegments(repoPath: string): string[] {
+  const parts = segments(repoPath);
+  if (parts.length === 0) return [];
+  const last = parts.at(-1) ?? '';
+  return last.includes('.') ? parts.slice(0, -1) : parts;
+}
+
+function hasDirectorySegmentMatching(repoPath: string, pattern: RegExp): boolean {
+  return directorySegments(repoPath).some(part => pattern.test(part));
+}
+
 export function classifyPathLayer(repoPath: string): PathLayer {
   const normalized = normalize(repoPath).toLowerCase();
   if (normalized === '.noemaloom' || normalized.startsWith('.noemaloom/')) return 'derived_state';
@@ -48,11 +59,11 @@ export function classifyPathLayer(repoPath: string): PathLayer {
   }
   if (
     hasSegment(repoPath, ['archive', 'archives', 'archived', 'deprecated']) ||
-    hasSegmentMatching(repoPath, /(?:^|[-_.])(?:archive|archives|archived|deprecated)(?:[-_.]|$)/)
+    hasDirectorySegmentMatching(repoPath, /(?:^|[-_.])(?:archive|archives|archived|deprecated)(?:[-_.]|$)/)
   ) return 'archive';
   if (
     hasSegment(repoPath, ['repair', 'repairs', 'repair-worktree', 'repair_worktree', 'fixback']) ||
-    hasSegmentMatching(repoPath, /(?:^|[-_.])(?:repair|repairs|repair[-_]worktree|fixback)(?:[-_.]|$)/)
+    hasDirectorySegmentMatching(repoPath, /(?:^|[-_.])(?:repair|repairs|repair[-_]worktree|fixback)(?:[-_.]|$)/)
   ) return 'repair_worktree';
   return 'business';
 }

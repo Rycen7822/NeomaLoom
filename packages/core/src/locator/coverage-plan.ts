@@ -2,7 +2,6 @@ import type { EnvelopeWarning } from '../mcp/envelope.js';
 import { isDefaultBusinessPath } from '../files/path-layer.js';
 import { expandRoleAliases, roleMatchesRequest } from '../spans/role-groups.js';
 import type { NormalizedQuery } from './query-normalizer.js';
-import type { RankedCandidate } from './ranking.js';
 
 export type CoveragePlan = {
   exactSweeps: string[];
@@ -13,6 +12,8 @@ export type CoveragePlan = {
   linkedTestsToVerifyOmitted: number;
   warnings: EnvelopeWarning[];
 };
+
+type CoveragePlanTarget = { path: string; role: string };
 
 const DOC_ROLES = new Set([
   'canonical_api_doc',
@@ -41,7 +42,7 @@ function cappedPaths(paths: string[]): { items: string[]; omitted: number } {
 
 export function buildCoveragePlan(input: {
   query: NormalizedQuery;
-  targets: RankedCandidate[];
+  targets: CoveragePlanTarget[];
   requestedRoles?: string[];
 }): CoveragePlan {
   const roles = [...new Set(input.targets.map(target => String(target.role)))].sort();

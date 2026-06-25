@@ -545,6 +545,34 @@ describe('scoped coverage tool semantics', () => {
     expect(coveragePlan.linkedTestsToVerify).toEqual(expect.arrayContaining(['loop/tests/client.test.ts']));
   });
 
+  it('rebuilds prepare coveragePlan from exact-route targets rather than sibling docs/tests', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-exact-route-coverage-'));
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({ name: 'exact-route-coverage' }));
+    await writeProjectFile(projectRoot, 'docs/api/client.md', '# Client API\n\nThe createClient canonical docs.\n');
+    await writeProjectFile(projectRoot, 'docs/api/other.md', '# Other API\n\nAdjacent docs should not be required for an exact path route.\n');
+    await writeProjectFile(projectRoot, 'tests/client.test.ts', 'test("createClient", () => {});\n');
+    await callRegisteredTool('nl_refresh', { projectPath: projectRoot, target: 'all', mode: 'safe' });
+
+    const result = await callRegisteredTool('nl_prepare_context', {
+      projectPath: projectRoot,
+      goal: 'docs/api/client.md createClient canonical API documentation',
+      targetRoles: ['canonical_api_doc'],
+      limit: 8,
+      responseProfile: 'debug'
+    });
+
+    const data = result.data as {
+      router: { route: string };
+      targets: Array<{ path: string }>;
+      coveragePlan: { linkedDocsToVerify: string[]; linkedTestsToVerify: string[] };
+    };
+    expect(result.ok).toBe(true);
+    expect(data.router.route).toBe('exact_path');
+    expect([...new Set(data.targets.map(target => target.path))]).toEqual(['docs/api/client.md']);
+    expect(data.coveragePlan.linkedDocsToVerify).toEqual(['docs/api/client.md']);
+    expect(data.coveragePlan.linkedTestsToVerify).toEqual([]);
+  });
+
   it('keeps a verification surface in readTopSpans before duplicate inspect-only source reads', async () => {
     const projectRoot = await createLoopLikeProject();
 

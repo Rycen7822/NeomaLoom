@@ -55,8 +55,12 @@ describe('file role classifier', () => {
     expect(classifyPathLayer('quest001_p0_repair_worktree/src/client.py')).toBe('repair_worktree');
     expect(classifyPathLayer('.pytest_cache/v/cache/nodeids')).toBe('artifact');
     expect(classifyPathLayer('src/client.ts')).toBe('business');
+    expect(classifyPathLayer('docs/deprecated_api.md')).toBe('business');
+    expect(classifyPathLayer('src/repair.py')).toBe('business');
     expect(isDefaultBusinessPath('.agents/skills/review/SKILL.md')).toBe(false);
     expect(isDefaultBusinessPath('quest001_p0_repair_worktree/src/client.py')).toBe(false);
+    expect(isDefaultBusinessPath('docs/deprecated_api.md')).toBe(true);
+    expect(isDefaultBusinessPath('src/repair.py')).toBe(true);
     expect(isDefaultBusinessPath('src/client.ts')).toBe(true);
   });
 });

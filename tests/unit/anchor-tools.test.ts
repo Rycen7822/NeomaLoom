@@ -166,6 +166,38 @@ describe('NoemaLoom compressed navigation anchor tool surface', () => {
     expect(anchors.find(anchor => anchor.startLine === 2)).toMatchObject({ reason: 'second exact anchor' });
   });
 
+  it('reports compact navigation card omissions against the renderable anchor set', async () => {
+    const projectRoot = await createTempProject();
+    for (let index = 0; index < 12; index += 1) {
+      await writeProjectFile(projectRoot, `src/owner-${index}.ts`, `export const owner${index} = ${index};\n`);
+      const promoted = await callRegisteredTool('nl_anchor_manage', {
+        action: 'promote',
+        projectPath: projectRoot,
+        path: `src/owner-${index}.ts`,
+        label: `owner${index}`,
+        kind: 'source.file',
+        role: 'source_file',
+        reason: `owner ${index}`
+      });
+      expect(promoted.ok).toBe(true);
+    }
+
+    const compact = await callRegisteredTool('nl_status', { projectPath: projectRoot, includeAnchors: true, responseProfile: 'compact' });
+    const compactWorkset = (compact.data as {
+      anchorWorkset: { counts: { active: number }; navigation: { cards: unknown[]; cardsOmitted: number } };
+    }).anchorWorkset;
+    expect(compactWorkset.counts.active).toBe(12);
+    expect(compactWorkset.navigation.cards).toHaveLength(10);
+    expect(compactWorkset.navigation.cardsOmitted).toBe(2);
+
+    const debug = await callRegisteredTool('nl_status', { projectPath: projectRoot, includeAnchors: true, responseProfile: 'debug' });
+    const debugWorkset = (debug.data as {
+      anchorWorkset: { anchors: unknown[]; navigation: { cards: unknown[] } };
+    }).anchorWorkset;
+    expect(debugWorkset.anchors).toHaveLength(12);
+    expect(debugWorkset.navigation.cards).toHaveLength(12);
+  });
+
   it('returns controlled validation warnings for unsupported public manage actions', async () => {
     const projectRoot = await createTempProject();
 

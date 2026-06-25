@@ -4,6 +4,7 @@ import { createEnvelope, resolveProjectRootFromInput, type EnvelopeWarning, type
 import { planExactRoute, applyExactRoute } from '../exact-route.js';
 import { RESPONSE_PROFILES, shapeEvidence, shapePrepareContextData, type ResponseProfile } from '../output-profile.js';
 import { estimateEnvelopeTokenBudget } from '../token-budget.js';
+import { buildCoveragePlan } from '../../locator/coverage-plan.js';
 import {
   combineEvidence,
   combineWarnings
@@ -200,11 +201,16 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
   const routedLocated = router.route === 'noemaloom_rank'
     ? located
     : { ...located, targets: applyExactRoute(located.targets, router) };
+  const coveragePlan = buildCoveragePlan({
+    query: located.normalizedQuery as Parameters<typeof buildCoveragePlan>[0]['query'],
+    targets: routedLocated.targets,
+    requestedRoles: parsed.targetRoles
+  });
   const locateData: LocateData = {
     targets: routedLocated.targets,
     unindexedCandidates: routedLocated.targets.filter(target => target.indexed === false),
     coverage: routedLocated.coverage,
-    coveragePlan: routedLocated.coveragePlan,
+    coveragePlan,
     normalizedQuery: routedLocated.normalizedQuery
   };
   const contextData = await buildContextDataFromLocated({

@@ -7,6 +7,7 @@ import {
   readWorksetManifest,
   renderNavigationCards,
   retireAnchor,
+  selectNavigationAnchors,
   setNavigationEnabled,
   updateAnchorState,
   updateWorksetManifest,
@@ -188,9 +189,17 @@ export function anchorStatusData(
   includeText: boolean,
   responseProfile: AnchorResponseProfile = 'compact'
 ): Record<string, unknown> {
-  const rendered = renderNavigationCards(manifest, { includeDisabled: true });
   const anchors = publicAnchors(manifest, includeRetired);
+  const renderableAnchorCount = selectNavigationAnchors(manifest, {
+    includeDisabled: true,
+    maxAnchors: Number.MAX_SAFE_INTEGER
+  }).length;
   if (responseProfile === 'debug') {
+    const rendered = renderNavigationCards(manifest, {
+      includeDisabled: true,
+      maxAnchors: Math.max(renderableAnchorCount, 0),
+      charBudget: Number.MAX_SAFE_INTEGER
+    });
     return {
       revision: worksetRevision(manifest),
       enabled: manifest.options.navigation.enabled,
@@ -213,6 +222,11 @@ export function anchorStatusData(
   const tombstoneLimit = responseProfile === 'standard' ? 25 : 10;
   const cardLimit = responseProfile === 'standard' ? 25 : 10;
   const textLimit = responseProfile === 'standard' ? 1200 : 0;
+  const rendered = renderNavigationCards(manifest, {
+    includeDisabled: true,
+    maxAnchors: cardLimit,
+    charBudget: Number.MAX_SAFE_INTEGER
+  });
   const text = includeText && textLimit > 0 ? rendered.text.slice(0, textLimit) : '';
   return {
     revision: worksetRevision(manifest),
@@ -226,8 +240,8 @@ export function anchorStatusData(
     tombstonePreviews: manifest.tombstones.slice(0, tombstoneLimit),
     tombstonePreviewsOmitted: Math.max(0, manifest.tombstones.length - tombstoneLimit),
     navigation: {
-      cards: rendered.cards.slice(0, cardLimit),
-      cardsOmitted: Math.max(0, rendered.cards.length - cardLimit),
+      cards: rendered.cards,
+      cardsOmitted: Math.max(0, renderableAnchorCount - rendered.cards.length),
       text,
       textOmittedChars: includeText ? Math.max(0, rendered.text.length - text.length) : 0,
       charBudget: rendered.charBudget,
