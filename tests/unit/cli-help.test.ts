@@ -35,6 +35,7 @@ describe('noemaloom CLI help', () => {
     const help = getHelpText();
 
     expect(help).toContain('Usage: noemaloom serve --mcp');
+    expect(help).toContain('Usage: noemaloom status [--project PATH] [--json [JSON] | --json-file PATH]');
     expect(help).toContain('Usage: noemaloom anchor <status|promote|demote|repair|retire|checkpoint>');
     expect(help).toContain('NoemaLoom locates and verifies repository spans.');
     expect(help).toContain('--json-file');
@@ -52,6 +53,29 @@ describe('noemaloom CLI help', () => {
     ]) {
       expect(help).not.toContain(forbiddenCommand);
     }
+  });
+
+  it('prints scoped help for known commands without dispatching validation JSON', async () => {
+    const serve = captureIo();
+    expect(await runCli(['serve', '--help'], serve.io)).toBe(0);
+    expect(serve.output().stdout).toContain('Usage: noemaloom serve --mcp');
+    expect(serve.output().stdout).not.toContain('validation_error');
+
+    const anchor = captureIo();
+    expect(await runCli(['anchor', '--help'], anchor.io)).toBe(0);
+    expect(anchor.output().stdout).toContain('Usage: noemaloom anchor <status|promote|demote|repair|retire|checkpoint>');
+    expect(anchor.output().stdout).toContain('anchor status');
+    expect(anchor.output().stdout).not.toContain('validation_error');
+
+    const anchorStatus = captureIo();
+    expect(await runCli(['anchor', 'status', '--help'], anchorStatus.io)).toBe(0);
+    expect(anchorStatus.output().stdout).toContain('Usage: noemaloom anchor status [--project PATH] [--json JSON | --json-file PATH]');
+    expect(anchorStatus.output().stdout).not.toContain('validation_error');
+
+    const unknownHelp = await runJson(['prepare', '--help']);
+    expect(unknownHelp.code).toBe(1);
+    expect(unknownHelp.json?.ok).toBe(false);
+    expect((unknownHelp.json?.warnings as Array<{ message: string }>)[0].message).toContain('Unknown command: prepare');
   });
 
   it('runs repair, retire, and checkpoint as CLI-only controlled anchor operations', async () => {
@@ -195,6 +219,18 @@ describe('noemaloom CLI help', () => {
     expect(helpCode).toBe(0);
     expect(help.output().stdout).toContain('Usage: noemaloom status');
     expect(help.output().stdout).toContain('--project');
+    expect(help.output().stdout).toContain('--json JSON');
+    expect(help.output().stdout).toContain('--json-file PATH');
+
+    const statusWithPayload = await runJson(['status', '--project', projectRoot, '--json', JSON.stringify({ includeAnchors: true, responseProfile: 'compact' })]);
+    expect(statusWithPayload.code).toBe(0);
+    expect((statusWithPayload.json?.data as { anchorWorkset?: unknown }).anchorWorkset).toBeTruthy();
+
+    const payloadFile = path.join(projectRoot, 'status-payload.json');
+    await writeFile(payloadFile, JSON.stringify({ includeAnchors: true, responseProfile: 'compact' }), 'utf8');
+    const statusWithPayloadFile = await runJson(['status', '--project', projectRoot, '--json-file', payloadFile]);
+    expect(statusWithPayloadFile.code).toBe(0);
+    expect((statusWithPayloadFile.json?.data as { anchorWorkset?: unknown }).anchorWorkset).toBeTruthy();
 
     const unknownHelp = await runJson(['prepare', '--help']);
     expect(unknownHelp.code).toBe(1);

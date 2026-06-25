@@ -12,7 +12,7 @@ import {
 import { handleNlStatus } from '../mcp/tools/nl-status.js';
 import { createEnvelope, createUnhandledErrorEnvelope, createValidationErrorEnvelope, resolveProjectRootFromInput, type NoemaLoomEnvelope } from '../mcp/envelope.js';
 import { serveMcp } from '../mcp/server.js';
-import { getHelpText, getStatusHelpText } from './help.js';
+import { getAnchorActionHelpText, getAnchorHelpText, getHelpText, getServeHelpText, getStatusHelpText } from './help.js';
 
 interface CliIo {
   stdout: Pick<NodeJS.WriteStream, 'write'>;
@@ -205,6 +205,10 @@ export async function runCli(argv = process.argv.slice(2), io = defaultIo): Prom
   }
 
   if (argv[0] === 'serve') {
+    if (argv.includes('--help') || argv.includes('-h')) {
+      io.stdout.write(`${getServeHelpText()}\n`);
+      return 0;
+    }
     if (!argv.includes('--mcp')) {
       io.stdout.write(`${JSON.stringify(cliValidationEnvelope('noemaloom_cli', projectPathFromArgv(argv), 'serve requires --mcp flag.'), null, 2)}\n`);
       return 1;
@@ -222,6 +226,14 @@ export async function runCli(argv = process.argv.slice(2), io = defaultIo): Prom
   }
 
   if (argv[0] === 'anchor') {
+    if (argv.length === 1 || argv[1] === '--help' || argv[1] === '-h') {
+      io.stdout.write(`${getAnchorHelpText()}\n`);
+      return 0;
+    }
+    if (isAnchorAction(argv[1]) && (argv.includes('--help') || argv.includes('-h'))) {
+      io.stdout.write(`${getAnchorActionHelpText(argv[1])}\n`);
+      return 0;
+    }
     return runAnchorCommand(argv, io);
   }
 

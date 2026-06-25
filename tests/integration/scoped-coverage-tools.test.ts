@@ -2,7 +2,7 @@ import { mkdir, writeFile, mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { callRegisteredTool } from '../../packages/core/src/mcp/tool-registry.js';
+import { callInternalTool, callRegisteredTool } from '../../packages/core/src/mcp/tool-registry.js';
 import { createEmptyWorksetManifest, setNavigationEnabled, writeWorksetManifest } from '../../packages/core/src/state/workset.js';
 
 async function writeProjectFile(projectRoot: string, repoPath: string, text: string): Promise<void> {
@@ -543,6 +543,35 @@ describe('scoped coverage tool semantics', () => {
       expect.arrayContaining(['fseg/docs/client.md', 'fseg/tests/client.test.ts'])
     );
     expect(coveragePlan.linkedTestsToVerify).toEqual(expect.arrayContaining(['loop/tests/client.test.ts']));
+  });
+
+  it('scopes locator coveragePlan to a selected monorepo workspace package', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-monorepo-coverage-scope-'));
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({ name: 'monorepo-coverage-scope', workspaces: ['packages/*'] }));
+    await writeProjectFile(projectRoot, 'packages/foo/src/client.ts', 'export function createClient() { return "foo"; }\n');
+    await writeProjectFile(projectRoot, 'packages/foo/tests/client.test.ts', 'import { createClient } from "../src/client";\ntest("foo client", () => createClient());\n');
+    await writeProjectFile(projectRoot, 'packages/foo/docs/client.md', '# Foo Client\n\ncreateClient foo documentation.\n');
+    await writeProjectFile(projectRoot, 'packages/bar/src/client.ts', 'export function createClient() { return "bar"; }\n');
+    await writeProjectFile(projectRoot, 'packages/bar/tests/client.test.ts', 'import { createClient } from "../src/client";\ntest("bar client", () => createClient());\n');
+    await writeProjectFile(projectRoot, 'packages/bar/docs/client.md', '# Bar Client\n\ncreateClient bar documentation.\n');
+    await callRegisteredTool('nl_refresh', { projectPath: projectRoot, target: 'all', mode: 'safe' });
+
+    const result = await callInternalTool('nl_locate', {
+      projectPath: projectRoot,
+      goal: 'update packages/foo createClient implementation docs tests',
+      targetRoles: ['source', 'test', 'document'],
+      limit: 6
+    });
+
+    const coveragePlan = (result.data as {
+      coveragePlan: { linkedDocsToVerify: string[]; linkedTestsToVerify: string[] };
+    }).coveragePlan;
+    expect(result.ok).toBe(true);
+    const coveragePaths = [...coveragePlan.linkedDocsToVerify, ...coveragePlan.linkedTestsToVerify];
+    expect(coveragePaths).toEqual(
+      expect.arrayContaining(['packages/foo/docs/client.md', 'packages/foo/tests/client.test.ts'])
+    );
+    expect(coveragePaths.filter(path => path.startsWith('packages/bar/'))).toEqual([]);
   });
 
   it('rebuilds prepare coveragePlan from exact-route targets rather than sibling docs/tests', async () => {

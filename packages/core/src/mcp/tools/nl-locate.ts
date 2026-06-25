@@ -143,11 +143,34 @@ const ROOT_SURFACE_DIRS = new Set([
   'tools'
 ]);
 
-function topLevelScope(repoPath: string): string | undefined {
+const WORKSPACE_CONTAINER_DIRS = new Set([
+  'app',
+  'apps',
+  'lib',
+  'libs',
+  'package',
+  'packages',
+  'service',
+  'services',
+  'tool',
+  'tools',
+  'workspace',
+  'workspaces'
+]);
+
+function looksLikeFileSegment(segment: string): boolean {
+  return /\.[A-Za-z0-9]+$/.test(segment);
+}
+
+function coverageScope(repoPath: string): string | undefined {
   const normalized = repoPath.replaceAll('\\\\', '/').replace(/^\/+/, '');
-  const [first, ...rest] = normalized.split('/').filter(Boolean);
-  if (!first || rest.length === 0 || first.startsWith('.')) return undefined;
+  const parts = normalized.split('/').filter(Boolean);
+  const [first, second] = parts;
+  if (!first || parts.length < 2 || first.startsWith('.')) return undefined;
   const lower = first.toLowerCase();
+  if (WORKSPACE_CONTAINER_DIRS.has(lower) && second && !looksLikeFileSegment(second)) {
+    return `${first}/${second}`;
+  }
   return ROOT_SURFACE_DIRS.has(lower) ? undefined : first;
 }
 
@@ -158,18 +181,22 @@ function selectedCoverageTargets(input: {
 }): RankedCandidate[] {
   const scopes = new Set<string>();
   for (const term of input.pathTerms) {
-    const scope = topLevelScope(term);
+    const scope = coverageScope(term);
     if (scope) scopes.add(scope);
   }
+  const scopedByQueryPath = scopes.size > 0;
   if (scopes.size === 0) {
     for (const candidate of input.selected) {
-      const scope = topLevelScope(candidate.path);
+      const scope = coverageScope(candidate.path);
       if (scope) scopes.add(scope);
     }
   }
   if (scopes.size === 0) return input.ranked;
   const selectedIds = new Set(input.selected.map(candidate => candidate.spanId));
-  return input.ranked.filter(candidate => selectedIds.has(candidate.spanId) || scopes.has(topLevelScope(candidate.path) ?? ''));
+  return input.ranked.filter(candidate => {
+    const inScope = scopes.has(coverageScope(candidate.path) ?? '');
+    return inScope || (!scopedByQueryPath && selectedIds.has(candidate.spanId));
+  });
 }
 
 export async function runLocator(input: {
