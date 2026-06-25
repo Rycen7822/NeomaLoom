@@ -6,6 +6,7 @@ import {
   createEnvelope,
   createToolUnavailableEnvelope,
   createUnhandledErrorEnvelope,
+  isUnsafeDefaultProjectRootForPlatform,
   resolveProjectRootFromInput
 } from '../../packages/core/src/mcp/envelope.js';
 
@@ -90,6 +91,22 @@ describe('MCP response envelope', () => {
         code: 'project_root_not_allowed'
       }));
     }
+  });
+
+  it('treats Windows system directories as unsafe default project roots', () => {
+    for (const candidate of [
+      'C:\\Windows',
+      'C:\\Windows\\System32',
+      'C:\\Program Files',
+      'C:\\Program Files\\NoemaLoom',
+      'C:\\Program Files (x86)',
+      'C:\\ProgramData',
+      'C:\\System Volume Information',
+      'C:\\$Recycle.Bin'
+    ]) {
+      expect(isUnsafeDefaultProjectRootForPlatform(candidate, 'win32')).toBe(true);
+    }
+    expect(isUnsafeDefaultProjectRootForPlatform('C:\\Users\\alice\\project', 'win32')).toBe(false);
   });
 
   it('honors NOEMALOOM_ALLOWED_PROJECTS as a strict projectPath allowlist', async () => {

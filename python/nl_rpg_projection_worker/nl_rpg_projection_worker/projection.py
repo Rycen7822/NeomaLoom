@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import tempfile
 from typing import Any
 
 from .normalizer import normalize_existing_projection
@@ -33,7 +35,21 @@ def write_projection(paths: WorkerPaths, projection: dict[str, Any]) -> None:
     ensure_planning_dir(paths)
     for key, filename in PROJECTION_FILES.items():
         target = paths.planning_file(filename)
-        target.write_text(json.dumps(projection[key], sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        text = json.dumps(projection[key], sort_keys=True, indent=2) + "\n"
+        fd, temp_name = tempfile.mkstemp(prefix=f".{filename}.", suffix=".tmp", dir=target.parent)
+        temp_path = Path(temp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+            temp_path.replace(target)
+        except Exception:
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+            raise
 
 
 def import_existing_projection(project_root: Path, state_dir: Path, revision: str) -> dict[str, Any]:

@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -29,6 +30,30 @@ def test_import_existing_rpgkit_data_without_modifying_rpgkit(tmp_path):
     assert (state_dir / "planning" / "dep_graph.json").exists()
     assert (state_dir / "planning" / "tasks.json").exists()
     assert (state_dir / "planning" / "projection-meta.json").exists()
+
+
+def test_import_existing_replaces_projection_symlinks_without_following_them(tmp_path):
+    if not hasattr(os, "symlink"):
+        return
+    project_root = tmp_path / "repo"
+    rpgkit_data = project_root / ".rpgkit" / "data"
+    state_dir = project_root / ".noemaloom"
+    planning_dir = state_dir / "planning"
+    outside = tmp_path / "outside.json"
+    rpgkit_data.mkdir(parents=True)
+    planning_dir.mkdir(parents=True)
+    outside.write_text("outside-secret\n", encoding="utf-8")
+    (planning_dir / "features.json").symlink_to(outside)
+    (rpgkit_data / "rpg.json").write_text(json.dumps({"features": [{"id": "feature.docs", "title": "Docs"}]}), encoding="utf-8")
+
+    result = import_existing_projection(project_root, state_dir, "rev-symlink")
+
+    assert result["state"] == "available"
+    assert outside.read_text(encoding="utf-8") == "outside-secret\n"
+    assert not (planning_dir / "features.json").is_symlink()
+    assert json.loads((planning_dir / "features.json").read_text(encoding="utf-8")) == [
+        {"id": "feature.docs", "title": "Docs", "source": "rpgkit"}
+    ]
 
 
 def test_import_existing_refuses_state_dir_outside_noemaloom(tmp_path):

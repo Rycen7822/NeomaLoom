@@ -58,3 +58,36 @@ def test_protocol_queries_projected_features(tmp_path):
     assert tree["data"]["tree"] == {
         "package": [{"id": "package:query-demo", "title": "Package query-demo", "source": "package"}]
     }
+
+
+def test_protocol_handles_negative_limits_and_missing_feature_ids(tmp_path):
+    project_root = tmp_path / "repo"
+    state_dir = project_root / ".noemaloom"
+    planning_dir = state_dir / "planning"
+    project_root.mkdir()
+    planning_dir.mkdir(parents=True)
+    (planning_dir / "features.json").write_text(
+        '[{"id":"feature:a","title":"Alpha","source":"manual"},'
+        '{"id":"feature:b","title":"Beta","source":"manual"},'
+        '{"title":"Missing id","source":"manual"}]',
+        encoding="utf-8",
+    )
+    env = {
+        "NOEMALOOM_PROJECT_ROOT": str(project_root),
+        "NOEMALOOM_STATE_DIR": str(state_dir),
+        "NOEMALOOM_GRAPH_REVISION": "rev-query",
+    }
+
+    query = handle_request({"command": "feature.query", "payload": {"query": "", "limit": -1}}, env=env)
+    tree = handle_request({"command": "feature.tree"}, env=env)
+
+    assert query["ok"] is True
+    assert query["data"]["results"] == []
+    assert tree["ok"] is True
+    assert tree["data"]["tree"] == {
+        "manual": [
+            {"title": "Missing id", "source": "manual"},
+            {"id": "feature:a", "title": "Alpha", "source": "manual"},
+            {"id": "feature:b", "title": "Beta", "source": "manual"},
+        ]
+    }

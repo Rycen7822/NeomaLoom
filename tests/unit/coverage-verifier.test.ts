@@ -225,6 +225,30 @@ describe('coverage verifier', () => {
     expect(result.remainingOldTermHits).toEqual([]);
   });
 
+  it('drops unsafe inventory snapshot test paths before heuristic coverage suggestions', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-coverage-inventory-escape-'));
+    await writeProjectFile(projectRoot, 'src/client.ts', 'export const client = true;\n');
+    await writeProjectFile(projectRoot, 'tests/client.test.ts', 'test("client", () => {});\n');
+    await writeProjectFile(projectRoot, '.noemaloom/files/inventory.json', JSON.stringify({
+      files: [
+        { path: '../tests/client.test.ts' },
+        { path: 'tests/client.test.ts' }
+      ]
+    }));
+
+    const result = await verifyCoverage({
+      projectRoot,
+      goal: 'Update client implementation',
+      changedPaths: ['src/client.ts'],
+      oldTerms: [],
+      newTerms: []
+    });
+
+    expect(result.unverifiedLinkedTests).toEqual([
+      expect.objectContaining({ path: 'tests/client.test.ts', sourcePath: 'src/client.ts', source: 'heuristic' })
+    ]);
+  });
+
   it('ignores changed paths that escape the project root', async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-coverage-escape-'));
     const outsidePath = path.join(path.dirname(projectRoot), 'outside.md');

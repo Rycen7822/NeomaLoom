@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 
 export type FeatureWorkerCommand =
   | 'feature.status'
@@ -166,13 +167,15 @@ export async function runFeatureWorkerCommand(input: {
     });
     let stdout = '';
     let stderr = '';
+    const stdoutDecoder = new StringDecoder('utf8');
+    const stderrDecoder = new StringDecoder('utf8');
     const timeoutTimer = setTimeout(() => {
       terminate({ state: 'unavailable', warnings: [`Worker timed out after ${timeoutMs}ms.`] });
     }, timeoutMs);
 
-    const appendOutput = (stream: 'stdout' | 'stderr', chunk: unknown): void => {
+    const appendOutput = (stream: 'stdout' | 'stderr', chunk: Buffer): void => {
       if (settled) return;
-      const text = String(chunk);
+      const text = stream === 'stdout' ? stdoutDecoder.write(chunk) : stderrDecoder.write(chunk);
       if (stream === 'stdout') stdout += text;
       else stderr += text;
       if (stdout.length + stderr.length > maxOutputBytes) {
@@ -183,10 +186,10 @@ export async function runFeatureWorkerCommand(input: {
       }
     };
 
-    child.stdout.on('data', chunk => {
+    child.stdout.on('data', (chunk: Buffer) => {
       appendOutput('stdout', chunk);
     });
-    child.stderr.on('data', chunk => {
+    child.stderr.on('data', (chunk: Buffer) => {
       appendOutput('stderr', chunk);
     });
     child.stdin.on('error', () => {
@@ -201,6 +204,8 @@ export async function runFeatureWorkerCommand(input: {
         settle(terminatingResult ?? { state: 'unavailable', warnings: ['Worker terminated.'] });
         return;
       }
+      stdout += stdoutDecoder.end();
+      stderr += stderrDecoder.end();
       if (code !== 0) {
         settle({ state: 'unavailable', warnings: [stderr || `Worker exited with code ${code}`] });
         return;

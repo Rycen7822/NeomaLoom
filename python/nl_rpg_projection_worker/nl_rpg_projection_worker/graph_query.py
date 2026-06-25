@@ -20,13 +20,20 @@ def _features(state_dir: Path) -> list[dict[str, Any]]:
     return [item for item in parsed if isinstance(item, dict)] if isinstance(parsed, list) else []
 
 
+def _text(value: Any) -> str:
+    return value if isinstance(value, str) else ""
+
+
 def query_features(state_dir: Path, query: str, limit: int = 20) -> list[dict[str, Any]]:
+    bounded_limit = max(0, limit)
+    if bounded_limit == 0:
+        return []
     needle = query.lower()
     results = [
         feature for feature in _features(state_dir)
-        if needle in feature.get("id", "").lower() or needle in feature.get("title", "").lower()
+        if needle in _text(feature.get("id")).lower() or needle in _text(feature.get("title")).lower()
     ]
-    return results[:limit]
+    return results[:bounded_limit]
 
 
 def detail_feature(state_dir: Path, feature_id: str) -> dict[str, Any] | None:
@@ -40,4 +47,7 @@ def feature_tree(state_dir: Path) -> dict[str, Any]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for feature in _features(state_dir):
         grouped.setdefault(str(feature.get("source", "unknown")), []).append(feature)
-    return {key: sorted(value, key=lambda item: item["id"]) for key, value in sorted(grouped.items())}
+    return {
+        key: sorted(value, key=lambda item: (_text(item.get("id")), _text(item.get("title"))))
+        for key, value in sorted(grouped.items())
+    }

@@ -39,7 +39,7 @@ async function indexedTextForFile(projectRoot: string, file: InventoryFile): Pro
   if (file.oversized) {
     return '';
   }
-  return file.indexedText || safeReadFileInsideProject(projectRoot, file.path, 'utf8');
+  return file.indexedText !== '' || file.sizeBytes === 0 ? file.indexedText : safeReadFileInsideProject(projectRoot, file.path, 'utf8');
 }
 
 export async function indexCodeFacts(input: IndexCodeFactsInput): Promise<IndexCodeFactsResult> {

@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 
 import { createDefaultConfig } from '../../packages/core/src/config/default-config.js';
 import { buildFileInventory } from '../../packages/core/src/files/file-inventory.js';
+import { createIgnoreMatcher } from '../../packages/core/src/files/ignore-rules.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -96,11 +97,16 @@ describe('file inventory', () => {
       '.netrc',
       '.pypirc',
       '.aws/credentials',
+      '.gnupg/private-keys-v1.d/key',
+      '.kube/config',
       '.ssh/id_ed25519',
+      '.htpasswd',
       'id_rsa',
       'certs/client.pem',
       'certs/client.key',
       'config/secrets.json',
+      'nginx/htpasswd',
+      'docs/secrets.md',
       'src/app.ts'
     ]) {
       await writeProjectFile(projectRoot, repoPath, `${repoPath}\n`);
@@ -108,12 +114,15 @@ describe('file inventory', () => {
 
     const inventory = await buildFileInventory({ projectRoot });
 
-    expect(inventory.files.map(file => file.path)).toEqual(['src/app.ts']);
+    expect(inventory.files.map(file => file.path)).toEqual(['docs/secrets.md', 'src/app.ts']);
     expect(inventory.ignoredPaths).toEqual([
       '.aws/credentials',
       '.env',
       '.env.local',
       '.envrc',
+      '.gnupg/private-keys-v1.d/key',
+      '.htpasswd',
+      '.kube/config',
       '.netrc',
       '.npmrc',
       '.pypirc',
@@ -121,8 +130,22 @@ describe('file inventory', () => {
       'certs/client.key',
       'certs/client.pem',
       'config/secrets.json',
-      'id_rsa'
+      'id_rsa',
+      'nginx/htpasswd'
     ]);
+  });
+
+  it('bounds non-git directory walking instead of descending unbounded trees', async () => {
+    const projectRoot = await createTempProject('noemaloom-deep-walk-inventory-');
+    await writeProjectFile(projectRoot, 'src/root.ts', 'export const root = true;\n');
+    const deepPath = `${Array.from({ length: 70 }, (_, index) => `d${index}`).join('/')}/too-deep.ts`;
+    await writeProjectFile(projectRoot, deepPath, 'export const tooDeep = true;\n');
+
+    const inventory = await buildFileInventory({ projectRoot });
+
+    const cutoffPath = Array.from({ length: 64 }, (_, index) => `d${index}`).join('/');
+    expect(inventory.files.map(file => file.path)).toEqual(['src/root.ts']);
+    expect(inventory.ignoredPaths).toEqual([cutoffPath]);
   });
 
   it('marks oversized files as file-only spans without normal FTS text', async () => {
@@ -196,6 +219,14 @@ describe('file inventory', () => {
     const withVendor = await buildFileInventory({ projectRoot, includeVendor: true });
     expect(withVendor.files.map(file => file.path)).toEqual(['src/app.ts', 'vendor/pkg/index.js']);
     expect(withVendor.files.find(file => file.path === 'vendor/pkg/index.js')?.role).toBe('vendor_file');
+  });
+
+  it('canonicalizes adjacent globstars before compiling ignore rules', () => {
+    const matcher = createIgnoreMatcher(['src/**/**/**/*.ts', '**/**/foo.js']);
+
+    expect(matcher.patterns).toEqual(['src/**/*.ts', '**/foo.js', '.noemaloom/**']);
+    expect(matcher.ignores('src/a/b/app.ts')).toBe(true);
+    expect(matcher.ignores('lib/foo.js')).toBe(true);
   });
 
   it('supports common glob patterns in custom ignore rules', async () => {

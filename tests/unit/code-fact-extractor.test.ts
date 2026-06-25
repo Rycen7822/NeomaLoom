@@ -47,6 +47,30 @@ describe('code fact extractor', () => {
     expect(functionSpan).toMatchObject({ startLine: 11, endLine: 14 });
   });
 
+  it('keeps Python multiline signatures stable when defaults contain string parentheses', () => {
+    const text = [
+      'def baz(',
+      '    a="(",',
+      ') -> str:',
+      '    return a',
+      '',
+      'def qux():',
+      '    return "ok"',
+      ''
+    ].join('\n');
+
+    const result = extractCodeFacts({
+      projectRoot: '/repo',
+      path: 'src/example.py',
+      language: 'python',
+      text
+    });
+
+    const baz = result.spans.find(span => span.kind === 'code.function' && span.label === 'baz');
+    expect(baz).toMatchObject({ startLine: 1, endLine: 4 });
+    expect(baz?.text).toContain('return a');
+  });
+
   it('indexes TypeScript declarations with full block boundaries and boundary metadata', () => {
     const text = [
       'export function runTask(task: Task) {',

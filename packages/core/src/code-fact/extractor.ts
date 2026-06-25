@@ -362,7 +362,37 @@ function isBlankOrComment(line: string): boolean {
 }
 
 function countParens(line: string): number {
-  return (line.match(/\(/g)?.length ?? 0) - (line.match(/\)/g)?.length ?? 0);
+  let delta = 0;
+  let quote: 'single' | 'double' | undefined;
+  let escaped = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (quote === 'single' && char === "'") quote = undefined;
+      else if (quote === 'double' && char === '"') quote = undefined;
+      continue;
+    }
+    if (char === '#') break;
+    if (char === "'") {
+      quote = 'single';
+      continue;
+    }
+    if (char === '"') {
+      quote = 'double';
+      continue;
+    }
+    if (char === '(') delta += 1;
+    else if (char === ')') delta -= 1;
+  }
+  return delta;
 }
 
 function pythonBlockEndLine(lines: string[], declarationIndex: number, signatureEndIndex: number, declarationIndent: number): number {

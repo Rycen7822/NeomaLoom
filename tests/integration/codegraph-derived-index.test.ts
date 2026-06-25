@@ -6,6 +6,7 @@ import path from 'node:path';
 import { indexCodeFacts, searchCodeFacts } from '../../packages/core/src/code-fact/code-fact-indexer.js';
 import { writeCodeGraphDb } from '../../packages/core/src/code-fact/codegraph-db.js';
 import type { CodeFactSpan } from '../../packages/core/src/code-fact/extractor.js';
+import type { FileInventory } from '../../packages/core/src/files/file-inventory.js';
 
 const require = createRequire(import.meta.url);
 const { DatabaseSync } = require('node:sqlite') as {
@@ -148,6 +149,36 @@ describe('CodeGraph-derived code fact indexer', () => {
       ]);
     expect(() => searchCodeFacts({ dbPath: result.dbPath, query: 'foo-bar "unterminated' })).not.toThrow();
     });
+
+  it('uses explicit empty indexedText without rereading missing files', async () => {
+    const projectRoot = await createTempProject();
+    const inventory: FileInventory = {
+      ignoredPaths: [],
+      files: [
+        {
+          path: 'src/empty.ts',
+          absolutePath: path.join(projectRoot, 'src/empty.ts'),
+          role: 'source_file',
+          language: 'typescript',
+          contentHash: 'sha1-empty',
+          sizeBytes: 0,
+          modifiedAt: 0,
+          indexedAt: 0,
+          generated: false,
+          ignored: false,
+          oversized: false,
+          fileOnlySpan: false,
+          spanKind: 'file',
+          indexedText: ''
+        }
+      ]
+    };
+
+    const result = await indexCodeFacts({ projectRoot, inventory });
+
+    expect(result.dbPath).toBe(path.join(projectRoot, '.noemaloom', 'fact', 'codegraph.db'));
+    await expect(access(result.dbPath)).resolves.toBeUndefined();
+  });
 
   it('keeps same-line duplicate callsites distinct and writes a searchable codegraph DB', async () => {
     const projectRoot = await createTempProject();

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -287,6 +287,33 @@ describe('candidate generation', () => {
     });
 
     expect(generated.candidates.map(candidate => candidate.spanId)).toContain('span-5001');
+  });
+
+  it('drops unsafe inventory fallback paths and does not create a missing span database', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-safe-inventory-fallback-'));
+    await mkdir(path.join(projectRoot, '.noemaloom', 'files'), { recursive: true });
+    await mkdir(path.join(projectRoot, '.noemaloom', 'spans'), { recursive: true });
+    await mkdir(path.join(projectRoot, 'docs', 'api'), { recursive: true });
+    await writeFile(path.join(projectRoot, 'docs', 'api', 'ok.md'), '# OK\n\nneedleTerm\n', 'utf8');
+    await writeFile(path.join(projectRoot, '.noemaloom', 'files', 'inventory.json'), JSON.stringify({
+      files: [
+        { path: '../escape.md', contentHash: 'escape-hash' },
+        { path: 'docs/api/ok.md', contentHash: 'ok-hash' }
+      ]
+    }), 'utf8');
+    const dbPath = path.join(projectRoot, '.noemaloom', 'spans', 'spans.db');
+
+    const generated = await generateCandidates({ projectRoot, query: 'needleTerm', targetRoles: ['canonical_api_doc'] });
+
+    await expect(access(dbPath)).rejects.toThrow();
+    await expect(stat(dbPath)).rejects.toThrow();
+    expect(generated.graphState).toBe('partial');
+    expect(generated.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'span_index_missing_inventory_fallback' }),
+      expect.objectContaining({ code: 'unindexed_candidates' })
+    ]));
+    expect(generated.unindexedCandidates.map(candidate => candidate.path)).toEqual(['docs/api/ok.md']);
+    expect(generated.candidates.map(candidate => candidate.path)).not.toContain('../escape.md');
   });
 
   it('returns unindexed inventory candidates from scoped indexes instead of empty results', async () => {

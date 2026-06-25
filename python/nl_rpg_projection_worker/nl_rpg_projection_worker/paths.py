@@ -14,8 +14,10 @@ class WorkerPaths:
     revision: str
 
     def planning_file(self, name: str) -> Path:
-        target = (self.planning_dir / name).resolve()
-        if self.planning_dir.resolve() not in [target, *target.parents]:
+        if Path(name).name != name:
+            raise ValueError(f"Refusing to write non-local planning filename: {name}")
+        target = self.planning_dir / name
+        if target.parent.resolve() != self.planning_dir.resolve():
             raise ValueError(f"Refusing to write outside planning dir: {target}")
         return target
 

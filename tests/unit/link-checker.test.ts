@@ -24,4 +24,21 @@ describe('markdown link checker', () => {
     expect(result.brokenLinks).toEqual([]);
     expect(result.staleAnchors).toEqual([]);
   });
+
+  it('treats Windows absolute and UNC targets as external and unwraps CommonMark angle targets', async () => {
+    const projectRoot = await createTempProject();
+    await writeProjectFile(projectRoot, 'docs/other.md', '# Other\n');
+    await writeProjectFile(
+      projectRoot,
+      'docs/readme.md',
+      '[drive](C:\\abs\\file.md) [unc](\\\\server\\share\\file.md) [angle](<other.md>) [missing](<missing.md>)\n'
+    );
+
+    const result = await checkMarkdownLinks({ projectRoot, changedPaths: ['docs/readme.md'] });
+
+    expect(result.brokenLinks).toEqual([
+      expect.objectContaining({ path: 'docs/readme.md', target: 'missing.md', resolvedPath: 'docs/missing.md' })
+    ]);
+    expect(result.staleAnchors).toEqual([]);
+  });
 });

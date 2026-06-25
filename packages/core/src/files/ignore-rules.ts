@@ -7,12 +7,17 @@ function normalizeRepoPath(repoPath: string): string {
   return repoPath.replaceAll('\\', '/').replace(/^\/+/, '').replace(/\/+/g, '/');
 }
 
+function normalizeGlobPattern(pattern: string): string {
+  const normalized = normalizeRepoPath(pattern).replace(/(?:\/\*\*){2,}/g, '/**');
+  return normalized.replace(/^(?:\*\*\/){2,}/, '**/');
+}
+
 function escapeRegex(char: string): string {
   return /[|\\{}()[\]^$+?.]/.test(char) ? `\\${char}` : char;
 }
 
 function globToRegex(pattern: string): RegExp {
-  const normalizedPattern = normalizeRepoPath(pattern);
+  const normalizedPattern = normalizeGlobPattern(pattern);
   let source = normalizedPattern.includes('/') ? '^' : '^(?:.*/)?';
   for (let index = 0; index < normalizedPattern.length;) {
     const char = normalizedPattern[index];
@@ -49,7 +54,7 @@ function globToRegex(pattern: string): RegExp {
 }
 
 export function createIgnoreMatcher(patterns: string[], options: { includeVendor?: boolean } = {}): IgnoreMatcher {
-  const effectivePatterns = [...patterns, '.noemaloom/**'].filter(
+  const effectivePatterns = [...patterns, '.noemaloom/**'].map(normalizeGlobPattern).filter(
     pattern => !(options.includeVendor && pattern === 'vendor/**')
   );
   const compiledPatterns = effectivePatterns.map(pattern => globToRegex(pattern));

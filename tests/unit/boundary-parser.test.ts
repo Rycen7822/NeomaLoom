@@ -30,6 +30,38 @@ describe('code fact block boundary parser', () => {
     });
   });
 
+  it('carries TypeScript lexical state across multiline comments and template strings', () => {
+    const blockComment = [
+      'export function withComment() {',
+      '  /*',
+      '   * } this brace is documentation, not code',
+      '   */',
+      '  return 1;',
+      '}'
+    ];
+    const templateString = [
+      'export function withTemplate() {',
+      '  const text = `',
+      '    } this brace is text, not code',
+      '  `;',
+      '  return text;',
+      '}'
+    ];
+
+    expect(detectTypescriptBlockBoundary({ lines: blockComment, declarationLineIndex: 0, filePath: 'src/comment.ts' })).toMatchObject({
+      method: 'typescript_brace',
+      complete: true,
+      reason: 'balanced_braces',
+      endLine: 6
+    });
+    expect(detectTypescriptBlockBoundary({ lines: templateString, declarationLineIndex: 0, filePath: 'src/template.ts' })).toMatchObject({
+      method: 'typescript_brace',
+      complete: true,
+      reason: 'balanced_braces',
+      endLine: 6
+    });
+  });
+
   it('returns incomplete boundaries for unbalanced or missing braces and wraps non-TS boundaries', () => {
     expect(detectTypescriptBlockBoundary({ lines: ['export function broken() {', '  if (true) {'], declarationLineIndex: 0, filePath: 'src/broken.ts' })).toMatchObject({
       method: 'typescript_brace',

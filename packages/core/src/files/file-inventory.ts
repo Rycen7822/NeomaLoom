@@ -56,11 +56,15 @@ const SENSITIVE_PATH_PATTERNS: RegExp[] = [
   /(^|\/)\.env(?:$|[._-])/i,
   /(^|\/)\.envrc$/i,
   /(^|\/)\.aws(?:\/|$)/i,
+  /(^|\/)\.gnupg(?:\/|$)/i,
+  /(^|\/)\.kube\/config$/i,
   /(^|\/)\.ssh(?:\/|$)/i,
   /(^|\/)\.npmrc$/i,
   /(^|\/)\.pypirc$/i,
   /(^|\/)\.netrc$/i,
   /(^|\/)\.git-credentials$/i,
+  /(^|\/)\.htpasswd$/i,
+  /(^|\/)htpasswd$/i,
   /(^|\/)id_(?:rsa|dsa|ecdsa|ed25519)(?:$|\.)/i,
   /\.(?:pem|key|p12|pfx)$/i,
   /(^|\/)secrets?\.(?:json|ya?ml|toml|ini)$/i,
@@ -79,12 +83,16 @@ function isIncludedExtension(repoPath: string, includeExtensions: Set<string>): 
   return includeExtensions.has(extension);
 }
 
-async function listCandidateFiles(projectRoot: string): Promise<string[]> {
+async function listCandidateFiles(projectRoot: string): Promise<{ candidates: string[]; skippedPaths: string[] }> {
   if (await isGitRepository(projectRoot)) {
-    return listGitVisibleFiles(projectRoot);
+    return { candidates: await listGitVisibleFiles(projectRoot), skippedPaths: [] };
   }
 
-  return walkFiles(projectRoot);
+  const skippedPaths: string[] = [];
+  return {
+    candidates: await walkFiles(projectRoot, () => false, repoPath => skippedPaths.push(repoPath)),
+    skippedPaths
+  };
 }
 
 async function createInventoryFile(
@@ -146,8 +154,9 @@ export async function buildFileInventory(options: BuildFileInventoryOptions): Pr
     includeVendor: options.includeVendor
   });
   const includeExtensions = new Set(config.fileInventory.includeExtensions.map(normalizeExtension));
-  const candidates = (await listCandidateFiles(projectRoot)).map(toRepoPath).sort();
-  const ignoredPaths: string[] = [];
+  const listed = await listCandidateFiles(projectRoot);
+  const candidates = listed.candidates.map(toRepoPath).sort();
+  const ignoredPaths: string[] = listed.skippedPaths.map(toRepoPath);
   const files: InventoryFile[] = [];
   const indexedAt = Date.now();
   const loadIndexedText = options.loadIndexedText ?? true;

@@ -1,17 +1,22 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 
+const DEFAULT_MAX_WALK_DEPTH = 64;
+
 function toRepoPath(projectRoot: string, absolutePath: string): string {
   return path.relative(projectRoot, absolutePath).split(path.sep).join('/');
 }
 
 export async function walkFiles(
   projectRoot: string,
-  shouldSkipPath: (repoPath: string) => boolean = () => false
+  shouldSkipPath: (repoPath: string) => boolean = () => false,
+  onSkippedPath: (repoPath: string) => void = () => undefined
 ): Promise<string[]> {
   const results: string[] = [];
+  const stack: Array<{ directory: string; depth: number }> = [{ directory: projectRoot, depth: 0 }];
 
-  async function visit(directory: string): Promise<void> {
+  while (stack.length > 0) {
+    const { directory, depth } = stack.pop() as { directory: string; depth: number };
     const entries = await readdir(directory, { withFileTypes: true });
 
     for (const entry of entries) {
@@ -19,11 +24,12 @@ export async function walkFiles(
       const repoPath = toRepoPath(projectRoot, absolutePath);
 
       if (entry.isDirectory()) {
-        if (entry.name === '.git' || shouldSkipPath(repoPath)) {
+        if (entry.name === '.git' || shouldSkipPath(repoPath) || depth + 1 >= DEFAULT_MAX_WALK_DEPTH) {
+          onSkippedPath(repoPath);
           continue;
         }
 
-        await visit(absolutePath);
+        stack.push({ directory: absolutePath, depth: depth + 1 });
         continue;
       }
 
@@ -33,6 +39,5 @@ export async function walkFiles(
     }
   }
 
-  await visit(projectRoot);
   return results.sort();
 }

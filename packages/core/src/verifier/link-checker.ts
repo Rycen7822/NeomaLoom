@@ -17,7 +17,11 @@ export type StaleAnchor = {
 };
 
 function isExternal(target: string): boolean {
-  return /^[a-z][a-z0-9+.-]*:/i.test(target);
+  return /^[a-z][a-z0-9+.-]*:/i.test(target) || /^[A-Za-z]:[\\/]/.test(target) || /^\\\\/.test(target);
+}
+
+function normalizeRawTarget(target: string): string {
+  return target.startsWith('<') && target.endsWith('>') ? target.slice(1, -1) : target;
 }
 
 function normalizeAnchor(anchor: string): string {
@@ -65,7 +69,7 @@ export async function checkMarkdownLinks(input: {
     }
     for (const line of text.split(/\r?\n/)) {
       for (const match of line.matchAll(/\[[^\]\r\n]+\]\(([^)\s\r\n]+)\)/g)) {
-        const rawTarget = match[1];
+        const rawTarget = normalizeRawTarget(match[1]);
         if (isExternal(rawTarget)) {
           continue;
         }

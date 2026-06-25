@@ -102,6 +102,37 @@ describe('feature worker client', () => {
     ).resolves.toMatchObject({ state: 'unavailable' });
   });
 
+  it('preserves UTF-8 worker output split across stdout chunks', async () => {
+    const projectRoot = await createTempProject();
+    const fakeWorker = path.join(projectRoot, 'split-utf8-worker.py');
+    await writeFile(
+      fakeWorker,
+      [
+        '#!/usr/bin/env python3',
+        'import os, sys, time',
+        'sys.stdin.readline()',
+        'payload = b\'{"ok":true,"data":{"word":"\' + "中".encode("utf-8") + b\'"}}\\n\'',
+        'cut = payload.index("中".encode("utf-8")) + 1',
+        'os.write(1, payload[:cut])',
+        'sys.stdout.flush()',
+        'time.sleep(0.05)',
+        'os.write(1, payload[cut:])',
+        ''
+      ].join('\n')
+    );
+    await chmod(fakeWorker, 0o755);
+
+    const result = await withTrustedCustomWorker(() => projectFeatures({
+      command: 'feature.status',
+      projectRoot,
+      stateDir: path.join(projectRoot, '.noemaloom'),
+      revision: 'rev-utf8',
+      workerCommand: `"${fakeWorker}"`
+    }));
+
+    expect(result).toEqual({ state: 'available', data: { word: '中' }, warnings: [] });
+  });
+
   it('degrades to unavailable when the worker returns malformed output', async () => {
     const projectRoot = await createTempProject();
     const fakeWorker = path.join(projectRoot, 'fake-worker');

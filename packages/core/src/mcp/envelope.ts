@@ -65,16 +65,34 @@ function configuredAllowedRoots(): string[] {
     .map(value => path.resolve(value));
 }
 
-function isUnsafeDefaultProjectRoot(projectRoot: string): boolean {
-  const resolved = path.resolve(projectRoot);
-  if (resolved === path.parse(resolved).root) {
+export function isUnsafeDefaultProjectRootForPlatform(projectRoot: string, platform: NodeJS.Platform = process.platform): boolean {
+  const pathApi = platform === 'win32' ? path.win32 : path;
+  const resolved = pathApi.resolve(projectRoot);
+  if (resolved === pathApi.parse(resolved).root) {
     return true;
   }
-  if (process.platform === 'win32') {
-    return false;
+  if (platform === 'win32') {
+    const lower = resolved.toLowerCase();
+    const root = path.win32.parse(resolved).root.toLowerCase();
+    const blockedRoots = [
+      'windows',
+      'program files',
+      'program files (x86)',
+      'programdata',
+      'system volume information',
+      '$recycle.bin'
+    ];
+    return blockedRoots.some(blocked => {
+      const absolute = path.win32.join(root, blocked).toLowerCase();
+      return lower === absolute || lower.startsWith(`${absolute}\\`);
+    });
   }
   const blockedRoots = ['/bin', '/boot', '/dev', '/etc', '/lib', '/lib64', '/proc', '/run', '/sbin', '/sys', '/usr', '/var'];
   return blockedRoots.some(blocked => resolved === blocked || resolved.startsWith(`${blocked}/`));
+}
+
+function isUnsafeDefaultProjectRoot(projectRoot: string): boolean {
+  return isUnsafeDefaultProjectRootForPlatform(projectRoot);
 }
 
 function assertAllowedProjectRoot(projectRoot: string): void {

@@ -8,7 +8,7 @@ import { checkCodeDocMismatch, type CodeDocMismatch } from './code-doc-mismatch.
 import type { BrokenLink, StaleAnchor } from './link-checker.js';
 import { classifyFileRole, isGeneratedArtifactPath } from '../files/role-classifier.js';
 import { classifyPathLayer, isDefaultBusinessPath } from '../files/path-layer.js';
-import { safeReadFileInsideProjectSync } from '../safety/path-guard.js';
+import { normalizeProjectRelativePath, safeReadFileInsideProjectSync } from '../safety/path-guard.js';
 
 type Statement = {
   all: (...params: unknown[]) => unknown[];
@@ -87,8 +87,17 @@ function inventoryDocRolesFromSnapshot(input: {
     const changed = new Set(input.changedPaths);
     return Array.isArray(parsed.files)
       ? parsed.files
-          .filter(file => typeof file.path === 'string' && !changed.has(file.path) && !isGeneratedArtifactPath(file.path) && isDefaultBusinessPath(file.path))
-          .map(file => ({ path: file.path, role: classifyFileRole(file.path), indexed: false }))
+          .flatMap(file => {
+            if (typeof file.path !== 'string') return [];
+            let repoPath: string;
+            try {
+              repoPath = normalizeProjectRelativePath(input.projectRoot, file.path);
+            } catch {
+              return [];
+            }
+            if (changed.has(repoPath) || isGeneratedArtifactPath(repoPath) || !isDefaultBusinessPath(repoPath)) return [];
+            return [{ path: repoPath, role: classifyFileRole(repoPath), indexed: false }];
+          })
           .filter(file => file.role.endsWith('_doc'))
           .sort((left, right) => left.role.localeCompare(right.role) || left.path.localeCompare(right.path))
       : [];
@@ -142,8 +151,15 @@ function inventoryTestPathsFromSnapshot(projectRoot: string): string[] {
     };
     return Array.isArray(parsed.files)
       ? parsed.files
-          .filter(file => typeof file.path === 'string' && classifyFileRole(file.path) === 'test_file')
-          .map(file => file.path)
+          .flatMap(file => {
+            if (typeof file.path !== 'string') return [];
+            try {
+              const repoPath = normalizeProjectRelativePath(projectRoot, file.path);
+              return classifyFileRole(repoPath) === 'test_file' ? [repoPath] : [];
+            } catch {
+              return [];
+            }
+          })
           .sort()
       : [];
   } catch {

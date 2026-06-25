@@ -31,15 +31,31 @@ function isRegexStart(previous: string): boolean {
   return /[=(:,!&|?{};\[]$/.test(trimmed) || /\b(?:return|case|throw|typeof|instanceof|delete|void|new)$/.test(trimmed);
 }
 
-function braceDeltaOutsideSyntax(line: string): { delta: number; sawOpeningBrace: boolean } {
+type BraceSyntaxState = {
+  quote?: 'template';
+  escaped: boolean;
+  inBlockComment: boolean;
+};
+
+function braceDeltaOutsideSyntax(line: string, state: BraceSyntaxState): { delta: number; sawOpeningBrace: boolean } {
   let delta = 0;
   let sawOpeningBrace = false;
-  let quote: 'single' | 'double' | 'template' | 'regex' | undefined;
-  let escaped = false;
+  let quote: 'single' | 'double' | 'template' | 'regex' | undefined = state.quote;
+  let escaped = state.escaped;
 
   for (let index = 0; index < line.length; index += 1) {
     const char = line[index];
     const next = line[index + 1];
+
+    if (state.inBlockComment) {
+      const close = line.indexOf('*/', index);
+      if (close < 0) {
+        return { delta, sawOpeningBrace };
+      }
+      state.inBlockComment = false;
+      index = close + 1;
+      continue;
+    }
 
     if (quote) {
       if (escaped) {
@@ -62,24 +78,31 @@ function braceDeltaOutsideSyntax(line: string): { delta: number; sawOpeningBrace
     }
     if (char === '/' && next === '*') {
       const close = line.indexOf('*/', index + 2);
-      if (close < 0) break;
+      if (close < 0) {
+        state.inBlockComment = true;
+        break;
+      }
       index = close + 1;
       continue;
     }
     if (char === "'") {
       quote = 'single';
+      escaped = false;
       continue;
     }
     if (char === '"') {
       quote = 'double';
+      escaped = false;
       continue;
     }
     if (char === '`') {
       quote = 'template';
+      escaped = false;
       continue;
     }
-    if (char === '/' && next !== '/' && next !== '*' && isRegexStart(line.slice(0, index))) {
+    if (char === '/' && next !== '/' && next !== '*' && line.length <= 4096 && isRegexStart(line.slice(0, index))) {
       quote = 'regex';
+      escaped = false;
       continue;
     }
     if (char === '{') {
@@ -90,6 +113,8 @@ function braceDeltaOutsideSyntax(line: string): { delta: number; sawOpeningBrace
     }
   }
 
+  state.quote = quote === 'template' ? 'template' : undefined;
+  state.escaped = quote === 'template' ? escaped : false;
   return { delta, sawOpeningBrace };
 }
 
@@ -105,8 +130,9 @@ export function detectTypescriptBlockBoundary(input: {
 
   let depth = 0;
   let sawOpeningBrace = false;
+  const syntaxState: BraceSyntaxState = { escaped: false, inBlockComment: false };
   for (let index = input.declarationLineIndex; index < input.lines.length; index += 1) {
-    const { delta, sawOpeningBrace: lineSawOpeningBrace } = braceDeltaOutsideSyntax(input.lines[index]);
+    const { delta, sawOpeningBrace: lineSawOpeningBrace } = braceDeltaOutsideSyntax(input.lines[index], syntaxState);
     if (lineSawOpeningBrace) {
       sawOpeningBrace = true;
     }

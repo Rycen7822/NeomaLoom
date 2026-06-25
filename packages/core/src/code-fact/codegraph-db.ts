@@ -218,7 +218,13 @@ export async function writeCodeGraphDb(input: {
     }
   }
 
-  await rename(tempDbPath, dbPath);
+  try {
+    await unlinkSqliteTempIfExists(dbPath);
+    await rename(tempDbPath, dbPath);
+  } catch (error) {
+    await unlinkSqliteTempIfExists(tempDbPath);
+    throw error;
+  }
   return dbPath;
 }
 

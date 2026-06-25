@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -6,7 +7,7 @@ import path from 'node:path';
 import { classifyFileRole } from '../files/role-classifier.js';
 import { languageForPath } from '../files/language.js';
 import type { EnvelopeWarning, GraphState } from '../mcp/envelope.js';
-import { safeReadFileInsideProject } from '../safety/path-guard.js';
+import { normalizeProjectRelativePath, safeReadFileInsideProject } from '../safety/path-guard.js';
 import { detectProjectBoundaryWarnings } from '../projects/boundary-warnings.js';
 import type { FileRole, SpanKind } from '../spans/enums.js';
 import { readHotsetManifest, type HotsetManifest } from '../state/hotset.js';
@@ -29,6 +30,9 @@ type Database = {
 const require = createRequire(import.meta.url);
 
 function openDatabase(filename: string): Database {
+  if (!existsSync(filename)) {
+    throw new Error('span index is not readable: spans.db is missing');
+  }
   const sqlite = require('node:sqlite') as { DatabaseSync: new (filename: string) => Database };
   return new sqlite.DatabaseSync(filename);
 }
@@ -759,20 +763,26 @@ async function filesFromInventorySnapshot(projectRoot: string): Promise<FileRow[
     };
     return Array.isArray(parsed.files)
       ? parsed.files
-          .filter(file => typeof file.path === 'string')
-          .map(file => {
-            const role = classifyFileRole(file.path);
+          .flatMap(file => {
+            if (typeof file.path !== 'string') return [];
+            let repoPath: string;
+            try {
+              repoPath = normalizeProjectRelativePath(projectRoot, file.path);
+            } catch {
+              return [];
+            }
+            const role = classifyFileRole(repoPath);
             return {
-              path: file.path,
-              absolute_path: path.join(projectRoot, file.path),
+              path: repoPath,
+              absolute_path: path.join(projectRoot, repoPath),
               role,
-              language: languageForPath(file.path),
+              language: languageForPath(repoPath),
               content_hash: file.contentHash ?? '',
               size_bytes: 0,
               generated: role === 'generated_file' ? 1 : 0,
               ignored: 0,
               metadata_json: '{}'
-            };
+            } satisfies FileRow;
           })
       : [];
   } catch {
