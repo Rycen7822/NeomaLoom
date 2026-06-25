@@ -218,7 +218,7 @@ describe('derived repository map', () => {
     expect(map.coreSourceModules).toEqual([{ path: 'src/client.ts', label: 'createClient', kind: 'code.function' }]);
     expect(map.testEntries).toEqual([{ path: 'tests/client.test.ts', label: 'creates client', kind: 'test.case' }]);
     expect(map.configEntries).toEqual([{ path: 'package.json', label: 'scripts.test', kind: 'config.entry' }]);
-    expect(map.featureClusters).toEqual([{ id: 'feature:client', label: 'Client API', linkedSpanIds: [] }]);
+    expect(map.featureClusters).toEqual([]);
     expect(map.highConfidenceLinks).toEqual([
       {
         sourceSpanId: 'doc:client',
@@ -241,6 +241,6 @@ describe('derived repository map', () => {
     await writeRepositoryMap({ projectRoot, map });
     expect(await readFile(path.join(projectRoot, '.noemaloom', 'derived-map', 'repository-map.md'), 'utf8')).toBe(rendered);
     expect(JSON.parse(await readFile(path.join(projectRoot, '.noemaloom', 'derived-map', 'repository-map.json'), 'utf8'))).toEqual(map);
-    expect(`${JSON.stringify(map)}\n${rendered}`).not.toMatch(/chat summary|user preference|full code snippet|console\.log|\.agents\/skills|artifacts\/daily/);
+    expect(`${JSON.stringify(map)}\n${rendered}`).not.toMatch(/chat summary|user preference|full code snippet|console\.log|\.agents\/skills|artifacts\/daily|\.noemaloom\/planning\/features\.json/);
   });
 });

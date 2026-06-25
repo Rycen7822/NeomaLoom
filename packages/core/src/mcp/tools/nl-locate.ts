@@ -117,6 +117,61 @@ function targetFromRanked(candidate: RankedCandidate): LocatorTarget {
   return target;
 }
 
+const ROOT_SURFACE_DIRS = new Set([
+  'app',
+  'apps',
+  'bin',
+  'config',
+  'configs',
+  'doc',
+  'docs',
+  'example',
+  'examples',
+  'fixture',
+  'fixtures',
+  'lib',
+  'package',
+  'packages',
+  'script',
+  'scripts',
+  'schema',
+  'schemas',
+  'src',
+  'test',
+  'tests',
+  'tool',
+  'tools'
+]);
+
+function topLevelScope(repoPath: string): string | undefined {
+  const normalized = repoPath.replaceAll('\\\\', '/').replace(/^\/+/, '');
+  const [first, ...rest] = normalized.split('/').filter(Boolean);
+  if (!first || rest.length === 0 || first.startsWith('.')) return undefined;
+  const lower = first.toLowerCase();
+  return ROOT_SURFACE_DIRS.has(lower) ? undefined : first;
+}
+
+function selectedCoverageTargets(input: {
+  ranked: RankedCandidate[];
+  selected: RankedCandidate[];
+  pathTerms: string[];
+}): RankedCandidate[] {
+  const scopes = new Set<string>();
+  for (const term of input.pathTerms) {
+    const scope = topLevelScope(term);
+    if (scope) scopes.add(scope);
+  }
+  if (scopes.size === 0) {
+    for (const candidate of input.selected) {
+      const scope = topLevelScope(candidate.path);
+      if (scope) scopes.add(scope);
+    }
+  }
+  if (scopes.size === 0) return input.ranked;
+  const selectedIds = new Set(input.selected.map(candidate => candidate.spanId));
+  return input.ranked.filter(candidate => selectedIds.has(candidate.spanId) || scopes.has(topLevelScope(candidate.path) ?? ''));
+}
+
 export async function runLocator(input: {
   projectRoot: string;
   goal: string;
@@ -139,12 +194,17 @@ export async function runLocator(input: {
     : ranked;
   const exactPathRequested = generated.normalizedQuery.pathTerms.some(term => term.includes('/') || /\.[A-Za-z0-9]+$/.test(term));
   const diversified = exactPathRequested ? rankedTargets : diversifyRankedCandidates(rankedTargets);
+  const selectedRanked = diversified.slice(0, input.limit ?? 20);
   const coveragePlan = buildCoveragePlan({
     query: generated.normalizedQuery,
-    targets: ranked,
+    targets: selectedCoverageTargets({
+      ranked,
+      selected: selectedRanked,
+      pathTerms: generated.normalizedQuery.pathTerms
+    }),
     requestedRoles: input.targetRoles
   });
-  const targets = diversified.slice(0, input.limit ?? 20).map(targetFromRanked);
+  const targets = selectedRanked.map(targetFromRanked);
   const budgeted = applyLocatorTokenBudget({
     requested: input.budget ?? 2400,
     targets,

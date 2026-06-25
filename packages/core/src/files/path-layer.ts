@@ -38,7 +38,7 @@ export function classifyPathLayer(repoPath: string): PathLayer {
     return 'generated';
   }
   if (
-    hasSegment(repoPath, ['artifacts', 'artifact', 'runs', 'outputs', 'output', 'checkpoints', 'checkpoint', 'wandb', 'mlruns', 'logs']) ||
+    hasSegment(repoPath, ['.pytest_cache', 'artifacts', 'artifact', 'runs', 'outputs', 'output', 'checkpoints', 'checkpoint', 'wandb', 'mlruns', 'logs']) ||
     hasSegment(repoPath, ['token_efficiency_benchmark'])
   ) {
     return 'artifact';
@@ -46,8 +46,14 @@ export function classifyPathLayer(repoPath: string): PathLayer {
   if (hasSegment(repoPath, ['hermes-plugin-backups', 'backups', 'backup']) || hasSegmentMatching(repoPath, /(?:^|[-_.])backup(?:[-_.]|$)/)) {
     return 'backup';
   }
-  if (hasSegment(repoPath, ['archive', 'archives', 'archived', 'deprecated'])) return 'archive';
-  if (hasSegment(repoPath, ['repair', 'repairs', 'repair-worktree', 'fixback'])) return 'repair_worktree';
+  if (
+    hasSegment(repoPath, ['archive', 'archives', 'archived', 'deprecated']) ||
+    hasSegmentMatching(repoPath, /(?:^|[-_.])(?:archive|archives|archived|deprecated)(?:[-_.]|$)/)
+  ) return 'archive';
+  if (
+    hasSegment(repoPath, ['repair', 'repairs', 'repair-worktree', 'repair_worktree', 'fixback']) ||
+    hasSegmentMatching(repoPath, /(?:^|[-_.])(?:repair|repairs|repair[-_]worktree|fixback)(?:[-_.]|$)/)
+  ) return 'repair_worktree';
   return 'business';
 }
 

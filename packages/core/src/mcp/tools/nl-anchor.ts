@@ -82,6 +82,8 @@ export const nlAnchorCheckpointInputSchema = z.object({
   reason: z.string().default('agent checkpoint')
 }).passthrough();
 
+type AnchorResponseProfile = 'compact' | 'standard' | 'debug';
+
 function publicAnchors(manifest: WorksetManifest, includeRetired: boolean): NavigationAnchor[] {
   return manifest.anchors
     .filter(anchor => includeRetired || !['retired', 'tombstoned'].includes(anchor.state))
@@ -154,26 +156,80 @@ function anchorMatchesInput(anchor: NavigationAnchor, input: { path: string; kin
     anchor.endLine === input.endLine;
 }
 
-export function anchorStatusData(manifest: WorksetManifest, includeRetired: boolean, includeText: boolean): Record<string, unknown> {
+function countsFor(manifest: WorksetManifest): Record<string, number> {
+  return {
+    anchors: manifest.anchors.length,
+    active: manifest.anchors.filter(anchor => anchor.state === 'active').length,
+    dormant: manifest.anchors.filter(anchor => anchor.state === 'dormant').length,
+    archived: manifest.anchors.filter(anchor => anchor.state === 'archived').length,
+    tombstones: manifest.tombstones.length
+  };
+}
+
+function anchorPreview(anchor: NavigationAnchor): Record<string, unknown> {
+  return Object.fromEntries(Object.entries({
+    id: anchor.id,
+    path: anchor.path,
+    label: anchor.label,
+    kind: anchor.kind,
+    role: anchor.role,
+    startLine: anchor.startLine,
+    endLine: anchor.endLine,
+    state: anchor.state,
+    pinned: anchor.pinned,
+    reason: anchor.reason,
+    source: anchor.source
+  }).filter(([, value]) => value !== undefined));
+}
+
+export function anchorStatusData(
+  manifest: WorksetManifest,
+  includeRetired: boolean,
+  includeText: boolean,
+  responseProfile: AnchorResponseProfile = 'compact'
+): Record<string, unknown> {
   const rendered = renderNavigationCards(manifest, { includeDisabled: true });
+  const anchors = publicAnchors(manifest, includeRetired);
+  if (responseProfile === 'debug') {
+    return {
+      revision: worksetRevision(manifest),
+      enabled: manifest.options.navigation.enabled,
+      mode: manifest.options.navigation.mode,
+      counters: manifest.counters,
+      budgets: manifest.budgets,
+      counts: countsFor(manifest),
+      anchors,
+      tombstones: manifest.tombstones,
+      navigation: {
+        cards: rendered.cards,
+        text: includeText ? rendered.text : '',
+        charBudget: rendered.charBudget,
+        truncated: rendered.truncated
+      }
+    };
+  }
+
+  const anchorLimit = responseProfile === 'standard' ? 25 : 10;
+  const tombstoneLimit = responseProfile === 'standard' ? 25 : 10;
+  const cardLimit = responseProfile === 'standard' ? 25 : 10;
+  const textLimit = responseProfile === 'standard' ? 1200 : 0;
+  const text = includeText && textLimit > 0 ? rendered.text.slice(0, textLimit) : '';
   return {
     revision: worksetRevision(manifest),
     enabled: manifest.options.navigation.enabled,
     mode: manifest.options.navigation.mode,
     counters: manifest.counters,
     budgets: manifest.budgets,
-    counts: {
-      anchors: manifest.anchors.length,
-      active: manifest.anchors.filter(anchor => anchor.state === 'active').length,
-      dormant: manifest.anchors.filter(anchor => anchor.state === 'dormant').length,
-      archived: manifest.anchors.filter(anchor => anchor.state === 'archived').length,
-      tombstones: manifest.tombstones.length
-    },
-    anchors: publicAnchors(manifest, includeRetired),
-    tombstones: manifest.tombstones,
+    counts: countsFor(manifest),
+    anchorPreviews: anchors.slice(0, anchorLimit).map(anchorPreview),
+    anchorPreviewsOmitted: Math.max(0, anchors.length - anchorLimit),
+    tombstonePreviews: manifest.tombstones.slice(0, tombstoneLimit),
+    tombstonePreviewsOmitted: Math.max(0, manifest.tombstones.length - tombstoneLimit),
     navigation: {
-      cards: rendered.cards,
-      text: includeText ? rendered.text : '',
+      cards: rendered.cards.slice(0, cardLimit),
+      cardsOmitted: Math.max(0, rendered.cards.length - cardLimit),
+      text,
+      textOmittedChars: includeText ? Math.max(0, rendered.text.length - text.length) : 0,
       charBudget: rendered.charBudget,
       truncated: rendered.truncated
     }
@@ -203,7 +259,7 @@ function anchorEnvelope(tool: string, projectRoot: string, manifest: WorksetMani
     projectRoot,
     graphRevision: worksetRevision(manifest),
     graphState: anchorGraphStateFor(manifest),
-    data: anchorStatusData(manifest, includeRetired, true)
+    data: anchorStatusData(manifest, includeRetired, true, 'compact')
   });
 }
 
@@ -230,7 +286,7 @@ export async function handleNlAnchorStatus(input: unknown): Promise<NoemaLoomEnv
     projectRoot,
     graphRevision: worksetRevision(manifest),
     graphState: anchorGraphStateFor(manifest),
-    data: anchorStatusData(manifest, parsed.includeRetired, parsed.includeText)
+    data: anchorStatusData(manifest, parsed.includeRetired, parsed.includeText, parsed.responseProfile)
   });
 }
 
@@ -424,7 +480,7 @@ export async function handleNlAnchorCheckpoint(input: unknown): Promise<NoemaLoo
       graphRevision: worksetRevision(manifest),
       graphState: anchorGraphStateFor(manifest),
       data: {
-        ...anchorStatusData(manifest, false, true),
+        ...anchorStatusData(manifest, false, true, 'compact'),
         status: 'noop',
         stateEffects: [],
         stateEffectsDetailed: []

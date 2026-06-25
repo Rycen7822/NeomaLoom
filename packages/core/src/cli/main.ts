@@ -12,7 +12,7 @@ import {
 import { handleNlStatus } from '../mcp/tools/nl-status.js';
 import { createEnvelope, createUnhandledErrorEnvelope, createValidationErrorEnvelope, resolveProjectRootFromInput, type NoemaLoomEnvelope } from '../mcp/envelope.js';
 import { serveMcp } from '../mcp/server.js';
-import { getHelpText } from './help.js';
+import { getHelpText, getStatusHelpText } from './help.js';
 
 interface CliIo {
   stdout: Pick<NodeJS.WriteStream, 'write'>;
@@ -137,8 +137,64 @@ async function runAnchorCommand(argv: string[], io: CliIo): Promise<number> {
   return result.ok ? 0 : 1;
 }
 
+async function parseStatusArgs(argv: string[]): Promise<Record<string, unknown>> {
+  let projectPath: string | undefined;
+  let jsonText: string | undefined;
+  let jsonFile: string | undefined;
+  for (let index = 1; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--project') {
+      projectPath = optionValue(argv, index, '--project');
+      index += 1;
+    } else if (arg === '--json') {
+      const next = argv[index + 1];
+      if (next && !next.startsWith('--')) {
+        jsonText = next;
+        index += 1;
+      }
+    } else if (arg === '--json-file') {
+      jsonFile = optionValue(argv, index, '--json-file');
+      index += 1;
+    } else {
+      throw new Error(`Unknown status option: ${arg}`);
+    }
+  }
+  if (jsonText && jsonFile) {
+    throw new Error('Use only one of --json JSON or --json-file.');
+  }
+  if (jsonFile) {
+    jsonText = await readFile(jsonFile, 'utf8');
+  }
+  const payload = jsonText ? parsePayloadText(jsonText, jsonFile ? `--json-file ${jsonFile}` : '--json') : {};
+  if (projectPath) payload.projectPath = projectPath;
+  return payload;
+}
+
+async function runStatusCommand(argv: string[], io: CliIo): Promise<number> {
+  let payload: Record<string, unknown>;
+  try {
+    payload = await parseStatusArgs(argv);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    io.stdout.write(`${JSON.stringify(cliValidationEnvelope('noemaloom_status_cli', projectPathFromArgv(argv), message), null, 2)}\n`);
+    return 1;
+  }
+
+  let result: NoemaLoomEnvelope;
+  try {
+    result = await handleNlStatus(payload);
+  } catch (error) {
+    if (!(error instanceof z.ZodError)) {
+      throw error;
+    }
+    result = createValidationErrorEnvelope('nl_status', resolveProjectRootFromInput(payload), error);
+  }
+  io.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  return result.ok ? 0 : 1;
+}
+
 export async function runCli(argv = process.argv.slice(2), io = defaultIo): Promise<number> {
-  if (argv.length === 0 || argv.includes('--help') || argv.includes('-h')) {
+  if (argv.length === 0 || (argv.length === 1 && (argv[0] === '--help' || argv[0] === '-h'))) {
     io.stdout.write(`${getHelpText()}\n`);
     return 0;
   }
@@ -157,11 +213,19 @@ export async function runCli(argv = process.argv.slice(2), io = defaultIo): Prom
     return 0;
   }
 
+  if (argv[0] === 'status') {
+    if (argv.includes('--help') || argv.includes('-h')) {
+      io.stdout.write(`${getStatusHelpText()}\n`);
+      return 0;
+    }
+    return runStatusCommand(argv, io);
+  }
+
   if (argv[0] === 'anchor') {
     return runAnchorCommand(argv, io);
   }
 
-  io.stdout.write(`${JSON.stringify(cliValidationEnvelope('noemaloom_cli', undefined, 'Unknown command.'), null, 2)}\n`);
+  io.stdout.write(`${JSON.stringify(cliValidationEnvelope('noemaloom_cli', undefined, `Unknown command: ${argv[0] ?? '<missing>'}`), null, 2)}\n`);
   return 1;
 }
 

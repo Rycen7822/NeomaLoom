@@ -68,7 +68,7 @@ describe('noemaloom CLI help', () => {
       JSON.stringify({ path: 'src/client.ts', label: 'client', reason: 'cli setup' })
     ]);
     expect(promoted.code).toBe(0);
-    const anchors = ((promoted.json?.data as { anchors: Array<{ id: string }> }).anchors);
+    const anchors = ((promoted.json?.data as { anchorPreviews: Array<{ id: string }> }).anchorPreviews);
     const anchorId = anchors[0].id;
 
     const repaired = await runJson([
@@ -80,7 +80,7 @@ describe('noemaloom CLI help', () => {
       JSON.stringify({ anchorId, newPath: 'src/client-new.ts', label: 'client v2', reason: 'cli repair' })
     ]);
     expect(repaired.code).toBe(0);
-    expect((repaired.json?.data as { anchors: Array<{ id: string; path: string; label: string }> }).anchors.find(anchor => anchor.id === anchorId)).toMatchObject({
+    expect((repaired.json?.data as { anchorPreviews: Array<{ id: string; path: string; label: string }> }).anchorPreviews.find(anchor => anchor.id === anchorId)).toMatchObject({
       path: 'src/client-new.ts',
       label: 'client v2'
     });
@@ -113,20 +113,20 @@ describe('noemaloom CLI help', () => {
       JSON.stringify({ anchorId, reason: 'cli retire' })
     ]);
     expect(retired.code).toBe(0);
-    expect((retired.json?.data as { tombstones: Array<{ id: string; reason: string }> }).tombstones).toEqual(
+    expect((retired.json?.data as { tombstonePreviews: Array<{ id: string; reason: string }> }).tombstonePreviews).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: anchorId, reason: 'cli retire' })])
     );
 
     const status = await runJson(['anchor', 'status', '--project', projectRoot, '--json', JSON.stringify({ includeRetired: true })]);
     expect(status.code).toBe(0);
-    expect((status.json?.data as { anchorWorkset: { tombstones: Array<{ id: string }> } }).anchorWorkset.tombstones).toEqual(
+    expect((status.json?.data as { anchorWorkset: { tombstonePreviews: Array<{ id: string }> } }).anchorWorkset.tombstonePreviews).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: anchorId })])
     );
-    const retiredAnchors = (retired.json?.data as { anchors: Array<{ id: string }>; counts: { anchors: number; tombstones: number } }).anchors;
-    const statusWorkset = (status.json?.data as { anchorWorkset: { anchors: Array<{ id: string }>; counts: { anchors: number; tombstones: number } } }).anchorWorkset;
+    const retiredAnchors = (retired.json?.data as { anchorPreviews: Array<{ id: string }>; counts: { anchors: number; tombstones: number } }).anchorPreviews;
+    const statusWorkset = (status.json?.data as { anchorWorkset: { anchorPreviews: Array<{ id: string }>; counts: { anchors: number; tombstones: number } } }).anchorWorkset;
     expect(retiredAnchors.find(anchor => anchor.id === anchorId)).toBeUndefined();
     expect((retired.json?.data as { counts: { anchors: number; tombstones: number } }).counts).toMatchObject(statusWorkset.counts);
-    expect(statusWorkset.anchors.find(anchor => anchor.id === anchorId)).toBeUndefined();
+    expect(statusWorkset.anchorPreviews.find(anchor => anchor.id === anchorId)).toBeUndefined();
   });
 
   it('returns controlled CLI validation JSON instead of raw Zod output for bad anchor payloads', async () => {
@@ -178,6 +178,28 @@ describe('noemaloom CLI help', () => {
     expect(result.code).toBe(1);
     expect(result.json?.tool).toBe('noemaloom_cli');
     expect((result.json?.warnings as Array<{ message: string }>)[0].message).toContain('serve requires --mcp');
+  });
+
+  it('exposes a real top-level status command and rejects unknown command help', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-status-cli-'));
+    await writeProjectFile(projectRoot, 'src/client.ts', 'export const client = 1;\n');
+
+    const status = await runJson(['status', '--project', projectRoot]);
+    expect(status.code).toBe(0);
+    expect(status.json?.tool).toBe('nl_status');
+    expect((status.json?.data as { rawToolExposure: boolean; writerEnabled: boolean }).rawToolExposure).toBe(false);
+    expect((status.json?.data as { rawToolExposure: boolean; writerEnabled: boolean }).writerEnabled).toBe(false);
+
+    const help = captureIo();
+    const helpCode = await runCli(['status', '--help'], help.io);
+    expect(helpCode).toBe(0);
+    expect(help.output().stdout).toContain('Usage: noemaloom status');
+    expect(help.output().stdout).toContain('--project');
+
+    const unknownHelp = await runJson(['prepare', '--help']);
+    expect(unknownHelp.code).toBe(1);
+    expect(unknownHelp.json?.ok).toBe(false);
+    expect((unknownHelp.json?.warnings as Array<{ message: string }>)[0].message).toContain('Unknown command: prepare');
   });
 
   it('prints the package version for --version', async () => {

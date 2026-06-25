@@ -19,7 +19,8 @@ export const nlStatusInputSchema = z
     includeRepositoryMap: z.boolean().default(false),
     includeAnchors: z.boolean().default(false),
     includeRetiredAnchors: z.boolean().default(false),
-    includeAnchorText: z.boolean().default(true)
+    includeAnchorText: z.boolean().default(true),
+    responseProfile: z.enum(['compact', 'standard', 'debug']).default('compact')
   })
   .passthrough();
 
@@ -373,7 +374,7 @@ export async function handleNlStatus(input: unknown): Promise<NoemaLoomEnvelope>
   }
 
   const anchorWorkset = parsed.includeAnchors
-    ? anchorStatusData(await readWorksetManifest(projectRoot), parsed.includeRetiredAnchors, parsed.includeAnchorText)
+    ? anchorStatusData(await readWorksetManifest(projectRoot), parsed.includeRetiredAnchors, parsed.includeAnchorText, parsed.responseProfile)
     : undefined;
 
   return createEnvelope({

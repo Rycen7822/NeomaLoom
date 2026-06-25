@@ -253,7 +253,7 @@ describe('locator query normalization and ranking', () => {
     expect(normalized.exactTerms).not.toContain('alphabeta');
   });
 
-  it('gates feature-projection candidates by structured role intent instead of broad content terms', () => {
+  it('keeps generated feature-projection state out of default user-facing targets', () => {
     const docQuery = normalizeQuery({ query: 'update createClient documentation', targetRoles: ['canonical_api_doc'] });
     const featureCandidate = {
       ...baseCandidate,
@@ -269,6 +269,15 @@ describe('locator query normalization and ranking', () => {
     expect(rankCandidates([featureCandidate, baseCandidate], docQuery).map(candidate => candidate.spanId)).toEqual(['span-doc-client']);
 
     const featureRoleQuery = normalizeQuery({ query: 'createClient documentation', targetRoles: ['feature_plan'] });
-    expect(rankCandidates([featureCandidate], featureRoleQuery).map(candidate => candidate.spanId)).toEqual(['span-feature-node']);
+    expect(rankCandidates([featureCandidate], featureRoleQuery)).toEqual([]);
+
+    const businessFeaturePlan = {
+      ...featureCandidate,
+      spanId: 'span-business-feature-plan',
+      path: 'features/client-plan.md',
+      kind: 'doc.heading',
+      sourcePlanSources: ['fts_lexical', 'path_role_expansion']
+    };
+    expect(rankCandidates([businessFeaturePlan], featureRoleQuery).map(candidate => candidate.spanId)).toEqual(['span-business-feature-plan']);
   });
 });

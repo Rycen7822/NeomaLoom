@@ -38,16 +38,28 @@ describe('NoemaLoom compressed navigation anchor tool surface', () => {
     });
     expect(promoted.ok).toBe(true);
     expect(promoted.tool).toBe('nl_anchor_manage');
-    const promotedData = promoted.data as { anchors: Array<{ id: string; path: string; pinned: boolean; state: string }>; enabled: boolean };
+    const promotedData = promoted.data as {
+      anchors?: unknown[];
+      anchorPreviews: Array<{ id: string; path: string; pinned: boolean; state: string }>;
+      enabled: boolean;
+    };
     expect(promotedData.enabled).toBe(false);
-    expect(promotedData.anchors[0]).toMatchObject({ path: 'src/client.ts', pinned: true, state: 'active' });
-    const anchorId = promotedData.anchors[0].id;
+    expect(promotedData.anchors).toBeUndefined();
+    expect(promotedData.anchorPreviews[0]).toMatchObject({ path: 'src/client.ts', pinned: true, state: 'active' });
+    const anchorId = promotedData.anchorPreviews[0].id;
 
     const anchorStatus = await callRegisteredTool('nl_status', { projectPath: projectRoot, includeAnchors: true });
-    const anchorStatusData = anchorStatus.data as { anchorWorkset: { navigation: { cards: Array<{ path: string }>; text: string }; counters: { projectActivitySeq: number } } };
+    const anchorStatusData = anchorStatus.data as {
+      anchorWorkset: {
+        anchorPreviews: Array<{ path: string }>;
+        navigation: { cards: Array<{ path: string }>; text: string };
+        counters: { projectActivitySeq: number };
+      };
+    };
     expect(anchorStatus.ok).toBe(true);
+    expect(anchorStatusData.anchorWorkset.anchorPreviews[0]).toMatchObject({ path: 'src/client.ts' });
     expect(anchorStatusData.anchorWorkset.navigation.cards[0]).toMatchObject({ path: 'src/client.ts' });
-    expect(anchorStatusData.anchorWorkset.navigation.text).toContain('NoemaLoom navigation anchors:');
+    expect(anchorStatusData.anchorWorkset.navigation.text).toBe('');
     expect(anchorStatusData.anchorWorkset.counters.projectActivitySeq).toBeGreaterThanOrEqual(1);
 
     const demoted = await callRegisteredTool('nl_anchor_manage', {
@@ -59,7 +71,7 @@ describe('NoemaLoom compressed navigation anchor tool surface', () => {
     });
     expect(demoted.ok).toBe(true);
     expect(demoted.tool).toBe('nl_anchor_manage');
-    expect((demoted.data as { anchors: Array<{ id: string; state: string; reason: string }> }).anchors.find(anchor => anchor.id === anchorId)).toMatchObject({ state: 'archived', reason: 'not useful this task' });
+    expect((demoted.data as { anchorPreviews: Array<{ id: string; state: string; reason: string }> }).anchorPreviews.find(anchor => anchor.id === anchorId)).toMatchObject({ state: 'archived', reason: 'not useful this task' });
   });
 
   it('returns structured warnings for missing controlled curation targets through nl_anchor_manage', async () => {
@@ -147,7 +159,7 @@ describe('NoemaLoom compressed navigation anchor tool surface', () => {
       reason: 'updated first anchor only'
     });
     expect(duplicate.ok).toBe(true);
-    const anchors = (duplicate.data as { anchors: Array<{ path: string; startLine?: number; reason: string }> }).anchors.filter(anchor => anchor.path === 'src/client.ts');
+    const anchors = (duplicate.data as { anchorPreviews: Array<{ path: string; startLine?: number; reason: string }> }).anchorPreviews.filter(anchor => anchor.path === 'src/client.ts');
 
     expect(anchors).toHaveLength(2);
     expect(anchors.find(anchor => anchor.startLine === 1)).toMatchObject({ reason: 'updated first anchor only' });

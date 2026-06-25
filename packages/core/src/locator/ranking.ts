@@ -194,7 +194,6 @@ function pathLayerAllowed(candidate: LocatorCandidate, query: NormalizedQuery, o
   const layer = classifyPathLayer(candidate.path);
   if (isBusinessPathLayer(layer)) return true;
   if (exactPathRequested(candidate, query)) return true;
-  if (candidate.role === 'feature_plan' && query.targetRoles.includes('feature_plan')) return true;
   if (options.includeGeneratedVendor && ['generated', 'vendor'].includes(layer)) return true;
   return false;
 }

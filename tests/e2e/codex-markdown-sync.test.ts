@@ -19,7 +19,7 @@ describe('e2e markdown API documentation sync', () => {
     const preparedData = prepared.data as {
       targets: Array<{ spanId: string; path: string; role: string; decision: string; kind: string }>;
       coveragePlan: { exactSweeps: string[] };
-      readSpans: Array<{ path: string; content: string }>;
+      readSpans: Array<{ path: string; contentPreview: string }>;
     };
     expect(preparedData.targets).toEqual(
       expect.arrayContaining([
@@ -33,7 +33,7 @@ describe('e2e markdown API documentation sync', () => {
       expect.arrayContaining([
         expect.objectContaining({
           path: 'docs/api/scheduler.md',
-          content: expect.stringContaining('| `timeout` |')
+          contentPreview: expect.stringContaining('| `timeout` |')
         })
       ])
     );

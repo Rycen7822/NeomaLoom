@@ -202,9 +202,57 @@ function summarizeImpact(value: unknown): Record<string, unknown> | null {
   };
 }
 
-function shapeReadSpan(value: unknown): unknown {
+function previewText(value: unknown, maxChars: number): { preview: string; omittedChars: number } {
+  if (typeof value !== 'string') return { preview: '', omittedChars: 0 };
+  return {
+    preview: value.slice(0, maxChars),
+    omittedChars: Math.max(0, value.length - maxChars)
+  };
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function cappedArray(value: unknown, limit: number): { items: unknown[]; omitted: number } {
+  const items = asArray(value);
+  return {
+    items: items.slice(0, limit),
+    omitted: Math.max(0, items.length - limit)
+  };
+}
+
+function shapeCoveragePlan(value: unknown, profile: ResponseProfile): unknown {
+  if (profile === 'debug' || !isRecord(value)) return value;
+  const limit = profile === 'standard' ? 25 : profile === 'navigation' ? 8 : 12;
+  const exactSweeps = cappedArray(value.exactSweeps, limit);
+  const pathRoles = cappedArray(value.pathRolesToVerify, limit);
+  const linkedDocs = cappedArray(value.linkedDocsToVerify, limit);
+  const linkedTests = cappedArray(value.linkedTestsToVerify, limit);
+  return {
+    exactSweeps: exactSweeps.items,
+    exactSweepsOmitted: exactSweeps.omitted,
+    pathRolesToVerify: pathRoles.items,
+    pathRolesToVerifyOmitted: pathRoles.omitted,
+    linkedDocsToVerify: linkedDocs.items,
+    linkedDocsToVerifyOmitted: numberValue(value.linkedDocsToVerifyOmitted) + linkedDocs.omitted,
+    linkedTestsToVerify: linkedTests.items,
+    linkedTestsToVerifyOmitted: numberValue(value.linkedTestsToVerifyOmitted) + linkedTests.omitted,
+    warnings: firstItems(value.warnings, profile === 'standard' ? 10 : 5)
+  };
+}
+
+function shapeReadSpan(value: unknown, profile: ResponseProfile): unknown {
   if (!isRecord(value)) return value;
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
+  const full = Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
+  if (profile === 'debug' || profile === 'standard') return full;
+  const content = previewText(value.content, profile === 'navigation' ? 360 : 800);
+  const { content: _content, ...rest } = full;
+  return Object.fromEntries(Object.entries({
+    ...rest,
+    contentPreview: content.preview,
+    contentPreviewOmittedChars: content.omittedChars
+  }).filter(([, entry]) => entry !== undefined));
 }
 
 function shapeNavigationPrepareContextData(value: unknown): unknown {
@@ -215,8 +263,8 @@ function shapeNavigationPrepareContextData(value: unknown): unknown {
     targets: asArray(value.targets).slice(0, 5).map(target => slimTarget(target, 'compact')),
     unindexedCandidates: value.unindexedCandidates,
     coverage: value.coverage,
-    coveragePlan: value.coveragePlan,
-    readSpans: asArray(value.readSpans).slice(0, 3).map(shapeReadSpan),
+    coveragePlan: shapeCoveragePlan(value.coveragePlan, 'navigation'),
+    readSpans: asArray(value.readSpans).slice(0, 3).map(span => shapeReadSpan(span, 'navigation')),
     readSkipReasons: asArray(value.readSkipReasons).slice(0, 10),
     requiredActions: value.requiredActions,
     stateEffects: value.stateEffects,
@@ -234,10 +282,10 @@ export function shapePrepareContextData(value: unknown, profile: ResponseProfile
     targets: asArray(value.targets).map(target => slimTarget(target, profile)),
     unindexedCandidates: value.unindexedCandidates,
     coverage: value.coverage,
-    coveragePlan: value.coveragePlan,
+    coveragePlan: shapeCoveragePlan(value.coveragePlan, profile),
     ...(profile === 'standard' ? { normalizedQuery: value.normalizedQuery } : {}),
     context: shapeContextData(value.context, profile),
-    readSpans: asArray(value.readSpans).map(shapeReadSpan),
+    readSpans: asArray(value.readSpans).map(span => shapeReadSpan(span, profile)),
     readSkipReasons: asArray(value.readSkipReasons).slice(0, 20),
     stateEffects: value.stateEffects,
     stateEffectsDetailed: value.stateEffectsDetailed,
@@ -251,7 +299,7 @@ export function shapePlanChangeData(value: unknown, profile: ResponseProfile): u
   const impactSummary = summarizeImpact(value.impact);
   return {
     targets: asArray(value.targets).map(target => slimTarget(target, profile)),
-    coveragePlan: value.coveragePlan,
+    coveragePlan: shapeCoveragePlan(value.coveragePlan, profile),
     ...(profile === 'standard' ? { normalizedQuery: value.normalizedQuery } : {}),
     trace: null,
     traceSummary,

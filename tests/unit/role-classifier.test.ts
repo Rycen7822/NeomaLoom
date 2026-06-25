@@ -51,8 +51,12 @@ describe('file role classifier', () => {
     expect(classifyPathLayer('runs/exp-001/checkpoints/model.bin')).toBe('artifact');
     expect(classifyPathLayer('token_efficiency_benchmark/result.md')).toBe('artifact');
     expect(classifyPathLayer('archive/old-plan.md')).toBe('archive');
+    expect(classifyPathLayer('planning_archive/old-plan.md')).toBe('archive');
+    expect(classifyPathLayer('quest001_p0_repair_worktree/src/client.py')).toBe('repair_worktree');
+    expect(classifyPathLayer('.pytest_cache/v/cache/nodeids')).toBe('artifact');
     expect(classifyPathLayer('src/client.ts')).toBe('business');
     expect(isDefaultBusinessPath('.agents/skills/review/SKILL.md')).toBe(false);
+    expect(isDefaultBusinessPath('quest001_p0_repair_worktree/src/client.py')).toBe(false);
     expect(isDefaultBusinessPath('src/client.ts')).toBe(true);
   });
 });

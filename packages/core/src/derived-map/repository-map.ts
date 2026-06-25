@@ -44,7 +44,6 @@ const FORBIDDEN_TERMS = [
 ];
 
 function isRepositoryMapBusinessSpan(span: RepoSpan): boolean {
-  if (span.role === 'feature_plan' && span.kind === 'feature.node') return true;
   return isDefaultBusinessPath(span.path);
 }
 

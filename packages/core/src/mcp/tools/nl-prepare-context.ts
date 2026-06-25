@@ -73,8 +73,8 @@ function queryTargetCard(target: LocateData['targets'][number]): Record<string, 
 function readPriority(decision: string): number {
   if (decision === 'must_edit') return 0;
   if (decision === 'maybe_edit') return 1;
-  if (decision === 'inspect_only') return 2;
-  if (decision === 'verify_only') return 3;
+  if (decision === 'verify_only') return 2;
+  if (decision === 'inspect_only') return 3;
   return 4;
 }
 

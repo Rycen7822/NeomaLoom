@@ -94,7 +94,7 @@ describe('scoped coverage tool semantics', () => {
 
     const data = result.data as {
       targets: Array<{ path: string; kind: string }>;
-      readSpans: Array<{ path: string; spanStartLine: number; spanEndLine: number; content: string }>;
+      readSpans: Array<{ path: string; spanStartLine: number; spanEndLine: number; contentPreview: string }>;
     };
     expect(result.ok).toBe(true);
     expect(data.targets[0]).toMatchObject({
@@ -106,8 +106,8 @@ describe('scoped coverage tool semantics', () => {
       spanStartLine: 7,
       spanEndLine: 7
     });
-    expect(data.readSpans[0].content).toContain('risk-calibrated no-target blend');
-    expect(data.readSpans[0].content).toContain('do not read recovery CE');
+    expect(data.readSpans[0].contentPreview).toContain('risk-calibrated no-target blend');
+    expect(data.readSpans[0].contentPreview).toContain('do not read recovery CE');
   });
 
   it('resolves exact Python symbols as source functions with bounded plan-change output', async () => {
@@ -163,8 +163,8 @@ describe('scoped coverage tool semantics', () => {
 
     const compactData = compact.data as {
       targets: Array<{ path: string; startLine: number; endLine: number; reason: string }>;
-      readSpans: Array<{ content: string }>;
-      coveragePlan: unknown;
+      readSpans: Array<{ content?: string; contentPreview: string; contentPreviewOmittedChars: number }>;
+      coveragePlan: { linkedDocsToVerify: string[]; linkedDocsToVerifyOmitted: number };
     };
     expect(compact.ok).toBe(true);
     expect(compactData.targets[0]).toMatchObject({
@@ -172,13 +172,17 @@ describe('scoped coverage tool semantics', () => {
       startLine: 7,
       endLine: 7
     });
-    expect(compactData.readSpans[0].content).toContain('risk-calibrated no-target blend');
-    expect(compactData.coveragePlan).toBeTruthy();
+    expect(compactData.readSpans[0].content).toBeUndefined();
+    expect(compactData.readSpans[0].contentPreview).toContain('risk-calibrated no-target blend');
+    expect(compactData.readSpans[0].contentPreviewOmittedChars).toBeGreaterThanOrEqual(0);
+    expect(compactData.coveragePlan.linkedDocsToVerify.length).toBeLessThanOrEqual(12);
+    expect(compactData.coveragePlan.linkedDocsToVerifyOmitted).toBeGreaterThanOrEqual(0);
     expect(JSON.stringify(compact.data)).not.toContain('scoreBreakdown');
     expect(JSON.stringify(compact.data)).not.toContain('linkedSpans');
     expect(JSON.stringify(compact.evidence)).toBe('[]');
     expect(JSON.stringify(debug.data)).toContain('scoreBreakdown');
     expect(JSON.stringify(debug.data)).toContain('linkedSpans');
+    expect(JSON.stringify(debug.data)).toContain('risk-calibrated no-target blend');
     expect(JSON.stringify(compact).length).toBeLessThan(JSON.stringify(debug).length * 0.75);
   });
 
@@ -509,5 +513,59 @@ describe('scoped coverage tool semantics', () => {
     expect(coverage.unsyncedDocRoles).toEqual([
       expect.objectContaining({ path: 'docs/api/client.md', term: 'legacyTimeout' })
     ]);
+  });
+
+  it('scopes prepare coveragePlan to the selected child project under parent roots', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'noemaloom-parent-coverage-scope-'));
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({ name: 'parent-coverage-scope' }));
+    await writeProjectFile(projectRoot, 'loop/src/client.ts', 'export function createClient() { return "loop"; }\n');
+    await writeProjectFile(projectRoot, 'loop/tests/client.test.ts', 'import { createClient } from "../src/client";\ntest("loop client", () => createClient());\n');
+    await writeProjectFile(projectRoot, 'loop/docs/client.md', '# Loop Client\n\ncreateClient loop documentation.\n');
+    await writeProjectFile(projectRoot, 'fseg/src/client.ts', 'export function createClient() { return "fseg"; }\n');
+    await writeProjectFile(projectRoot, 'fseg/tests/client.test.ts', 'import { createClient } from "../src/client";\ntest("fseg client", () => createClient());\n');
+    await writeProjectFile(projectRoot, 'fseg/docs/client.md', '# FSEG Client\n\ncreateClient fseg documentation.\n');
+    await callRegisteredTool('nl_refresh', { projectPath: projectRoot, target: 'all', mode: 'safe' });
+
+    const result = await callRegisteredTool('nl_prepare_context', {
+      projectPath: projectRoot,
+      goal: 'update loop createClient implementation and tests',
+      scope: 'loop/src/client.ts loop/tests/client.test.ts',
+      targetRoles: ['source', 'test', 'document'],
+      limit: 5,
+      responseProfile: 'debug'
+    });
+
+    const coveragePlan = (result.data as {
+      coveragePlan: { linkedDocsToVerify: string[]; linkedTestsToVerify: string[] };
+    }).coveragePlan;
+    expect(result.ok).toBe(true);
+    expect([...coveragePlan.linkedDocsToVerify, ...coveragePlan.linkedTestsToVerify]).not.toEqual(
+      expect.arrayContaining(['fseg/docs/client.md', 'fseg/tests/client.test.ts'])
+    );
+    expect(coveragePlan.linkedTestsToVerify).toEqual(expect.arrayContaining(['loop/tests/client.test.ts']));
+  });
+
+  it('keeps a verification surface in readTopSpans before duplicate inspect-only source reads', async () => {
+    const projectRoot = await createLoopLikeProject();
+
+    const result = await callRegisteredTool('nl_prepare_context', {
+      projectPath: projectRoot,
+      goal: 'Find the Python function portfolio_rows and its LoopCert test coverage',
+      targetRoles: ['source', 'test'],
+      readTopSpans: true,
+      maxReadSpans: 2,
+      contextLines: 0,
+      limit: 12,
+      responseProfile: 'debug'
+    });
+
+    const data = result.data as { readSpans: Array<{ path: string }>; readSkipReasons: Array<{ path: string; reason: string }> };
+    expect(result.ok).toBe(true);
+    expect(data.readSpans.map(span => span.path)).toEqual(
+      expect.arrayContaining(['DeepScientist/quests/001/experiments/stage10/tests/test_stage10_loopcert_score.py'])
+    );
+    expect(data.readSkipReasons.filter(item => item.reason === 'maxReadSpans_exceeded').map(item => item.path)).not.toContain(
+      'DeepScientist/quests/001/experiments/stage10/tests/test_stage10_loopcert_score.py'
+    );
   });
 });
