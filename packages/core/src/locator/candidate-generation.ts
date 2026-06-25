@@ -7,7 +7,7 @@ import path from 'node:path';
 import { classifyFileRole } from '../files/role-classifier.js';
 import { languageForPath } from '../files/language.js';
 import type { EnvelopeWarning, GraphState } from '../mcp/envelope.js';
-import { normalizeProjectRelativePath, safeReadFileInsideProject } from '../safety/path-guard.js';
+import { normalizeProjectRelativePath, safeReadFileInsideProject, safeStatInsideProject } from '../safety/path-guard.js';
 import { detectProjectBoundaryWarnings } from '../projects/boundary-warnings.js';
 import type { FileRole, SpanKind } from '../spans/enums.js';
 import { readHotsetManifest, type HotsetManifest } from '../state/hotset.js';
@@ -150,20 +150,41 @@ function editBoundaryForPath(manifest: HotsetManifest, repoPath: string): EditBo
   return manifest.entries.find(entry => entry.path === repoPath)?.editBoundary;
 }
 
-function searchable(row: SpanRow): string {
-  return [
+export type SearchableText = {
+  lower: string;
+  original: string;
+  symbol: string;
+  config: string;
+};
+
+export type SearchableTextInput = {
+  path: string;
+  kind: string;
+  role: string;
+  label: string;
+  indexed_text: string;
+  summary: string;
+  heading_path_json: string;
+  symbol_path_json: string;
+  metadata_json: string;
+};
+
+export function precomputeSearchableText(row: SearchableTextInput): SearchableText {
+  const original = [
     row.path,
-    row.kind,
-    row.role,
     row.label,
     row.indexed_text,
     row.summary,
     row.heading_path_json,
     row.symbol_path_json,
     row.metadata_json
-  ]
-    .join('\n')
-    .toLowerCase();
+  ].join('\n');
+  return {
+    lower: [row.path, row.kind, row.role, original].join('\n').toLowerCase(),
+    original,
+    symbol: [row.label, row.indexed_text, row.symbol_path_json].join('\n'),
+    config: [row.label, row.indexed_text, row.metadata_json].join('\n')
+  };
 }
 
 function hasAny(terms: string[], text: string): boolean {
@@ -181,35 +202,25 @@ function hitEvidence(kind: string, terms: string[], text: string): Array<Record<
     .map(term => ({ kind, value: term }));
 }
 
-function classifySources(row: SpanRow, query: NormalizedQuery): Set<PlanSource> {
-  const text = searchable(row);
-  const originalText = [
-    row.path,
-    row.label,
-    row.indexed_text,
-    row.summary,
-    row.heading_path_json,
-    row.symbol_path_json,
-    row.metadata_json
-  ].join('\n');
+function classifySources(row: SpanRow, query: NormalizedQuery, text: SearchableText): Set<PlanSource> {
   const sources = new Set<PlanSource>();
-  const termHit = hasAny([...query.exactTerms, ...query.symbolTerms, ...query.featureTerms], text);
+  const termHit = hasAny([...query.exactTerms, ...query.symbolTerms, ...query.featureTerms], text.lower);
 
-  if (hasAny(query.exactTerms, text)) sources.add('fts_lexical');
-  if (row.kind.startsWith('code.') && hasExactCase(query.symbolTerms, originalText)) sources.add('code_symbol_name_signature');
-  if (row.kind.startsWith('doc.') && hasAny([...query.docTerms, ...query.symbolTerms, ...query.featureTerms], text)) {
+  if (hasAny(query.exactTerms, text.lower)) sources.add('fts_lexical');
+  if (row.kind.startsWith('code.') && hasExactCase(query.symbolTerms, text.original)) sources.add('code_symbol_name_signature');
+  if (row.kind.startsWith('doc.') && hasAny([...query.docTerms, ...query.symbolTerms, ...query.featureTerms], text.lower)) {
     sources.add('markdown_heading_anchor_inline_code');
   }
   if (
     (row.kind.startsWith('config.') || ['config_file', 'schema_file', 'package_metadata'].includes(row.role)) &&
-    hasExactCase(query.configTerms, originalText)
+    hasExactCase(query.configTerms, text.original)
   ) {
     sources.add('config_cli_env_schema');
   }
   if ((row.kind.startsWith('test.') || row.kind.startsWith('example.') || ['test_file', 'example_doc'].includes(row.role)) && termHit) {
     sources.add('test_example_import_call');
   }
-  if ((row.kind.startsWith('feature.') || row.role === 'feature_plan') && hasAny(query.featureTerms, text)) {
+  if ((row.kind.startsWith('feature.') || row.role === 'feature_plan') && hasAny(query.featureTerms, text.lower)) {
     sources.add('feature_projection');
   }
   if (
@@ -219,7 +230,7 @@ function classifySources(row: SpanRow, query: NormalizedQuery): Set<PlanSource> 
   ) {
     sources.add('path_role_expansion');
   }
-  if (hasExactCase(query.oldTerms, originalText)) sources.add('old_term_sweep');
+  if (hasExactCase(query.oldTerms, text.original)) sources.add('old_term_sweep');
 
   return sources;
 }
@@ -240,9 +251,17 @@ function classifyInventorySources(row: FileRow, query: NormalizedQuery): Set<Pla
   return sources;
 }
 
-async function readCurrentText(projectRoot: string, repoPath: string): Promise<string | undefined> {
+const CURRENT_TEXT_FILE_READ_MAX_BYTES = 256 * 1024;
+const CURRENT_TEXT_CACHE_MAX_BYTES = 2 * 1024 * 1024;
+
+async function readCurrentText(projectRoot: string, repoPath: string, maxBytes: number): Promise<string | undefined> {
   try {
-    return await safeReadFileInsideProject(projectRoot, repoPath, 'utf8');
+    const info = await safeStatInsideProject(projectRoot, repoPath);
+    if (!info.isFile() || info.size > CURRENT_TEXT_FILE_READ_MAX_BYTES || info.size > maxBytes) {
+      return undefined;
+    }
+    const text = await safeReadFileInsideProject(projectRoot, repoPath, 'utf8');
+    return Buffer.byteLength(text, 'utf8') <= maxBytes ? text : undefined;
   } catch {
     return undefined;
   }
@@ -264,6 +283,7 @@ function spanRowToCandidate(input: {
   query: NormalizedQuery;
   sources: Set<PlanSource>;
   edges: EdgeRow[];
+  searchableText: SearchableText;
   currentText?: string;
   includeGeneratedVendor?: boolean;
   editBoundary?: EditBoundary;
@@ -273,9 +293,9 @@ function spanRowToCandidate(input: {
   const metadata = parseJson<Record<string, unknown>>(input.row.metadata_json, {});
   const stableLocator = parseJson<Record<string, unknown>>(input.row.stable_locator_json, {});
   const evidence = [
-    ...hitEvidence('direct_text_match', input.query.exactTerms, searchable(input.row)),
-    ...hitEvidence('symbol_match', input.query.symbolTerms, [input.row.label, input.row.indexed_text, input.row.symbol_path_json].join('\n')),
-    ...hitEvidence('config_match', input.query.configTerms, [input.row.label, input.row.indexed_text, input.row.metadata_json].join('\n'))
+    ...hitEvidence('direct_text_match', input.query.exactTerms, input.searchableText.lower),
+    ...hitEvidence('symbol_match', input.query.symbolTerms, input.searchableText.symbol),
+    ...hitEvidence('config_match', input.query.configTerms, input.searchableText.config)
   ];
   const linkedSpans = linkedSpansFor(input.row, input.edges);
   const file = {
@@ -839,10 +859,13 @@ export async function generateCandidates(input: {
     };
   }
 
+  const searchableBySpanId = new Map<string, SearchableText>();
   const sourceBySpanId = new Map<string, Set<PlanSource>>();
   for (const row of spans) {
+    const searchableText = precomputeSearchableText(row);
+    searchableBySpanId.set(row.span_id, searchableText);
     const sources = new Set<PlanSource>(routeSourcesBySpanId.get(row.span_id));
-    for (const source of classifySources(row, normalizedQuery)) {
+    for (const source of classifySources(row, normalizedQuery, searchableText)) {
       sources.add(source);
     }
     if (sources.size > 0) {
@@ -861,22 +884,31 @@ export async function generateCandidates(input: {
   }
 
   const currentTextByPath = new Map<string, string | undefined>();
+  let currentTextCachedBytes = 0;
+  const cachedCurrentText = async (repoPath: string): Promise<string | undefined> => {
+    if (currentTextByPath.has(repoPath)) return currentTextByPath.get(repoPath);
+    const remainingBytes = CURRENT_TEXT_CACHE_MAX_BYTES - currentTextCachedBytes;
+    const currentText = remainingBytes > 0 ? await readCurrentText(input.projectRoot, repoPath, remainingBytes) : undefined;
+    if (currentText !== undefined) currentTextCachedBytes += Buffer.byteLength(currentText, 'utf8');
+    currentTextByPath.set(repoPath, currentText);
+    return currentText;
+  };
   const candidates: LocatorCandidate[] = [];
   for (const row of spans) {
     const sources = sourceBySpanId.get(row.span_id);
     if (!sources) {
       continue;
     }
-    if (!currentTextByPath.has(row.path)) {
-      currentTextByPath.set(row.path, await readCurrentText(input.projectRoot, row.path));
-    }
+    const currentText = await cachedCurrentText(row.path);
+    const searchableText = searchableBySpanId.get(row.span_id) ?? precomputeSearchableText(row);
     candidates.push(
       spanRowToCandidate({
         row,
         query: normalizedQuery,
         sources,
         edges,
-        currentText: currentTextByPath.get(row.path),
+        searchableText,
+        currentText,
         includeGeneratedVendor: input.includeGeneratedVendor,
         editBoundary: editBoundaryForPath(hotsetManifest, row.path)
       })
@@ -893,14 +925,12 @@ export async function generateCandidates(input: {
     if (sources.size === 0) {
       continue;
     }
-    if (!currentTextByPath.has(row.path)) {
-      currentTextByPath.set(row.path, await readCurrentText(input.projectRoot, row.path));
-    }
+    const currentText = await cachedCurrentText(row.path);
     const candidate = fileRowToCandidate({
       row,
       query: normalizedQuery,
       sources,
-      currentText: currentTextByPath.get(row.path),
+      currentText,
       includeGeneratedVendor: input.includeGeneratedVendor,
       editBoundary: editBoundaryForPath(hotsetManifest, row.path)
     });

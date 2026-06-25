@@ -127,4 +127,29 @@ describe('code fact extractor', () => {
     expect(callsites).toHaveLength(1000);
     expect(callsites.some(span => span.label === 'afterLongLine')).toBe(false);
   });
+
+  it('bounds module span text without dropping precise child spans', () => {
+    const text = [
+      'export const before = 1;',
+      '/*',
+      'x'.repeat(12_000),
+      '*/',
+      'export function keepMe() {',
+      '  return before;',
+      '}'
+    ].join('\n');
+
+    const result = extractCodeFacts({ projectRoot: '/repo', path: 'src/large-module.ts', language: 'typescript', text });
+    const module = result.spans.find(span => span.kind === 'code.module');
+    const functionSpan = result.spans.find(span => span.kind === 'code.function' && span.label === 'keepMe');
+
+    expect(Buffer.byteLength(module?.text ?? '', 'utf8')).toBeLessThanOrEqual(8192);
+    expect(module?.metadata).toMatchObject({
+      language: 'typescript',
+      moduleTextTruncatedAtExtract: true,
+      originalModuleTextBytes: Buffer.byteLength(text, 'utf8'),
+      originalModuleTextHash: expect.stringMatching(/^[a-f0-9]{40}$/)
+    });
+    expect(functionSpan?.text).toContain('return before;');
+  });
 });

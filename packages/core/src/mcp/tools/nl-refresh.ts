@@ -23,6 +23,7 @@ import { resolveNoemaLoomPaths } from '../../state/paths.js';
 import { createGraphRevision, readIndexCoverage, readLatestRevision, writeRefreshRevision, type IndexCoverage } from '../../state/refresh-revision.js';
 import { clearRefreshFailure, recordRefreshFailure, refreshFailureMessage } from '../../state/refresh-failure.js';
 import { withRefreshLock } from '../../state/refresh-lock.js';
+import { cleanupOldStateFiles } from '../../state/retention.js';
 import { ensureStateDir } from '../../state/state-dir.js';
 import { writeTransientBackup } from '../../state/transient-backup.js';
 import { loadOrCreateConfig } from '../../config/config-loader.js';
@@ -84,6 +85,7 @@ const SCOPED_REFRESH_STEPS = [
 ] as const;
 
 const FILE_REFRESH_STEPS = ['FileInventory'] as const;
+const MAX_QUARANTINED_SQLITE_FILES = 5;
 
 function isDocument(file: InventoryFile, scoped: boolean): boolean {
   if (!['markdown', 'mdx', 'rst'].includes(file.language)) {
@@ -305,6 +307,14 @@ async function quarantineCorruptSqliteGroup(input: { projectRoot: string; target
     if (destination) {
       moved.push(destination);
     }
+  }
+  if (moved.length > 0) {
+    await cleanupOldStateFiles({
+      projectRoot: input.projectRoot,
+      directory: quarantineDir,
+      keepNewest: MAX_QUARANTINED_SQLITE_FILES,
+      match: () => true
+    });
   }
   return moved;
 }

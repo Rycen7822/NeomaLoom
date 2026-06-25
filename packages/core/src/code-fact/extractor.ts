@@ -2,6 +2,13 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import type { EdgeRelation, SpanKind } from '../spans/enums.js';
+import {
+  byteLengthUtf8,
+  MAX_REPO_SPAN_INDEXED_TEXT_BYTES,
+  sha1Text,
+  truncateIndexedText,
+  truncatedIndexedTextRelocationMetadata
+} from '../spans/indexed-text-bounds.js';
 import { createCodeSpanId } from '../spans/span-id.js';
 import { detectFallbackBoundary, detectTypescriptBlockBoundary, wrapPythonBlockBoundary, type CodeBoundary } from './boundary-parser.js';
 
@@ -50,6 +57,24 @@ type CallsiteBudget = {
 
 function sha1(value: string): string {
   return createHash('sha1').update(value).digest('hex');
+}
+
+function moduleIndexedText(text: string, lineCount: number): { text: string; metadata: Record<string, unknown> } {
+  const originalBytes = byteLengthUtf8(text);
+  if (originalBytes <= MAX_REPO_SPAN_INDEXED_TEXT_BYTES) return { text, metadata: {} };
+  const originalHash = sha1Text(text);
+  return {
+    text: truncateIndexedText(text),
+    metadata: {
+      moduleTextTruncatedAtExtract: true,
+      indexedTextTruncatedAtWrite: true,
+      originalModuleTextBytes: originalBytes,
+      originalModuleTextHash: originalHash,
+      originalIndexedTextBytes: originalBytes,
+      originalIndexedTextHash: originalHash,
+      ...truncatedIndexedTextRelocationMetadata({ text, lineCount })
+    }
+  };
 }
 
 function textLine(lines: string[], line: number): string {
@@ -665,6 +690,7 @@ function addJavaFamilySpans(input: ExtractCodeFactsInput, lines: string[], spans
 
 export function extractCodeFacts(input: ExtractCodeFactsInput): ExtractCodeFactsResult {
   const lines = input.text.split(/\r?\n/);
+  const moduleText = moduleIndexedText(input.text, lines.length);
   const spans: CodeFactSpan[] = [
     createSpan({
       projectRoot: input.projectRoot,
@@ -673,11 +699,12 @@ export function extractCodeFacts(input: ExtractCodeFactsInput): ExtractCodeFacts
       label: moduleLabel(input.path),
       startLine: 1,
       endLine: lines.length,
-      text: input.text,
+      text: moduleText.text,
       metadata: {
         qualifiedName: input.path,
         signature: moduleLabel(input.path),
-        language: input.language
+        language: input.language,
+        ...moduleText.metadata
       }
     })
   ];

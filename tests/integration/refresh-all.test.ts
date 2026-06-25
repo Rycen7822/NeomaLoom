@@ -290,10 +290,15 @@ describe('nl_refresh target all', () => {
     expect(status.nextActions).toEqual(expect.arrayContaining([expect.stringContaining('retry nl_refresh')]));
   });
 
-  it('quarantines corrupt span DB evidence during target files refresh', async () => {
+  it('quarantines corrupt span DB evidence during target files refresh and caps old quarantined files', async () => {
     const projectRoot = await createProject();
     const spansDir = path.join(projectRoot, '.noemaloom', 'spans');
+    const quarantineDir = path.join(projectRoot, '.noemaloom', 'transient', 'quarantine');
     await mkdir(spansDir, { recursive: true });
+    await mkdir(quarantineDir, { recursive: true });
+    for (let index = 0; index < 7; index += 1) {
+      await writeFile(path.join(quarantineDir, `170000000000${index}-999-spans__old-${index}.db`), `old ${index}\n`);
+    }
     await writeFile(path.join(spansDir, 'spans.db'), '');
 
     const result = await callRegisteredTool('nl_refresh', { projectPath: projectRoot, target: 'files', mode: 'safe' });
@@ -301,8 +306,9 @@ describe('nl_refresh target all', () => {
     expect(result.ok).toBe(true);
     expect(result.warnings).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining('corrupt sqlite evidence moved') })]));
     await expect(access(path.join(spansDir, 'spans.db'))).rejects.toThrow();
-    const quarantined = await readdir(path.join(projectRoot, '.noemaloom', 'transient', 'quarantine'));
+    const quarantined = await readdir(quarantineDir);
     expect(quarantined.some(name => name.includes('spans__spans.db'))).toBe(true);
+    expect(quarantined).toHaveLength(5);
   });
 
   it('invalidates stale deep indexes when target files is run after a full refresh', async () => {

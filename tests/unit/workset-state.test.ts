@@ -107,6 +107,25 @@ describe('NoemaLoom navigation workset state', () => {
     expect(currentEvents).toContain('navigation_query');
   });
 
+  it('caps rotated workset event logs to the newest retained files', async () => {
+    const projectRoot = await createTempProject();
+    const paths = resolveNoemaLoomPaths(projectRoot);
+    await mkdir(paths.worksetDir, { recursive: true });
+    for (let index = 0; index < 7; index += 1) {
+      await writeFile(path.join(paths.worksetDir, `events.2026-06-25T00-00-0${index}-000Z.jsonl`), `old ${index}\n`);
+    }
+    await writeFile(path.join(paths.worksetDir, 'events.jsonl'), `${'x'.repeat(5 * 1024 * 1024 + 32)}\n`);
+
+    await recordNavigationTargets({
+      projectRoot,
+      targets: [{ spanId: 'retained', path: 'src/retained.ts', kind: 'code.function', role: 'source_file', label: 'retained', score: 100 }]
+    });
+
+    const worksetFiles = await readdir(paths.worksetDir);
+    const rotated = worksetFiles.filter(file => /^events\..+\.jsonl$/.test(file));
+    expect(rotated).toHaveLength(5);
+  });
+
   it('falls back to an empty workset manifest when anchors.json is corrupt', async () => {
     const projectRoot = await createTempProject();
     const paths = resolveNoemaLoomPaths(projectRoot);
@@ -323,5 +342,28 @@ describe('NoemaLoom navigation workset state', () => {
     const reloaded = await readWorksetManifest(projectRoot);
     expect(reloaded.anchors[0]).toMatchObject({ state: 'archived', source: 'agent_curated', reason: 'agent confirmed cold' });
     expect(worksetRevision(reloaded)).not.toBe(before);
+  });
+
+  it('caps tombstones when normalizing persisted worksets and keeps newest retire records', async () => {
+    const projectRoot = await createTempProject();
+    const base = createEmptyWorksetManifest(projectRoot);
+    await writeWorksetManifest(projectRoot, {
+      ...base,
+      tombstones: Array.from({ length: 540 }, (_, index) => ({
+        id: `old-${index}`,
+        path: `src/old-${index}.ts`,
+        reason: 'retired',
+        tombstonedAt: `2026-06-21T00:${String(index % 60).padStart(2, '0')}:00.000Z`,
+        tombstonedSeq: index
+      }))
+    });
+
+    const reloaded = await readWorksetManifest(projectRoot);
+    const ids = new Set(reloaded.tombstones.map(entry => entry.id));
+
+    expect(reloaded.tombstones).toHaveLength(512);
+    expect(ids.has('old-0')).toBe(false);
+    expect(ids.has('old-28')).toBe(true);
+    expect(ids.has('old-539')).toBe(true);
   });
 });

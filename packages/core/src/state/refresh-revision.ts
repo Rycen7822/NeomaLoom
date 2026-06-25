@@ -1,5 +1,4 @@
 import { rename, stat, unlink } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
@@ -7,8 +6,16 @@ import type { InventoryFile } from '../files/file-inventory.js';
 import { assertWritableStatePath, appendFileInsideStateDir, writeFileInsideStateDir } from '../safety/path-guard.js';
 import { redactText } from '../safety/redaction.js';
 import { applySpanMigrations } from '../spans/db.js';
+import {
+  byteLengthUtf8,
+  MAX_REPO_SPAN_INDEXED_TEXT_BYTES,
+  sha1Text,
+  truncateIndexedText,
+  truncatedIndexedTextRelocationMetadata
+} from '../spans/indexed-text-bounds.js';
 import { buildRetrievalCoreRecords } from '../spans/retrieval-core.js';
 import type { RepoEdge, RepoSpan } from '../spans/types.js';
+import { cleanupOldStateFiles } from './retention.js';
 import { ensureStateDir } from './state-dir.js';
 import { resolveNoemaLoomPaths } from './paths.js';
 
@@ -51,85 +58,42 @@ function openDatabase(filename: string): Database {
 }
 
 function sha1(value: string): string {
-  return createHash('sha1').update(value).digest('hex');
+  return sha1Text(value);
 }
 
-const MAX_REPO_SPAN_INDEXED_TEXT_BYTES = 8192;
 const MAX_REPO_SPAN_LABEL_BYTES = 1024;
 const MAX_REPO_SPAN_SUMMARY_BYTES = 2048;
 const MAX_REFRESH_REVISIONS = 50;
 const MAX_REFRESH_LOG_BYTES = 1_048_576;
-const RELOCATION_FINGERPRINT_LINES = 8;
-
-function byteLength(value: string): number {
-  return Buffer.byteLength(value, 'utf8');
-}
-
-function truncateUtf8(value: string, maxBytes: number): string {
-  if (byteLength(value) <= maxBytes) {
-    return value;
-  }
-  const suffix = '\n…[truncated]';
-  const suffixBytes = byteLength(suffix);
-  let output = '';
-  let used = 0;
-  for (const char of value) {
-    const charBytes = byteLength(char);
-    if (used + charBytes + suffixBytes > maxBytes) {
-      break;
-    }
-    output += char;
-    used += charBytes;
-  }
-  return `${output}${suffix}`;
-}
-
-function fingerprintLines(text: string): string[] {
-  return text.split(/\r?\n/).map(line => line.trimEnd());
-}
-
-function hashLines(lines: string[]): string {
-  return sha1(lines.join('\n'));
-}
-
-function truncatedSpanRelocationMetadata(span: RepoSpan, indexedText: string): Record<string, unknown> {
-  const lines = fingerprintLines(indexedText);
-  const lineCount = Math.max(1, span.endLine - span.startLine + 1);
-  const fingerprintLineCount = Math.min(RELOCATION_FINGERPRINT_LINES, Math.max(1, lines.length));
-  return {
-    relocationLineCount: lineCount,
-    relocationFingerprintLineCount: fingerprintLineCount,
-    relocationFirstLineHash: hashLines(lines.slice(0, 1)),
-    relocationLastLineHash: hashLines(lines.slice(-1)),
-    relocationPrefixHash: hashLines(lines.slice(0, fingerprintLineCount)),
-    relocationSuffixHash: hashLines(lines.slice(-fingerprintLineCount))
-  };
-}
+const MAX_ROTATED_REFRESH_LOGS = 5;
 
 function boundedIndexedText(span: RepoSpan): { indexedText: string; metadata: Record<string, unknown> } {
   const redaction = redactText(span.indexedText);
   const metadata: Record<string, unknown> = redaction.hasSensitiveContent
     ? { ...span.metadata, redactedAtIndexWrite: true, redactedKinds: redaction.redactedKinds }
     : span.metadata;
-  const originalBytes = byteLength(redaction.redactedText);
+  const originalBytes = byteLengthUtf8(redaction.redactedText);
   if (originalBytes <= MAX_REPO_SPAN_INDEXED_TEXT_BYTES) {
     return { indexedText: redaction.redactedText, metadata };
   }
   return {
-    indexedText: truncateUtf8(redaction.redactedText, MAX_REPO_SPAN_INDEXED_TEXT_BYTES),
+    indexedText: truncateIndexedText(redaction.redactedText),
     metadata: {
       ...metadata,
       indexedTextTruncatedAtWrite: true,
-      originalIndexedTextBytes: byteLength(span.indexedText),
+      originalIndexedTextBytes: byteLengthUtf8(span.indexedText),
       originalIndexedTextHash: sha1(span.indexedText),
-      ...truncatedSpanRelocationMetadata(span, redaction.redactedText)
+      ...truncatedIndexedTextRelocationMetadata({
+        text: redaction.redactedText,
+        lineCount: Math.max(1, span.endLine - span.startLine + 1)
+      })
     }
   };
 }
 
 function boundedField(value: string, maxBytes: number): string {
   const redacted = redactText(value).redactedText;
-  return byteLength(redacted) <= maxBytes ? redacted : truncateUtf8(redacted, maxBytes);
+  return byteLengthUtf8(redacted) <= maxBytes ? redacted : truncateIndexedText(redacted, maxBytes);
 }
 
 function uniqueBy<T>(items: T[], keyFor: (item: T) => string): T[] {
@@ -234,6 +198,12 @@ async function rotateRefreshLogIfLarge(projectRoot: string, logPath: string): Pr
     path.join(paths.logsDir, `refresh.${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`)
   );
   await rename(logPath, rotated);
+  await cleanupOldStateFiles({
+    projectRoot,
+    directory: paths.logsDir,
+    keepNewest: MAX_ROTATED_REFRESH_LOGS,
+    match: fileName => /^refresh\..+\.jsonl$/.test(fileName)
+  });
 }
 
 export function createGraphRevision(input: {
@@ -350,7 +320,7 @@ export async function writeRefreshRevision(input: {
 
   try {
     resetSchema(db);
-    db.exec('PRAGMA synchronous = OFF; PRAGMA journal_mode = MEMORY; PRAGMA temp_store = MEMORY; BEGIN IMMEDIATE;');
+    db.exec('PRAGMA synchronous = OFF; PRAGMA journal_mode = OFF; PRAGMA temp_store = FILE; BEGIN IMMEDIATE;');
     transactionActive = true;
     const insertFile = db.prepare(
       `INSERT INTO repo_files

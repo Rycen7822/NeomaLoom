@@ -165,4 +165,20 @@ describe('refresh revision persistence', () => {
     expect(entries.some(entry => /^refresh\..+\.jsonl$/.test(entry))).toBe(true);
     expect((await stat(path.join(logsDir, 'refresh.jsonl'))).size).toBeLessThan(10_000);
   });
+
+  it('caps rotated refresh jsonl logs to the newest retained files', async () => {
+    const projectRoot = await createProject();
+    const logsDir = path.join(projectRoot, '.noemaloom', 'logs');
+    await mkdir(logsDir, { recursive: true });
+    for (let index = 0; index < 7; index += 1) {
+      await writeFile(path.join(logsDir, `refresh.2026-06-25T00-00-0${index}-000Z.jsonl`), `old ${index}\n`);
+    }
+    await writeFile(path.join(logsDir, 'refresh.jsonl'), `${'x'.repeat(1_100_000)}\n`);
+
+    await writeRevision(projectRoot, 1);
+
+    const entries = await readdir(logsDir);
+    const rotated = entries.filter(entry => /^refresh\..+\.jsonl$/.test(entry));
+    expect(rotated).toHaveLength(5);
+  });
 });

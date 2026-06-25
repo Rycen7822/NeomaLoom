@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import { appendFileInsideStateDir, openExclusiveFileInsideStateDir, renameInsideStateDir, unlinkInsideStateDir, writeFileInsideStateDir } from '../safety/path-guard.js';
 import { processIsAlive } from './refresh-lock.js';
+import { cleanupOldStateFiles } from './retention.js';
 import { ensureStateDir } from './state-dir.js';
 import { resolveNoemaLoomPaths } from './paths.js';
 
@@ -150,9 +151,23 @@ const DEFAULT_OPTIONS: WorksetOptions = {
 
 const WORKSET_LOCK_TTL_MS = 5 * 60_000;
 const WORKSET_EVENTS_MAX_BYTES = 5 * 1024 * 1024;
+const WORKSET_ROTATED_EVENTS_RETAIN_MAX = 5;
+const WORKSET_TOMBSTONE_HARD_MAX = 512;
 
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && 'code' in error;
+}
+
+function capTombstones(tombstones: WorksetManifest['tombstones']): WorksetManifest['tombstones'] {
+  return [...tombstones]
+    .sort((left, right) =>
+      right.tombstonedSeq - left.tombstonedSeq ||
+      right.tombstonedAt.localeCompare(left.tombstonedAt) ||
+      right.id.localeCompare(left.id) ||
+      right.path.localeCompare(left.path)
+    )
+    .slice(0, WORKSET_TOMBSTONE_HARD_MAX)
+    .sort((left, right) => left.tombstonedSeq - right.tombstonedSeq || left.id.localeCompare(right.id));
 }
 
 function worksetLockPath(projectRoot: string): string {
@@ -384,7 +399,7 @@ function normalizeManifest(projectRoot: string, value: unknown, at = nowIso()): 
   const tombstoneInput = Array.isArray((raw as { tombstones?: unknown }).tombstones)
     ? (raw as { tombstones: unknown[] }).tombstones
     : [];
-  const tombstones = tombstoneInput
+  const tombstones = capTombstones(tombstoneInput
     .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object' && typeof (entry as { id?: unknown }).id === 'string' && typeof (entry as { path?: unknown }).path === 'string')
     .map(entry => ({
       id: entry.id as string,
@@ -392,7 +407,7 @@ function normalizeManifest(projectRoot: string, value: unknown, at = nowIso()): 
       reason: typeof entry.reason === 'string' ? entry.reason : 'retired',
       tombstonedAt: typeof entry.tombstonedAt === 'string' ? entry.tombstonedAt : at,
       tombstonedSeq: finiteNumber(entry.tombstonedSeq, counters.projectActivitySeq)
-    }));
+    })));
   return {
     version: 1,
     projectRootHash: projectRootHash(projectRoot),
@@ -471,6 +486,12 @@ async function rotateWorksetEventsIfLarge(projectRoot: string, eventsFile: strin
   }
   const suffix = nowIso().replace(/[:.]/g, '-');
   await renameInsideStateDir(projectRoot, eventsFile, path.join(path.dirname(eventsFile), `events.${suffix}.jsonl`));
+  await cleanupOldStateFiles({
+    projectRoot,
+    directory: path.dirname(eventsFile),
+    keepNewest: WORKSET_ROTATED_EVENTS_RETAIN_MAX,
+    match: fileName => /^events\..+\.jsonl$/.test(fileName)
+  });
 }
 
 async function appendWorksetEventUnlocked(projectRoot: string, event: Record<string, unknown>): Promise<void> {
@@ -824,13 +845,14 @@ export function retireAnchor(manifest: WorksetManifest, anchorId: string, reason
   const retired = manifest.anchors.find(anchor => anchor.id === anchorId);
   const anchors = manifest.anchors.filter(anchor => anchor.id !== anchorId);
   const tombstoneExists = manifest.tombstones.some(entry => entry.id === anchorId);
+  const nextTombstones = retired && !tombstoneExists
+    ? capTombstones([...manifest.tombstones, { id: retired.id, path: retired.path, reason, tombstonedAt: at, tombstonedSeq: nextCounters.projectActivitySeq }])
+    : manifest.tombstones;
   return {
     ...manifest,
     counters: nextCounters,
     anchors,
-    tombstones: retired && !tombstoneExists
-      ? [...manifest.tombstones, { id: retired.id, path: retired.path, reason, tombstonedAt: at, tombstonedSeq: nextCounters.projectActivitySeq }]
-      : manifest.tombstones
+    tombstones: nextTombstones
   };
 }
 

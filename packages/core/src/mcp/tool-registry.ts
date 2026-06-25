@@ -267,12 +267,15 @@ function createToolDefinition(name: NoemaLoomToolName): NoemaLoomToolDefinition 
   };
 }
 
+const PUBLIC_TOOL_REGISTRY = NOEMALOOM_TOOL_NAMES.map(createToolDefinition);
+const INTERNAL_TOOL_REGISTRY = [...NOEMALOOM_TOOL_NAMES, ...NOEMALOOM_HIDDEN_TOOL_NAMES].map(createToolDefinition);
+
 export function createToolRegistry(): NoemaLoomToolDefinition[] {
-  return NOEMALOOM_TOOL_NAMES.map(createToolDefinition);
+  return [...PUBLIC_TOOL_REGISTRY];
 }
 
 export function createInternalToolRegistry(): NoemaLoomToolDefinition[] {
-  return [...NOEMALOOM_TOOL_NAMES, ...NOEMALOOM_HIDDEN_TOOL_NAMES].map(createToolDefinition);
+  return [...INTERNAL_TOOL_REGISTRY];
 }
 
 export async function callRegisteredTool(toolName: string, args: unknown): Promise<NoemaLoomEnvelope> {
@@ -283,7 +286,7 @@ export async function callRegisteredTool(toolName: string, args: unknown): Promi
     return createToolUnavailableEnvelope(toolName, resolveProjectRootFromInput(args));
   }
 
-  const tool = createToolRegistry().find(candidate => candidate.name === toolName);
+  const tool = PUBLIC_TOOL_REGISTRY.find(candidate => candidate.name === toolName);
 
   if (!tool) {
     return createToolUnavailableEnvelope(toolName, resolveProjectRootFromInput(args));
@@ -300,7 +303,7 @@ export async function callInternalTool(toolName: string, args: unknown): Promise
     return createToolUnavailableEnvelope(toolName, resolveProjectRootFromInput(args));
   }
 
-  const tool = createInternalToolRegistry().find(candidate => candidate.name === toolName);
+  const tool = INTERNAL_TOOL_REGISTRY.find(candidate => candidate.name === toolName);
 
   if (!tool) {
     return createToolUnavailableEnvelope(toolName, resolveProjectRootFromInput(args));
