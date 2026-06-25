@@ -236,17 +236,81 @@ describe('CodeGraph-derived code fact indexer', () => {
     await writeProjectFile(
       projectRoot,
       'src/server.go',
-      ['package main', '', 'func Serve() {', '  Handle()', '}', '', 'func Handle() {}', ''].join('\n')
+      [
+        'package main',
+        '',
+        'type Server struct{}',
+        'func (s *Server) Start() error {',
+        '  Handle()',
+        '  return nil',
+        '}',
+        '',
+        'func Serve() {',
+        '  Handle()',
+        '}',
+        '',
+        'func Handle() {}',
+        ''
+      ].join('\n')
     );
     await writeProjectFile(
       projectRoot,
       'src/lib.rs',
-      ['pub fn compute() -> i32 {', '  helper()', '}', '', 'fn helper() -> i32 { 1 }', ''].join('\n')
+      [
+        'pub(crate) fn internal() -> i32 { helper() }',
+        'unsafe fn dangerous() {}',
+        'const fn computed() -> usize { 1 }',
+        'async fn fetch() {}',
+        'pub async fn handler() {}',
+        'pub fn compute() -> i32 {',
+        '  helper()',
+        '}',
+        '',
+        'fn helper() -> i32 { 1 }',
+        ''
+      ].join('\n')
     );
     await writeProjectFile(
       projectRoot,
       'src/Client.java',
-      ['class Client {', '  void handle() {', '    save();', '  }', '  void save() {}', '}', ''].join('\n')
+      [
+        'class Client {',
+        '  public synchronized String[] names() { return new String[0]; }',
+        '  native int call();',
+        '  void handle() {',
+        '    save();',
+        '  }',
+        '  void save() {}',
+        '}',
+        ''
+      ].join('\n')
+    );
+    await writeProjectFile(
+      projectRoot,
+      'src/Demo.kt',
+      ['class Demo {', '  suspend fun load(): String = ""', '  fun plain() {}', '}', ''].join('\n')
+    );
+    await writeProjectFile(
+      projectRoot,
+      'src/Demo.scala',
+      ['class Demo {', '  def run(x: Int): Int = x', '}', ''].join('\n')
+    );
+    await writeProjectFile(
+      projectRoot,
+      'src/settings.py',
+      [
+        'def foo(',
+        '    x: str = """hello',
+        '(world',
+        '""",',
+        '    y: int = 0,',
+        '):',
+        '    return y',
+        '',
+        'def bar():',
+        '    return 1',
+        ''
+      ].join('\n')
     );
 
     const result = await indexCodeFacts({ projectRoot });
@@ -254,13 +318,29 @@ describe('CodeGraph-derived code fact indexer', () => {
     expect(result.spans).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ kind: 'code.function', path: 'src/server.go', label: 'Serve' }),
+        expect.objectContaining({ kind: 'code.method', path: 'src/server.go', label: 'Start' }),
         expect.objectContaining({ kind: 'code.function', path: 'src/lib.rs', label: 'compute' }),
+        expect.objectContaining({ kind: 'code.function', path: 'src/lib.rs', label: 'internal' }),
+        expect.objectContaining({ kind: 'code.function', path: 'src/lib.rs', label: 'dangerous' }),
+        expect.objectContaining({ kind: 'code.function', path: 'src/lib.rs', label: 'computed' }),
+        expect.objectContaining({ kind: 'code.function', path: 'src/lib.rs', label: 'fetch' }),
+        expect.objectContaining({ kind: 'code.function', path: 'src/lib.rs', label: 'handler' }),
         expect.objectContaining({ kind: 'code.class', path: 'src/Client.java', label: 'Client' }),
-        expect.objectContaining({ kind: 'code.method', path: 'src/Client.java', label: 'handle' })
+        expect.objectContaining({ kind: 'code.method', path: 'src/Client.java', label: 'handle' }),
+        expect.objectContaining({ kind: 'code.method', path: 'src/Client.java', label: 'names' }),
+        expect.objectContaining({ kind: 'code.method', path: 'src/Client.java', label: 'call' }),
+        expect.objectContaining({ kind: 'code.class', path: 'src/Demo.kt', label: 'Demo' }),
+        expect.objectContaining({ kind: 'code.method', path: 'src/Demo.kt', label: 'load' }),
+        expect.objectContaining({ kind: 'code.method', path: 'src/Demo.scala', label: 'run' }),
+        expect.objectContaining({ kind: 'code.function', path: 'src/settings.py', label: 'foo', endLine: 7 }),
+        expect.objectContaining({ kind: 'code.function', path: 'src/settings.py', label: 'bar', endLine: 10 })
       ])
     );
+    const foo = result.spans.find(span => span.path === 'src/settings.py' && span.label === 'foo');
+    expect(foo?.metadata.signature).not.toContain('def bar');
     expect(result.edges).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({ relation: 'calls', sourceLabel: 'Start', targetLabel: 'Handle' }),
         expect.objectContaining({ relation: 'calls', sourceLabel: 'Serve', targetLabel: 'Handle' }),
         expect.objectContaining({ relation: 'calls', sourceLabel: 'compute', targetLabel: 'helper' }),
         expect.objectContaining({ relation: 'calls', sourceLabel: 'handle', targetLabel: 'save' })

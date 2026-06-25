@@ -292,6 +292,13 @@ function uniqueBy<T>(items: T[], keyFor: (item: T) => string): T[] {
 export function buildProjectionGraph(input: BuildProjectionGraphInput): ProjectionGraph {
   const fileSpans = [...input.files].sort((left, right) => left.path.localeCompare(right.path)).map(file => fileSpan(input.projectRoot, file));
   const fileByPath = new Map(fileSpans.map(span => [span.path, span]));
+  const documentOrdinalByPath = new Map<string, number>();
+  const nextDocumentOrdinal = (span: DocumentSpan): number => {
+    const key = repoPath(span.path);
+    const ordinal = documentOrdinalByPath.get(key) ?? 0;
+    documentOrdinalByPath.set(key, ordinal + 1);
+    return ordinal;
+  };
   const projected = [
     ...input.codeSpans.map(span =>
       createRepoSpan({
@@ -311,7 +318,7 @@ export function buildProjectionGraph(input: BuildProjectionGraphInput): Projecti
         source: 'code-fact-indexer'
       })
     ),
-    ...input.documentSpans.map((span, index) => projectDocumentSpan(input.projectRoot, span, index)),
+    ...input.documentSpans.map(span => projectDocumentSpan(input.projectRoot, span, nextDocumentOrdinal(span))),
     ...input.artifactSpans.map(span => projectArtifactSpan(input.projectRoot, span)),
     ...input.testExampleSpans.map(span => projectTestExampleSpan(input.projectRoot, span))
   ];

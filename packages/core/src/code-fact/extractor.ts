@@ -175,7 +175,7 @@ function addCallsiteSpans(input: {
     const startColumn = Math.max(1, zeroBasedColumn + 1);
     const endColumn = startColumn + call[0].length - 1;
     if (
-      ['if', 'for', 'while', 'switch', 'function', 'return'].includes(name) ||
+      ['if', 'for', 'while', 'switch', 'function', 'func', 'fn', 'fun', 'def', 'class', 'pub', 'async', 'unsafe', 'const', 'native', 'return'].includes(name) ||
       name === input.callerLabel ||
       name === input.declarationName
     ) {
@@ -361,32 +361,42 @@ function isBlankOrComment(line: string): boolean {
   return trimmed.length === 0 || trimmed.startsWith('#');
 }
 
-function countParens(line: string): number {
+type PythonStringScanState = {
+  quote?: "'" | '"' | "'''" | '"""';
+  escaped?: boolean;
+};
+
+function countParens(line: string, state: PythonStringScanState): number {
   let delta = 0;
-  let quote: 'single' | 'double' | undefined;
-  let escaped = false;
   for (let index = 0; index < line.length; index += 1) {
     const char = line[index];
-    if (quote) {
-      if (escaped) {
-        escaped = false;
+    if (state.quote === "'''" || state.quote === '"""') {
+      if (line.startsWith(state.quote, index)) {
+        state.quote = undefined;
+        index += 2;
+      }
+      continue;
+    }
+    if (state.quote) {
+      if (state.escaped) {
+        state.escaped = false;
         continue;
       }
       if (char === '\\') {
-        escaped = true;
+        state.escaped = true;
         continue;
       }
-      if (quote === 'single' && char === "'") quote = undefined;
-      else if (quote === 'double' && char === '"') quote = undefined;
+      if (char === state.quote) state.quote = undefined;
       continue;
     }
     if (char === '#') break;
-    if (char === "'") {
-      quote = 'single';
+    if (line.startsWith("'''", index) || line.startsWith('"""', index)) {
+      state.quote = line.startsWith("'''", index) ? "'''" : '"""';
+      index += 2;
       continue;
     }
-    if (char === '"') {
-      quote = 'double';
+    if (char === "'" || char === '"') {
+      state.quote = char;
       continue;
     }
     if (char === '(') delta += 1;
@@ -423,12 +433,13 @@ function pythonSignature(input: { lines: string[]; startIndex: number }): {
     return undefined;
   }
   const collected: string[] = [];
+  const scanState: PythonStringScanState = {};
   let balance = 0;
   let signatureEndIndex = input.startIndex;
   for (let index = input.startIndex; index < input.lines.length; index += 1) {
     const line = input.lines[index];
     collected.push(line);
-    balance += countParens(line);
+    balance += countParens(line, scanState);
     if (balance <= 0 && /:\s*(?:#.*)?$/.test(line)) {
       signatureEndIndex = index;
       break;
@@ -518,21 +529,24 @@ function addGoSpans(input: ExtractCodeFactsInput, lines: string[], spans: CodeFa
   let currentCallable: string | undefined;
   lines.forEach((line, index) => {
     const lineNumber = index + 1;
-    const functionMatch = line.match(/^func\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)/);
-    const declarationName = functionMatch?.[1];
-    if (functionMatch) {
-      currentCallable = functionMatch[1];
+    const methodMatch = line.match(/^func\s*\(([^)]*)\)\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)/);
+    const functionMatch = methodMatch ? undefined : line.match(/^func\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)/);
+    const declarationName = methodMatch?.[2] ?? functionMatch?.[1];
+    if (methodMatch || functionMatch) {
+      const name = declarationName ?? '';
+      currentCallable = name;
       spans.push(
         createSpan({
           projectRoot: input.projectRoot,
-          kind: 'code.function',
+          kind: methodMatch ? 'code.method' : 'code.function',
           path: input.path,
-          label: functionMatch[1],
+          label: name,
           startLine: lineNumber,
           text: line,
           metadata: {
-            qualifiedName: `${input.path}:${functionMatch[1]}`,
-            signature: signatureForFunction(functionMatch[1], functionMatch[2])
+            qualifiedName: `${input.path}:${name}`,
+            signature: signatureForFunction(name, methodMatch?.[3] ?? functionMatch?.[2] ?? ''),
+            ...(methodMatch ? { receiver: methodMatch[1].trim() } : {})
           }
         })
       );
@@ -552,9 +566,10 @@ function addGoSpans(input: ExtractCodeFactsInput, lines: string[], spans: CodeFa
 
 function addRustSpans(input: ExtractCodeFactsInput, lines: string[], spans: CodeFactSpan[], budget: CallsiteBudget): void {
   let currentCallable: string | undefined;
+  const rustFunctionPattern = /^\s*(?:pub(?:\([^)]*\))?\s+)?(?:(?:async|const|unsafe)\s+)*fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:->\s*([^{]+))?/;
   lines.forEach((line, index) => {
     const lineNumber = index + 1;
-    const functionMatch = line.match(/^\s*(?:pub\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:->\s*([^{]+))?/);
+    const functionMatch = line.match(rustFunctionPattern);
     const declarationName = functionMatch?.[1];
     if (functionMatch) {
       currentCallable = functionMatch[1];
@@ -591,7 +606,7 @@ function addJavaFamilySpans(input: ExtractCodeFactsInput, lines: string[], spans
   let currentCallable: string | undefined;
   lines.forEach((line, index) => {
     const lineNumber = index + 1;
-    const classMatch = line.match(/^\s*(?:public\s+)?class\s+([A-Za-z_][A-Za-z0-9_]*)/);
+    const classMatch = line.match(/^\s*(?:(?:public|private|protected|final|abstract|sealed|open)\s+)*class\s+([A-Za-z_][A-Za-z0-9_]*)/);
     if (classMatch) {
       currentClass = classMatch[1];
       spans.push(
@@ -611,9 +626,11 @@ function addJavaFamilySpans(input: ExtractCodeFactsInput, lines: string[], spans
       return;
     }
 
-    const methodMatch = line.match(
-      /^\s*(?:(?:public|private|protected)\s+)?(?:static\s+)?(?:void|[A-Za-z0-9_<>,.?]+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)/
-    );
+    const methodMatch = input.language === 'kotlin'
+      ? line.match(/^\s*(?:(?:public|private|protected|internal|override|suspend|inline|tailrec|operator)\s+)*fun\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?::\s*([^= {]+))?/)
+      : input.language === 'scala'
+        ? line.match(/^\s*(?:(?:override|private|protected|final)\s+)*def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?::\s*([^=]+))?/)
+        : line.match(/^\s*(?:(?:public|private|protected|static|final|abstract|synchronized|native)\s+)*(?:[A-Za-z_$][A-Za-z0-9_$<>,.?\[\]]*)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(([^)]*)\)/);
     const declarationName = methodMatch?.[1];
     if (methodMatch) {
       currentCallable = methodMatch[1];
@@ -627,7 +644,7 @@ function addJavaFamilySpans(input: ExtractCodeFactsInput, lines: string[], spans
           text: line,
           metadata: {
             qualifiedName: `${input.path}:${currentClass ? `${currentClass}.` : ''}${methodMatch[1]}`,
-            signature: signatureForFunction(methodMatch[1], methodMatch[2]),
+            signature: signatureForFunction(methodMatch[1], methodMatch[2], methodMatch[3]),
             className: currentClass
           }
         })

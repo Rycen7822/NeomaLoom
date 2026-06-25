@@ -25,15 +25,24 @@ describe('redaction safety helper', () => {
       'aws_access_key',
       'private_key',
       'jwt',
-      'email',
-      'ipv4'
+      'email'
     ]);
     expect(result.redactedText).toContain('[REDACTED:api_key]');
     expect(result.redactedText).toContain('[REDACTED:token]');
     expect(result.redactedText).toContain('[REDACTED:private_key]');
     expect(result.redactedText).not.toContain('abcdefghijklmnop1234567890');
     expect(result.redactedText).not.toContain('user@example.com');
-    expect(result.redactedText).not.toContain('10.20.30.40');
+    expect(result.redactedText).toContain('10.20.30.40');
+  });
+
+  it('does not redact IPv4-shaped versions or hosts by default', () => {
+    const input = 'version=2.7.18.5\nhost=127.0.0.1\nexample=10.20.30.40';
+
+    expect(redactText(input)).toEqual({
+      redactedText: input,
+      hasSensitiveContent: false,
+      redactedKinds: []
+    });
   });
 
   it('returns original text when no patterns match', () => {

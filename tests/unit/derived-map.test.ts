@@ -76,6 +76,62 @@ function edge(input: {
 }
 
 describe('derived repository map', () => {
+  it('keeps document span ids stable when unrelated files gain spans', () => {
+    const files = ['a.md', 'b.md'].map(file => ({
+      path: file,
+      absolutePath: `/repo/${file}`,
+      role: 'canonical_api_doc' as const,
+      language: 'markdown',
+      contentHash: file,
+      sizeBytes: 10,
+      modifiedAt: 0,
+      indexedAt: 0,
+      generated: false as const,
+      ignored: false as const,
+      oversized: false as const,
+      fileOnlySpan: false,
+      spanKind: 'file' as const,
+      indexedText: `# ${file}`
+    }));
+    const documentSpan = (file: string, label: string, startLine: number) => ({
+      kind: 'doc.heading' as const,
+      path: file,
+      label,
+      startLine,
+      endLine: startLine,
+      headingPath: [label],
+      anchor: label.toLowerCase(),
+      text: label,
+      metadata: {}
+    });
+
+    const first = buildProjectionGraph({
+      projectRoot: '/repo',
+      files,
+      codeSpans: [],
+      documentSpans: [documentSpan('a.md', 'A1', 1), documentSpan('b.md', 'B1', 1)],
+      artifactSpans: [],
+      testExampleSpans: [],
+      features: []
+    });
+    const second = buildProjectionGraph({
+      projectRoot: '/repo',
+      files,
+      codeSpans: [],
+      documentSpans: [documentSpan('a.md', 'A1', 1), documentSpan('a.md', 'A2', 2), documentSpan('b.md', 'B1', 1)],
+      artifactSpans: [],
+      testExampleSpans: [],
+      features: []
+    });
+
+    const firstB = first.spans.find(item => item.path === 'b.md' && item.label === 'B1');
+    const secondB = second.spans.find(item => item.path === 'b.md' && item.label === 'B1');
+    expect(second.spans.find(item => item.path === 'a.md' && item.label === 'A2')?.stableLocator.blockOrdinal).toBe(1);
+    expect(firstB?.stableLocator.blockOrdinal).toBe(0);
+    expect(secondB?.stableLocator.blockOrdinal).toBe(0);
+    expect(secondB?.spanId).toBe(firstB?.spanId);
+  });
+
   it('merges projections into deterministic repo spans and contains edges', () => {
     const features: FeatureProjectionRecord[] = [
       { id: 'feature.client', title: 'Client API', source: 'deterministic' }

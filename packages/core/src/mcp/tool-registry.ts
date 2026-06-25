@@ -26,6 +26,8 @@ import {
   nlAnchorManageInputSchema
 } from './tools/nl-anchor.js';
 
+const MAX_TOOL_INPUT_BYTES = 1_000_000;
+
 export const NOEMALOOM_TOOL_NAMES = [
   'nl_status',
   'nl_refresh',
@@ -75,6 +77,52 @@ function createNotImplementedEnvelope(tool: NoemaLoomToolName, input: unknown): 
       status: 'not_implemented'
     }
   });
+}
+
+function serializedInputBytes(args: unknown): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(args) ?? 'null', 'utf8');
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+function projectRootForError(args: unknown): string {
+  try {
+    return resolveProjectRootFromInput(args);
+  } catch {
+    return process.cwd();
+  }
+}
+
+function createPayloadTooLargeEnvelope(tool: string, args: unknown, bytes: number): NoemaLoomEnvelope {
+  return createEnvelope({
+    ok: false,
+    tool,
+    projectRoot: projectRootForError(args),
+    graphState: 'error',
+    tokenBudget: {
+      requested: MAX_TOOL_INPUT_BYTES,
+      used: Number.isFinite(bytes) ? bytes : MAX_TOOL_INPUT_BYTES + 1,
+      truncated: true
+    },
+    warnings: [
+      {
+        code: 'payload_too_large',
+        severity: 'error',
+        message: `NoemaLoom tool input exceeds ${MAX_TOOL_INPUT_BYTES} bytes.`
+      }
+    ],
+    data: {
+      status: 'payload_too_large',
+      maxBytes: MAX_TOOL_INPUT_BYTES
+    }
+  });
+}
+
+function rejectOversizedPayload(toolName: string, args: unknown): NoemaLoomEnvelope | undefined {
+  const bytes = serializedInputBytes(args);
+  return bytes > MAX_TOOL_INPUT_BYTES ? createPayloadTooLargeEnvelope(toolName, args, bytes) : undefined;
 }
 
 function wrapHandler(
@@ -228,6 +276,9 @@ export function createInternalToolRegistry(): NoemaLoomToolDefinition[] {
 }
 
 export async function callRegisteredTool(toolName: string, args: unknown): Promise<NoemaLoomEnvelope> {
+  const oversized = rejectOversizedPayload(toolName, args);
+  if (oversized) return oversized;
+
   if (isBlockedToolName(toolName)) {
     return createToolUnavailableEnvelope(toolName, resolveProjectRootFromInput(args));
   }
@@ -242,6 +293,9 @@ export async function callRegisteredTool(toolName: string, args: unknown): Promi
 }
 
 export async function callInternalTool(toolName: string, args: unknown): Promise<NoemaLoomEnvelope> {
+  const oversized = rejectOversizedPayload(toolName, args);
+  if (oversized) return oversized;
+
   if (isBlockedToolName(toolName)) {
     return createToolUnavailableEnvelope(toolName, resolveProjectRootFromInput(args));
   }
