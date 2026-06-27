@@ -163,6 +163,29 @@ type RevisionRow = {
   warnings_json: string;
 };
 
+export type LatestRefreshSummary = {
+  graphRevision: string;
+  target: string;
+  startedAt: number;
+  finishedAt: number;
+  fileCount: number;
+  spanCount: number;
+  edgeCount: number;
+  warnings: string[];
+};
+
+function parseWarnings(value: string | undefined): string[] {
+  if (!value) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((warning): warning is string => typeof warning === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
 function readExistingRevisions(db: Database): RevisionRow[] {
   try {
     const rows = db
@@ -237,6 +260,44 @@ export async function readLatestRevision(projectRoot: string): Promise<string | 
         .prepare('SELECT graph_revision AS graphRevision FROM refresh_revisions ORDER BY finished_at DESC LIMIT 1')
         .get() as { graphRevision?: string } | undefined;
       return row?.graphRevision;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+export async function readLatestRefreshSummary(projectRoot: string): Promise<LatestRefreshSummary | undefined> {
+  const paths = resolveNoemaLoomPaths(projectRoot);
+  const dbPath = path.join(paths.spansDir, 'spans.db');
+  if (!(await fileExists(dbPath))) {
+    return undefined;
+  }
+  try {
+    const db = openDatabase(dbPath);
+    try {
+      const row = db
+        .prepare(
+          `SELECT graph_revision, target, started_at, finished_at, file_count, span_count, edge_count, warnings_json
+           FROM refresh_revisions
+           ORDER BY finished_at DESC
+           LIMIT 1`
+        )
+        .get() as RevisionRow | undefined;
+      if (!row?.graph_revision) {
+        return undefined;
+      }
+      return {
+        graphRevision: row.graph_revision,
+        target: row.target,
+        startedAt: row.started_at,
+        finishedAt: row.finished_at,
+        fileCount: row.file_count,
+        spanCount: row.span_count,
+        edgeCount: row.edge_count,
+        warnings: parseWarnings(row.warnings_json)
+      };
     } finally {
       db.close();
     }

@@ -1,8 +1,9 @@
 import { z } from 'zod';
 
-import { createEnvelope, resolveProjectRootFromInput, type EnvelopeWarning, type NoemaLoomEnvelope } from '../envelope.js';
+import { createEnvelope, resolveProjectRootFromInput, type EnvelopeWarning, type GraphState, type NoemaLoomEnvelope } from '../envelope.js';
+import { writeMcpDebugArtifact } from '../debug-artifact.js';
 import { planExactRoute, applyExactRoute } from '../exact-route.js';
-import { RESPONSE_PROFILES, shapeEvidence, shapePrepareContextData, type ResponseProfile } from '../output-profile.js';
+import { RESPONSE_PROFILES, shapeEvidence, shapePrepareContextData, trimAgentDataForBudget, type ResponseProfile } from '../output-profile.js';
 import { estimateEnvelopeTokenBudget } from '../token-budget.js';
 import { buildCoveragePlan } from '../../locator/coverage-plan.js';
 import {
@@ -53,7 +54,7 @@ export const nlPrepareContextInputSchema = z
     maxReadSpans: z.number().int().min(0).max(10).default(3),
     contextLines: z.number().int().min(0).max(80).default(10),
     recordNavigation: z.boolean().default(true),
-    responseProfile: z.enum(RESPONSE_PROFILES).default('compact')
+    responseProfile: z.enum(RESPONSE_PROFILES).default('agent')
   })
   .passthrough();
 
@@ -357,17 +358,60 @@ export async function handleNlPrepareContext(input: unknown): Promise<NoemaLoomE
     steps: ['nl_locate', 'nl_context_from_located', ...readResults.map(result => result.tool)]
   };
   const evidence = [...routedLocated.targets.flatMap(target => target.evidence), ...combineEvidence(readResults)];
-  const shapedData = shapePrepareContextData(data, responseProfile) as Record<string, unknown>;
+  let shapedData = shapePrepareContextData(data, responseProfile) as Record<string, unknown>;
   const shapedEvidence = shapeEvidence(evidence, responseProfile);
   const warnings = [...located.warnings, ...readWarnings, ...worksetWarnings];
-  const finalizedBudget = estimateEnvelopeTokenBudget({
+  const artifactWarnings: EnvelopeWarning[] = [];
+  if (responseProfile !== 'debug') {
+    try {
+      shapedData = {
+        ...shapedData,
+        debugArtifact: await writeMcpDebugArtifact({
+          projectRoot,
+          tool: 'nl_prepare_context',
+          responseProfile,
+          data,
+          evidence,
+          warnings,
+          nextActions
+        })
+      };
+    } catch (error) {
+      artifactWarnings.push({
+        code: 'debug_artifact_write_failed',
+        severity: 'warning',
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+  let budgetWarnings: EnvelopeWarning[] = [...warnings, ...artifactWarnings];
+  let finalizedBudget = estimateEnvelopeTokenBudget({
     requested: located.tokenBudget.requested,
     data: shapedData,
     evidence: shapedEvidence,
-    warnings,
+    warnings: budgetWarnings,
     nextActions,
     truncated: located.tokenBudget.truncated
   });
+  if (responseProfile === 'agent' && finalizedBudget.tokenBudget.used > finalizedBudget.tokenBudget.requested) {
+    shapedData = trimAgentDataForBudget(shapedData) as Record<string, unknown>;
+    budgetWarnings = [
+      ...budgetWarnings,
+      {
+        code: 'output_trimmed_to_budget',
+        severity: 'info',
+        message: 'Agent output exceeded the requested budget after first-pass shaping; non-critical arrays/previews were trimmed while preserving targets, warnings, actions, and debugArtifact.'
+      }
+    ];
+    finalizedBudget = estimateEnvelopeTokenBudget({
+      requested: located.tokenBudget.requested,
+      data: shapedData,
+      evidence: shapedEvidence,
+      warnings: budgetWarnings,
+      nextActions,
+      truncated: true
+    });
+  }
 
   return createEnvelope({
     ok,

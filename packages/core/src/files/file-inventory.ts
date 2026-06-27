@@ -32,12 +32,22 @@ export type FileInventory = {
   ignoredPaths: string[];
 };
 
+export type PreviousInventoryFile = {
+  path: string;
+  contentHash: string;
+  sizeBytes?: number;
+  modifiedAt?: number;
+};
+
 export type BuildFileInventoryOptions = {
   projectRoot: string;
   config?: NoemaLoomConfig;
   includeVendor?: boolean;
   loadIndexedText?: boolean;
+  previousFiles?: PreviousInventoryFile[];
 };
+
+const INVENTORY_BUILD_CONCURRENCY = 8;
 
 function toRepoPath(repoPath: string): string {
   return repoPath.replaceAll('\\', '/').replace(/^\/+/, '');
@@ -95,24 +105,52 @@ async function listCandidateFiles(projectRoot: string): Promise<{ candidates: st
   };
 }
 
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length) as R[];
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await worker(items[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+function reusablePreviousHash(previous: PreviousInventoryFile | undefined, sizeBytes: number, modifiedAt: number): string | undefined {
+  if (!previous || previous.sizeBytes !== sizeBytes || previous.modifiedAt !== modifiedAt) {
+    return undefined;
+  }
+  return previous.contentHash || undefined;
+}
+
 async function createInventoryFile(
   projectRoot: string,
   repoPath: string,
   maxFileBytes: number,
   indexedAt: number,
-  loadIndexedText: boolean
+  loadIndexedText: boolean,
+  previousByPath: Map<string, PreviousInventoryFile>
 ): Promise<InventoryFile> {
   const absolutePath = resolveProjectReadPath(projectRoot, repoPath);
   const fileStat = await safeStatInsideProject(projectRoot, repoPath);
   const role = classifyFileRole(repoPath);
   const oversized = fileStat.size > maxFileBytes;
-  let contentHash = `oversized:${fileStat.size}:${Math.floor(fileStat.mtimeMs)}`;
+  const modifiedAt = Math.floor(fileStat.mtimeMs);
+  let contentHash = `oversized:${fileStat.size}:${modifiedAt}`;
   let indexedText = '';
 
   if (!oversized) {
-    const content = await safeReadFileInsideProject(projectRoot, repoPath);
-    contentHash = sha1(content);
-    indexedText = loadIndexedText ? content.toString('utf8') : '';
+    const previousHash = loadIndexedText ? undefined : reusablePreviousHash(previousByPath.get(repoPath), fileStat.size, modifiedAt);
+    if (previousHash) {
+      contentHash = previousHash;
+    } else {
+      const content = await safeReadFileInsideProject(projectRoot, repoPath);
+      contentHash = sha1(content);
+      indexedText = loadIndexedText ? content.toString('utf8') : '';
+    }
   }
 
   return {
@@ -122,7 +160,7 @@ async function createInventoryFile(
     language: languageForPath(repoPath),
     contentHash,
     sizeBytes: fileStat.size,
-    modifiedAt: Math.floor(fileStat.mtimeMs),
+    modifiedAt,
     indexedAt,
     generated: role === 'generated_file',
     ignored: false,
@@ -147,6 +185,8 @@ async function isSymlink(projectRoot: string, repoPath: string): Promise<boolean
   }
 }
 
+type InventoryBuildResult = { file: InventoryFile; ignoredPath?: undefined } | { file?: undefined; ignoredPath: string };
+
 export async function buildFileInventory(options: BuildFileInventoryOptions): Promise<FileInventory> {
   const projectRoot = path.resolve(options.projectRoot);
   const config = options.config ?? createDefaultConfig(projectRoot);
@@ -160,29 +200,36 @@ export async function buildFileInventory(options: BuildFileInventoryOptions): Pr
   const files: InventoryFile[] = [];
   const indexedAt = Date.now();
   const loadIndexedText = options.loadIndexedText ?? true;
+  const previousByPath = new Map((options.previousFiles ?? []).map(file => [toRepoPath(file.path), file]));
 
-  for (const repoPath of candidates) {
+  const results = await mapWithConcurrency(candidates, INVENTORY_BUILD_CONCURRENCY, async (repoPath): Promise<InventoryBuildResult> => {
     if (isSensitivePath(repoPath)) {
-      ignoredPaths.push(repoPath);
-      continue;
+      return { ignoredPath: repoPath };
     }
 
     if (ignoreMatcher.ignores(repoPath)) {
-      ignoredPaths.push(repoPath);
-      continue;
+      return { ignoredPath: repoPath };
     }
 
     if (!isIncludedExtension(repoPath, includeExtensions)) {
-      ignoredPaths.push(repoPath);
-      continue;
+      return { ignoredPath: repoPath };
     }
 
     if (await isSymlink(projectRoot, repoPath)) {
-      ignoredPaths.push(repoPath);
-      continue;
+      return { ignoredPath: repoPath };
     }
 
-    files.push(await createInventoryFile(projectRoot, repoPath, config.indexing.maxFileBytes, indexedAt, loadIndexedText));
+    return {
+      file: await createInventoryFile(projectRoot, repoPath, config.indexing.maxFileBytes, indexedAt, loadIndexedText, previousByPath)
+    };
+  });
+
+  for (const result of results) {
+    if (result.file) {
+      files.push(result.file);
+    } else {
+      ignoredPaths.push(result.ignoredPath);
+    }
   }
 
   return {

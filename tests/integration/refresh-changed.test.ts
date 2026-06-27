@@ -58,6 +58,7 @@ describe('nl_refresh target changed', () => {
     });
 
     expect(result.ok).toBe(true);
+    const data = result.data as { timings: Array<{ step: string }> };
     expect(result.data).toMatchObject({
       status: 'refreshed',
       target: 'changed',
@@ -70,9 +71,55 @@ describe('nl_refresh target changed', () => {
         changedTargetStrategy: 'full_deep_reindex'
       }
     });
+    const timingSteps = data.timings.map(timing => timing.step);
+    expect(timingSteps).not.toContain('FeatureProjectionWorker');
+    expect(timingSteps).toContain('RefreshRevisionWriter');
+    expect((result.data as { steps: string[] }).steps).not.toContain('FeatureProjectionWorker');
     expect(scalar(dbPath, 'SELECT COUNT(*) AS value FROM refresh_revisions')).toBe(beforeRevisionCount + 1);
     expect(scalar(dbPath, "SELECT COUNT(*) AS value FROM repo_spans WHERE label = 'createAdminClient'")).toBe(1);
     expect(scalar(dbPath, "SELECT COUNT(*) AS value FROM repo_spans WHERE path = ?", 'docs/api/client.md')).toBe(0);
+  });
+
+  it('returns unchanged without deep reindex when safe changed refresh has no file delta', async () => {
+    const projectRoot = await createProject();
+    const initial = await callRegisteredTool('nl_refresh', { projectPath: projectRoot, target: 'all', mode: 'safe' });
+    const dbPath = path.join(projectRoot, '.noemaloom', 'spans', 'spans.db');
+    const beforeRevisionCount = scalar(dbPath, 'SELECT COUNT(*) AS value FROM refresh_revisions');
+
+    const result = await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'changed',
+      mode: 'safe'
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.graphRevision).toBe(initial.graphRevision);
+    const data = result.data as {
+      steps: string[];
+      timings: Array<{ step: string }>;
+    };
+    expect(result.data).toMatchObject({
+      status: 'unchanged',
+      target: 'changed',
+      mode: 'safe',
+      graphRevision: initial.graphRevision,
+      graphState: 'ready',
+      changed: { changedPaths: [], deletedPaths: [] },
+      deepIndex: {
+        scope: 'full',
+        changedTargetStrategy: 'no_change_fast_path'
+      },
+      counts: { files: expect.any(Number), spans: expect.any(Number), edges: expect.any(Number) }
+    });
+    expect(data.steps).toEqual(['FileInventory', 'ChangedNoopFastPath']);
+    const timingSteps = data.timings.map(timing => timing.step);
+    expect(timingSteps).toEqual(['FileInventory', 'LatestRefreshSummaryReader']);
+    expect(timingSteps).not.toEqual(expect.arrayContaining([
+      'CodeFactIndexer',
+      'FeatureProjectionWorker',
+      'RefreshRevisionWriter'
+    ]));
+    expect(scalar(dbPath, 'SELECT COUNT(*) AS value FROM refresh_revisions')).toBe(beforeRevisionCount);
   });
 
   it('returns refresh_in_progress when the refresh lock already exists', async () => {

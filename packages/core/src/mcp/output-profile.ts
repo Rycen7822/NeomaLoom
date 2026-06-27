@@ -1,8 +1,8 @@
 import { buildEvidenceBundle, type EvidenceBundleInput } from '../locator/evidence-bundle.js';
 
-export type ResponseProfile = 'compact' | 'standard' | 'debug' | 'navigation';
+export type ResponseProfile = 'agent' | 'compact' | 'standard' | 'debug' | 'navigation';
 
-export const RESPONSE_PROFILES = ['compact', 'standard', 'debug', 'navigation'] as const;
+export const RESPONSE_PROFILES = ['agent', 'compact', 'standard', 'debug', 'navigation'] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -161,7 +161,7 @@ function slimImpactNode(node: unknown): unknown {
 
 export function shapeImpact(value: unknown, profile: Exclude<ResponseProfile, 'debug'>): unknown {
   if (!isRecord(value)) return value;
-  const limit = profile === 'compact' ? 12 : 25;
+  const limit = profile === 'agent' ? 5 : profile === 'compact' ? 12 : 25;
   const shaped: Record<string, unknown> = {
     codeImpact: asArray(value.codeImpact).slice(0, limit).map(slimImpactNode),
     docImpact: asArray(value.docImpact).slice(0, limit).map(slimImpactNode),
@@ -224,7 +224,7 @@ function cappedArray(value: unknown, limit: number): { items: unknown[]; omitted
 
 function shapeCoveragePlan(value: unknown, profile: ResponseProfile): unknown {
   if (profile === 'debug' || !isRecord(value)) return value;
-  const limit = profile === 'standard' ? 25 : profile === 'navigation' ? 8 : 12;
+  const limit = profile === 'standard' ? 25 : profile === 'compact' ? 12 : profile === 'navigation' ? 8 : 5;
   const exactSweeps = cappedArray(value.exactSweeps, limit);
   const pathRoles = cappedArray(value.pathRolesToVerify, limit);
   const linkedDocs = cappedArray(value.linkedDocsToVerify, limit);
@@ -246,12 +246,152 @@ function shapeReadSpan(value: unknown, profile: ResponseProfile): unknown {
   if (!isRecord(value)) return value;
   const full = Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
   if (profile === 'debug' || profile === 'standard') return full;
-  const content = previewText(value.content, profile === 'navigation' ? 360 : 800);
+  const content = previewText(value.content, profile === 'agent' ? 420 : profile === 'navigation' ? 360 : 800);
   const { content: _content, ...rest } = full;
   return Object.fromEntries(Object.entries({
     ...rest,
     contentPreview: content.preview,
     contentPreviewOmittedChars: content.omittedChars
+  }).filter(([, entry]) => entry !== undefined));
+}
+
+function numberOrUndefined(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function stringOrUndefined(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function lineRange(value: Record<string, unknown>, startKey = 'startLine', endKey = 'endLine'): string | undefined {
+  const start = numberOrUndefined(value[startKey]);
+  const end = numberOrUndefined(value[endKey]);
+  return start !== undefined && end !== undefined ? `${start}-${end}` : undefined;
+}
+
+function countByField(items: unknown[], field: string): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const item of items) {
+    const key = isRecord(item) && typeof item[field] === 'string' ? item[field] : 'unknown';
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function compactPromotionAction(value: unknown): unknown {
+  if (!isRecord(value)) return undefined;
+  return Object.fromEntries(Object.entries({
+    target: value.target,
+    paths: firstItems(value.paths, 5),
+    reason: value.reason
+  }).filter(([, entry]) => entry !== undefined));
+}
+
+function agentTarget(target: unknown): Record<string, unknown> {
+  if (!isRecord(target)) {
+    return { value: target };
+  }
+  const shaped: Record<string, unknown> = {
+    spanId: target.spanId,
+    decision: target.decision,
+    path: target.path,
+    kind: target.kind,
+    role: target.role,
+    label: target.label,
+    startLine: target.startLine,
+    endLine: target.endLine,
+    lines: lineRange(target),
+    confidence: target.confidence,
+    indexed: target.indexed ?? true,
+    promotionAction: compactPromotionAction(target.promotionAction)
+  };
+  const evidenceCount = countArray(target.evidence);
+  const linkedSpanCount = countArray(target.linkedSpans);
+  if (evidenceCount > 0) shaped.evidenceCount = evidenceCount;
+  if (linkedSpanCount > 0) shaped.linkedSpanCount = linkedSpanCount;
+  const why = compactScoreBreakdown(target.scoreBreakdown, 2).map(item => item.name);
+  if (why.length > 0) shaped.why = why;
+  return Object.fromEntries(Object.entries(shaped).filter(([, value]) => value !== undefined));
+}
+
+function summarizeUnindexedCandidates(value: unknown, limit: number): Record<string, unknown> {
+  const items = asArray(value);
+  return {
+    count: items.length,
+    paths: items.map(item => isRecord(item) ? stringOrUndefined(item.path) : undefined).filter(Boolean).slice(0, limit),
+    omitted: Math.max(0, items.length - limit),
+    promotionActions: items
+      .map(item => isRecord(item) ? compactPromotionAction(item.promotionAction) : undefined)
+      .filter(Boolean)
+      .slice(0, limit)
+  };
+}
+
+function agentReadHint(value: unknown, reason: string): Record<string, unknown> | null {
+  if (!isRecord(value)) return null;
+  const range = reason === 'readTopSpans'
+    ? lineRange(value, 'spanStartLine', 'spanEndLine') ?? lineRange(value)
+    : lineRange(value) ?? lineRange(value, 'spanStartLine', 'spanEndLine');
+  const pathValue = value.path;
+  if (typeof pathValue !== 'string') return null;
+  return Object.fromEntries(Object.entries({
+    spanId: value.spanId,
+    path: pathValue,
+    range,
+    reason
+  }).filter(([, entry]) => entry !== undefined));
+}
+
+function buildReadHints(targets: unknown, readSpans: unknown): Record<string, unknown>[] {
+  const fromReadSpans = asArray(readSpans)
+    .map(span => agentReadHint(span, 'readTopSpans'))
+    .filter((item): item is Record<string, unknown> => item !== null);
+  if (fromReadSpans.length > 0) return fromReadSpans.slice(0, 5);
+  return asArray(targets)
+    .filter(target => isRecord(target) && ['must_edit', 'maybe_edit', 'verify_only'].includes(String(target.decision)))
+    .map(target => agentReadHint(target, String(isRecord(target) ? target.decision : 'target')))
+    .filter((item): item is Record<string, unknown> => item !== null)
+    .slice(0, 5);
+}
+
+function summarizeReadSkipReasons(value: unknown): Record<string, unknown> {
+  const items = asArray(value);
+  return {
+    count: items.length,
+    reasons: countByField(items, 'reason')
+  };
+}
+
+function shapeAgentPrepareContextData(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  const allTargets = asArray(value.targets);
+  const targetLimit = 5;
+  const targets = allTargets.slice(0, targetLimit).map(agentTarget);
+  const coveragePlan = shapeCoveragePlan(value.coveragePlan, 'agent');
+  const unindexedCandidates = asArray(value.unindexedCandidates);
+  const readSkipSummary = summarizeReadSkipReasons(value.readSkipReasons);
+  return Object.fromEntries(Object.entries({
+    router: value.router,
+    summary: {
+      targetCount: allTargets.length,
+      returnedTargets: targets.length,
+      omittedTargets: Math.max(0, allTargets.length - targets.length),
+      decisions: countByField(allTargets, 'decision'),
+      roles: countByField(allTargets, 'role')
+    },
+    targets,
+    ...(unindexedCandidates.length > 0 ? {
+      unindexedCandidates: unindexedCandidates.slice(0, 5).map(agentTarget),
+      unindexedCandidateSummary: summarizeUnindexedCandidates(value.unindexedCandidates, 5)
+    } : {}),
+    coverage: value.coverage,
+    coveragePlan,
+    coverageDigest: coveragePlan,
+    readHints: buildReadHints(value.targets, value.readSpans),
+    readSpans: asArray(value.readSpans).slice(0, 3).map(span => shapeReadSpan(span, 'agent')),
+    ...(Number(readSkipSummary.count) > 0 ? { readSkipSummary } : {}),
+    requiredActions: value.requiredActions,
+    ...(countArray(value.stateEffects) > 0 ? { stateEffects: value.stateEffects } : {})
   }).filter(([, entry]) => entry !== undefined));
 }
 
@@ -275,6 +415,7 @@ function shapeNavigationPrepareContextData(value: unknown): unknown {
 
 export function shapePrepareContextData(value: unknown, profile: ResponseProfile): unknown {
   if (profile === 'debug' || !isRecord(value)) return value;
+  if (profile === 'agent') return shapeAgentPrepareContextData(value);
   if (profile === 'navigation') return shapeNavigationPrepareContextData(value);
   return {
     router: value.router,
@@ -297,6 +438,25 @@ export function shapePlanChangeData(value: unknown, profile: ResponseProfile): u
   if (profile === 'debug' || !isRecord(value)) return value;
   const traceSummary = summarizeTrace(value.trace);
   const impactSummary = summarizeImpact(value.impact);
+  if (profile === 'agent') {
+    const allTargets = asArray(value.targets);
+    const targets = allTargets.slice(0, 8).map(agentTarget);
+    return {
+      summary: {
+        targetCount: allTargets.length,
+        returnedTargets: targets.length,
+        omittedTargets: Math.max(0, allTargets.length - targets.length),
+        decisions: countByField(allTargets, 'decision'),
+        roles: countByField(allTargets, 'role')
+      },
+      targets,
+      coveragePlan: shapeCoveragePlan(value.coveragePlan, 'agent'),
+      traceSummary,
+      impactSummary,
+      requiredVerification: value.requiredVerification,
+      requiredActions: value.requiredActions
+    };
+  }
   return {
     targets: asArray(value.targets).map(target => slimTarget(target, profile)),
     coveragePlan: shapeCoveragePlan(value.coveragePlan, profile),
@@ -310,6 +470,117 @@ export function shapePlanChangeData(value: unknown, profile: ResponseProfile): u
     requiredActions: value.requiredActions,
     steps: value.steps
   };
+}
+
+function shapeVerificationCoverage(value: unknown, limit: number): unknown {
+  if (!isRecord(value)) return value;
+  const shaped: Record<string, unknown> = {};
+  const omitted: Record<string, number> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (Array.isArray(entry)) {
+      shaped[key] = entry.slice(0, limit);
+      omitted[key] = Math.max(0, entry.length - limit);
+      continue;
+    }
+    if (
+      entry === null ||
+      ['string', 'number', 'boolean'].includes(typeof entry) ||
+      (isRecord(entry) && ['summary', 'counts'].includes(key))
+    ) {
+      shaped[key] = entry;
+    }
+  }
+  shaped.omitted = omitted;
+  return shaped;
+}
+
+export function shapeVerifyTaskData(value: unknown, profile: ResponseProfile): unknown {
+  if (profile === 'debug' || !isRecord(value)) return value;
+  if (profile === 'agent') {
+    return Object.fromEntries(Object.entries({
+      status: value.status,
+      coverage: shapeVerificationCoverage(value.coverage, 5),
+      impactSummary: summarizeImpact(value.impact),
+      traceSummary: summarizeTrace(value.trace),
+      requiredVerification: value.requiredVerification,
+      requiredActions: value.requiredActions
+    }).filter(([, entry]) => entry !== undefined));
+  }
+  return {
+    ...value,
+    impact: value.impact ? shapeImpact(value.impact, profile === 'standard' ? 'standard' : 'compact') : null,
+    trace: profile === 'standard' ? value.trace : null,
+    traceSummary: summarizeTrace(value.trace),
+    impactSummary: summarizeImpact(value.impact)
+  };
+}
+
+function trimPreviewFields(value: unknown, maxChars: number): unknown {
+  if (!isRecord(value)) return value;
+  const contentPreview = typeof value.contentPreview === 'string'
+    ? value.contentPreview.slice(0, maxChars)
+    : value.contentPreview;
+  return Object.fromEntries(Object.entries({
+    ...value,
+    contentPreview,
+    contentPreviewOmittedChars: typeof value.contentPreview === 'string'
+      ? numberValue(value.contentPreviewOmittedChars) + Math.max(0, value.contentPreview.length - maxChars)
+      : value.contentPreviewOmittedChars
+  }).filter(([, entry]) => entry !== undefined));
+}
+
+function capRecordArrays(value: unknown, limit: number): unknown {
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(Object.entries(value).map(([key, entry]) => {
+    if (Array.isArray(entry)) return [key, entry.slice(0, limit)];
+    return [key, entry];
+  }));
+}
+
+function trimAgentTargetForBudget(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(Object.entries({
+    spanId: value.spanId,
+    decision: value.decision,
+    path: value.path,
+    kind: value.kind,
+    role: value.role,
+    label: value.label,
+    startLine: value.startLine,
+    endLine: value.endLine,
+    lines: value.lines,
+    confidence: value.confidence,
+    indexed: value.indexed,
+    promotionAction: value.promotionAction
+  }).filter(([, entry]) => entry !== undefined));
+}
+
+export function trimAgentDataForBudget(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(Object.entries({
+    summary: isRecord(value.summary)
+      ? {
+          targetCount: value.summary.targetCount,
+          returnedTargets: value.summary.returnedTargets,
+          omittedTargets: value.summary.omittedTargets,
+          decisions: value.summary.decisions
+        }
+      : value.summary,
+    targets: asArray(value.targets).slice(0, 3).map(trimAgentTargetForBudget),
+    unindexedCandidates: asArray(value.unindexedCandidates).slice(0, 3).map(trimAgentTargetForBudget),
+    unindexedCandidateSummary: value.unindexedCandidateSummary,
+    coverage: value.coverage,
+    coveragePlan: capRecordArrays(value.coveragePlan, 3),
+    readHints: asArray(value.readHints).slice(0, 3),
+    readSpans: asArray(value.readSpans).slice(0, 2).map(span => trimPreviewFields(span, 180)),
+    requiredActions: asArray(value.requiredActions).slice(0, 4),
+    stateEffects: value.stateEffects,
+    debugArtifact: value.debugArtifact,
+    budgetTrimmed: true
+  }).filter(([, entry]) => {
+    if (Array.isArray(entry) && entry.length === 0) return false;
+    return entry !== undefined;
+  }));
 }
 
 export function shapeEvidence(evidence: unknown[] | undefined, profile: ResponseProfile): unknown[] {

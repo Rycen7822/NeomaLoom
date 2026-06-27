@@ -20,7 +20,7 @@ import { indexTestExampleSpans, type TestExampleSpan } from '../../tests-example
 import { createInventorySnapshot, detectChangedFiles, readInventorySnapshot, type ChangedFiles } from '../../state/changed-detection.js';
 import { hotsetRevision, manifestFiles, readHotsetManifest, upsertHotsetEntries, writeHotsetManifest } from '../../state/hotset.js';
 import { resolveNoemaLoomPaths } from '../../state/paths.js';
-import { createGraphRevision, readIndexCoverage, readLatestRevision, writeRefreshRevision, type IndexCoverage } from '../../state/refresh-revision.js';
+import { createGraphRevision, readIndexCoverage, readLatestRefreshSummary, readLatestRevision, writeRefreshRevision, type IndexCoverage } from '../../state/refresh-revision.js';
 import { clearRefreshFailure, recordRefreshFailure, refreshFailureMessage } from '../../state/refresh-failure.js';
 import { withRefreshLock } from '../../state/refresh-lock.js';
 import { cleanupOldStateFiles } from '../../state/retention.js';
@@ -85,6 +85,18 @@ const SCOPED_REFRESH_STEPS = [
 ] as const;
 
 const FILE_REFRESH_STEPS = ['FileInventory'] as const;
+const CHANGED_DEEP_REFRESH_STEPS = [
+  'FileInventory',
+  'CodeFactIndexer',
+  'DocumentSpanIndexer',
+  'ArtifactSpanIndexer',
+  'TestExampleSpanIndexer',
+  'ProjectionBuilder',
+  'CrossReferenceLinker',
+  'DerivedRepositoryMapBuilder',
+  'RefreshRevisionWriter'
+] as const;
+const CHANGED_NOOP_REFRESH_STEPS = ['FileInventory', 'ChangedNoopFastPath'] as const;
 const MAX_QUARANTINED_SQLITE_FILES = 5;
 
 function isDocument(file: InventoryFile, scoped: boolean): boolean {
@@ -117,46 +129,80 @@ function isTestExampleCandidate(file: InventoryFile, scoped: boolean): boolean {
   return ['python', 'typescript', 'javascript', 'go', 'rust', 'java', 'kotlin', 'scala'].includes(file.language) || /(^|\/)examples?\//.test(file.path);
 }
 
-async function indexedTextForFile(projectRoot: string, file: InventoryFile): Promise<string> {
-  if (file.oversized) {
-    return '';
-  }
-  return file.indexedText || safeReadFileInsideProject(projectRoot, file.path, 'utf8');
+type TextProvider = (file: InventoryFile) => Promise<string>;
+
+const REFRESH_INDEX_CONCURRENCY = 8;
+
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length) as R[];
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await worker(items[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
-async function indexDocumentFiles(projectRoot: string, files: InventoryFile[]): Promise<{ spans: DocumentSpan[]; warnings: string[] }> {
-  const spans: DocumentSpan[] = [];
-  const warnings: string[] = [];
-  for (const file of files) {
+function createTextProvider(projectRoot: string): TextProvider {
+  const cache = new Map<string, Promise<string>>();
+  return (file: InventoryFile): Promise<string> => {
+    if (file.oversized) {
+      return Promise.resolve('');
+    }
+    if (file.indexedText !== '' || file.sizeBytes === 0) {
+      return Promise.resolve(file.indexedText);
+    }
+    const cached = cache.get(file.path);
+    if (cached) {
+      return cached;
+    }
+    const text = safeReadFileInsideProject(projectRoot, file.path, 'utf8');
+    cache.set(file.path, text);
+    return text;
+  };
+}
+
+async function indexDocumentFiles(projectRoot: string, files: InventoryFile[], textForFile: TextProvider): Promise<{ spans: DocumentSpan[]; warnings: string[] }> {
+  const results = await mapWithConcurrency(files, REFRESH_INDEX_CONCURRENCY, async file => {
     const result = await indexDocumentSpans({
       projectRoot,
       path: file.path,
-      text: await indexedTextForFile(projectRoot, file)
+      text: await textForFile(file)
     });
-    spans.push(...result.spans);
-    warnings.push(...result.warnings.map(warning => `${result.path}: ${warning.message}`));
-  }
-  return { spans, warnings };
+    return {
+      spans: result.spans,
+      warnings: result.warnings.map(warning => `${result.path}: ${warning.message}`)
+    };
+  });
+  return {
+    spans: results.flatMap(result => result.spans),
+    warnings: results.flatMap(result => result.warnings)
+  };
 }
 
-async function indexArtifactFiles(projectRoot: string, files: InventoryFile[]): Promise<{ spans: ArtifactSpan[]; warnings: string[] }> {
-  const spans: ArtifactSpan[] = [];
-  const warnings: string[] = [];
-  for (const file of files) {
-    const result = indexArtifactSpans({ path: file.path, text: await indexedTextForFile(projectRoot, file) });
-    spans.push(...result.spans);
-    warnings.push(...result.warnings.map(warning => `${result.path}: ${warning}`));
-  }
-  return { spans, warnings };
+async function indexArtifactFiles(files: InventoryFile[], textForFile: TextProvider): Promise<{ spans: ArtifactSpan[]; warnings: string[] }> {
+  const results = await mapWithConcurrency(files, REFRESH_INDEX_CONCURRENCY, async file => {
+    const result = indexArtifactSpans({ path: file.path, text: await textForFile(file) });
+    return {
+      spans: result.spans,
+      warnings: result.warnings.map(warning => `${result.path}: ${warning}`)
+    };
+  });
+  return {
+    spans: results.flatMap(result => result.spans),
+    warnings: results.flatMap(result => result.warnings)
+  };
 }
 
-async function indexTestExampleFiles(projectRoot: string, files: InventoryFile[]): Promise<TestExampleSpan[]> {
-  const spans: TestExampleSpan[] = [];
-  for (const file of files) {
-    const result = indexTestExampleSpans({ path: file.path, text: await indexedTextForFile(projectRoot, file) });
-    spans.push(...result.spans);
-  }
-  return spans;
+async function indexTestExampleFiles(files: InventoryFile[], textForFile: TextProvider): Promise<TestExampleSpan[]> {
+  const spanGroups = await mapWithConcurrency(files, REFRESH_INDEX_CONCURRENCY, async file =>
+    indexTestExampleSpans({ path: file.path, text: await textForFile(file) }).spans
+  );
+  return spanGroups.flat();
 }
 
 type FeatureProjectionLocation = {
@@ -425,7 +471,7 @@ type DeepIndexReport = {
   deepFiles: number;
   hotFiles: number;
   coldFiles: number;
-  changedTargetStrategy?: 'scoped_hotset_reindex' | 'full_deep_reindex';
+  changedTargetStrategy?: 'scoped_hotset_reindex' | 'full_deep_reindex' | 'no_change_fast_path';
 };
 
 async function timed<T>(timings: RefreshTiming[], step: string, task: () => Promise<T>): Promise<T> {
@@ -456,6 +502,19 @@ function deepIndexReport(target: RefreshTarget, selection: ScopeSelection): Deep
     ...(target === 'changed'
       ? { changedTargetStrategy: selection.scoped ? 'scoped_hotset_reindex' as const : 'full_deep_reindex' as const }
       : {})
+  };
+}
+
+function deepIndexReportFromCoverage(target: RefreshTarget, coverage: IndexCoverage, fileCount: number): DeepIndexReport {
+  const scoped = coverage.deepSpans === 'scoped';
+  const scope = coverage.deepSpans === 'none' ? 'none' : scoped ? 'scoped' : 'full';
+  const deepFiles = coverage.deepSpans === 'none' ? 0 : scoped ? coverage.hotFiles : fileCount;
+  return {
+    scope,
+    deepFiles,
+    hotFiles: coverage.hotFiles,
+    coldFiles: coverage.coldFiles,
+    ...(target === 'changed' ? { changedTargetStrategy: 'no_change_fast_path' as const } : {})
   };
 }
 
@@ -594,8 +653,44 @@ async function runRefresh(input: {
     });
   }
 
-  const inventory = await timed(timings, 'FileInventory', () => buildFileInventory({ projectRoot: input.projectRoot, config: input.config, loadIndexedText: false }));
+  const inventory = await timed(timings, 'FileInventory', () =>
+    buildFileInventory({ projectRoot: input.projectRoot, config: input.config, loadIndexedText: false, previousFiles: previousInventory?.files })
+  );
   const changed = detectChangedFiles(previousInventory, inventory.files);
+  if (
+    input.target === 'changed' &&
+    input.mode === 'safe' &&
+    previousInventory &&
+    previousCoverage &&
+    changed.changedPaths.length === 0 &&
+    changed.deletedPaths.length === 0
+  ) {
+    const latestSummary = await timed(timings, 'LatestRefreshSummaryReader', () => readLatestRefreshSummary(input.projectRoot));
+    if (latestSummary && latestSummary.fileCount === inventory.files.length) {
+      return {
+        status: 'unchanged',
+        target: input.target,
+        mode: input.mode,
+        graphRevision: latestSummary.graphRevision,
+        graphState: 'ready' as const,
+        steps: [...CHANGED_NOOP_REFRESH_STEPS],
+        changed,
+        coverage: previousCoverage,
+        deepIndex: deepIndexReportFromCoverage(input.target, previousCoverage, latestSummary.fileCount),
+        durationMs: Date.now() - startedAt,
+        timings,
+        counts: {
+          files: latestSummary.fileCount,
+          hotFiles: previousCoverage.hotFiles,
+          coldFiles: previousCoverage.coldFiles,
+          spans: latestSummary.spanCount,
+          edges: latestSummary.edgeCount,
+          warnings: latestSummary.warnings.length
+        },
+        warnings: latestSummary.warnings
+      };
+    }
+  }
   const selection = await timed(timings, 'ScopeSelection', () => selectDeepFiles({
     projectRoot: input.projectRoot,
     target: input.target,
@@ -637,13 +732,16 @@ async function runRefresh(input: {
     includeExperimentNotes: selection.scoped,
     includeVendor: selection.scoped
   }));
-  const documentIndexed = await timed(timings, 'DocumentSpanIndexer', () => indexDocumentFiles(input.projectRoot, selection.deepFiles.filter(file => !file.oversized && isDocument(file, selection.scoped))));
+  const textForFile = createTextProvider(input.projectRoot);
+  const [documentIndexed, artifactIndexed, testExampleSpans] = await Promise.all([
+    timed(timings, 'DocumentSpanIndexer', () => indexDocumentFiles(input.projectRoot, selection.deepFiles.filter(file => !file.oversized && isDocument(file, selection.scoped)), textForFile)),
+    timed(timings, 'ArtifactSpanIndexer', () => indexArtifactFiles(selection.deepFiles.filter(file => !file.oversized && isArtifact(file, selection.scoped)), textForFile)),
+    timed(timings, 'TestExampleSpanIndexer', () => indexTestExampleFiles(selection.deepFiles.filter(file => !file.oversized && isTestExampleCandidate(file, selection.scoped)), textForFile))
+  ]);
   const documentSpans = documentIndexed.spans;
   const documentWarnings = documentIndexed.warnings;
-  const artifactIndexed = await timed(timings, 'ArtifactSpanIndexer', () => indexArtifactFiles(input.projectRoot, selection.deepFiles.filter(file => !file.oversized && isArtifact(file, selection.scoped))));
   const artifactSpans = artifactIndexed.spans;
   const artifactWarnings = artifactIndexed.warnings;
-  const testExampleSpans = await timed(timings, 'TestExampleSpanIndexer', () => indexTestExampleFiles(input.projectRoot, selection.deepFiles.filter(file => !file.oversized && isTestExampleCandidate(file, selection.scoped))));
   const graphRevisionSeed = createGraphRevision({
     target: input.target,
     files: selection.deepFiles,
@@ -651,9 +749,10 @@ async function runRefresh(input: {
     edges: [],
     nonce: `${refreshNonce}:seed`
   });
-  const featureProjectionEnabled = !selection.scoped && input.config.featureProjection.enabled;
-  const featureWarnings = featureProjectionEnabled ? await timed(timings, 'FeatureProjectionWorker', () => runFeatureProjection(input.projectRoot, graphRevisionSeed, input.config)) : [];
-  const features = featureProjectionEnabled ? await timed(timings, 'FeatureProjectionReader', () => readFeatures(input.projectRoot, input.config)) : [];
+  const shouldRunFeatureProjection = input.target !== 'changed' && !selection.scoped && input.config.featureProjection.enabled;
+  const shouldReadFeatureProjection = !selection.scoped && input.config.featureProjection.enabled;
+  const featureWarnings = shouldRunFeatureProjection ? await timed(timings, 'FeatureProjectionWorker', () => runFeatureProjection(input.projectRoot, graphRevisionSeed, input.config)) : [];
+  const features = shouldReadFeatureProjection ? await timed(timings, 'FeatureProjectionReader', () => readFeatures(input.projectRoot, input.config)) : [];
   const projection = timedSync(timings, 'ProjectionBuilder', () => buildProjectionGraph({
     projectRoot: input.projectRoot,
     files: selection.deepFiles,
@@ -702,7 +801,7 @@ async function runRefresh(input: {
     mode: input.mode,
     graphRevision,
     graphState: 'ready' as const,
-    steps: selection.scoped ? [...SCOPED_REFRESH_STEPS] : [...FULL_REFRESH_STEPS],
+    steps: selection.scoped ? [...SCOPED_REFRESH_STEPS] : input.target === 'changed' ? [...CHANGED_DEEP_REFRESH_STEPS] : [...FULL_REFRESH_STEPS],
     changed: input.target === 'changed' ? changed : undefined,
     coverage: selection.coverage,
     deepIndex: deepIndexReport(input.target, selection),

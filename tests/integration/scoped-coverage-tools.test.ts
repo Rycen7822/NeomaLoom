@@ -186,6 +186,71 @@ describe('scoped coverage tool semantics', () => {
     expect(JSON.stringify(compact).length).toBeLessThan(JSON.stringify(debug).length * 0.75);
   });
 
+  it('nl_prepare_context agent profile returns a small action digest with a readable debug artifact', async () => {
+    const projectRoot = await createLoopLikeProject();
+
+    const agent = await callRegisteredTool('nl_prepare_context', {
+      projectPath: projectRoot,
+      goal: 'Find the document paragraph that defines Stage10 LoopCert portfolio selector tags and the score-side no-target constraint',
+      scope: 'STAGE10_推进规划.md LoopCert score selector tags no-target recovery CE',
+      targetRoles: ['document'],
+      readTopSpans: true,
+      maxReadSpans: 1,
+      contextLines: 1,
+      limit: 8,
+      budget: 1600,
+      responseProfile: 'agent'
+    });
+    const debug = await callRegisteredTool('nl_prepare_context', {
+      projectPath: projectRoot,
+      goal: 'Find the document paragraph that defines Stage10 LoopCert portfolio selector tags and the score-side no-target constraint',
+      scope: 'STAGE10_推进规划.md LoopCert score selector tags no-target recovery CE',
+      targetRoles: ['document'],
+      readTopSpans: true,
+      maxReadSpans: 1,
+      contextLines: 1,
+      limit: 8,
+      responseProfile: 'debug'
+    });
+
+    const data = agent.data as {
+      summary: { targetCount: number; returnedTargets: number; omittedTargets: number };
+      targets: Array<{ path: string; lines: string; decision: string; role: string; confidence: number }>;
+      coverageDigest: { linkedDocsToVerify: string[]; linkedDocsToVerifyOmitted: number };
+      readHints: Array<{ path: string; range: string; reason: string }>;
+      debugArtifact: { path: string; sha256: string; bytes: number };
+      context?: unknown;
+      navigation?: unknown;
+      stateEffectsDetailed?: unknown;
+    };
+    expect(agent.ok).toBe(true);
+    expect(agent.tokenBudget.used).toBeLessThanOrEqual(agent.tokenBudget.requested);
+    expect(data.summary.targetCount).toBeGreaterThanOrEqual(data.targets.length);
+    expect(data.summary.returnedTargets).toBe(data.targets.length);
+    expect(data.targets[0]).toMatchObject({
+      path: 'DeepScientist/quests/001/STAGE10_推进规划.md',
+      lines: '7-7',
+      decision: expect.any(String),
+      role: expect.any(String),
+      confidence: expect.any(Number)
+    });
+    expect(data.coverageDigest.linkedDocsToVerify.length).toBeLessThanOrEqual(5);
+    expect(data.readHints[0]).toMatchObject({ path: 'DeepScientist/quests/001/STAGE10_推进规划.md', range: '7-7' });
+    expect(data.context).toBeUndefined();
+    expect(data.navigation).toBeUndefined();
+    expect(data.stateEffectsDetailed).toBeUndefined();
+    expect(JSON.stringify(agent.data)).not.toContain('scoreBreakdown');
+    expect(JSON.stringify(agent.evidence)).toBe('[]');
+    expect(JSON.stringify(agent).length).toBeLessThan(JSON.stringify(debug).length * 0.45);
+
+    expect(data.debugArtifact.path).toMatch(/^\.noemaloom\/artifacts\/mcp\/nl_prepare_context\//);
+    expect(data.debugArtifact.bytes).toBeGreaterThan(0);
+    expect(data.debugArtifact.sha256).toMatch(/^[a-f0-9]{64}$/);
+    const artifactText = await readFile(path.join(projectRoot, data.debugArtifact.path), 'utf8');
+    expect(artifactText).toContain('scoreBreakdown');
+    expect(artifactText).toContain('risk-calibrated no-target blend');
+  });
+
   it('nl_prepare_context navigation profile emits query cards without recording while navigation is disabled', async () => {
     const projectRoot = await createLoopLikeProject();
 
@@ -513,6 +578,45 @@ describe('scoped coverage tool semantics', () => {
     expect(coverage.unsyncedDocRoles).toEqual([
       expect.objectContaining({ path: 'docs/api/client.md', term: 'legacyTimeout' })
     ]);
+  });
+
+  it('nl_verify_task agent profile preserves failing findings while summarizing expensive context', async () => {
+    const projectRoot = await createScopedProject();
+    await writeProjectFile(projectRoot, 'src/client.ts', 'export function createClient() { return "timeoutMs"; }\n');
+    await writeProjectFile(projectRoot, 'docs/api/client.md', '# Client API\n\nStill says legacyTimeout.\n');
+
+    const result = await callRegisteredTool('nl_verify_task', {
+      projectPath: projectRoot,
+      goal: 'Rename legacyTimeout to timeoutMs',
+      changedPaths: ['src/client.ts'],
+      oldTerms: ['legacyTimeout'],
+      newTerms: ['timeoutMs'],
+      target: 'createClient',
+      includeImpact: true,
+      responseProfile: 'agent'
+    });
+
+    const data = result.data as {
+      status: string;
+      coverage: { status: string; unsyncedDocRoles: Array<{ path: string; term: string }>; omitted: Record<string, number> };
+      impactSummary: { missingUnindexedPathCount: number; riskLevel?: string } | null;
+      impact?: unknown;
+      trace?: unknown;
+      debugArtifact: { path: string; sha256: string; bytes: number };
+    };
+    expect(result.ok).toBe(false);
+    expect(data.status).toBe('needs_attention');
+    expect(data.coverage.status).toBe('needs_attention');
+    expect(data.coverage.unsyncedDocRoles).toEqual([
+      expect.objectContaining({ path: 'docs/api/client.md', term: 'legacyTimeout' })
+    ]);
+    expect(data.impactSummary).toMatchObject({ missingUnindexedPathCount: expect.any(Number) });
+    expect(data.impact).toBeUndefined();
+    expect(data.trace).toBeUndefined();
+    expect(data.debugArtifact.path).toMatch(/^\.noemaloom\/artifacts\/mcp\/nl_verify_task\//);
+    const artifactText = await readFile(path.join(projectRoot, data.debugArtifact.path), 'utf8');
+    expect(artifactText).toContain('unsyncedDocRoles');
+    expect(artifactText).toContain('legacyTimeout');
   });
 
   it('scopes prepare coveragePlan to the selected child project under parent roots', async () => {

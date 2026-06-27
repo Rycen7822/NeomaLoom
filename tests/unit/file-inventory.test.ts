@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { createDefaultConfig } from '../../packages/core/src/config/default-config.js';
 import { buildFileInventory } from '../../packages/core/src/files/file-inventory.js';
 import { createIgnoreMatcher } from '../../packages/core/src/files/ignore-rules.js';
+import { createInventorySnapshot } from '../../packages/core/src/state/changed-detection.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -182,6 +183,35 @@ describe('file inventory', () => {
       indexedText: ''
     });
     expect(metadataOnly.files[0].contentHash).toBe(full.files[0].contentHash);
+  });
+
+  it('reuses previous metadata-only content hashes when size and mtime are unchanged', async () => {
+    const projectRoot = await createTempProject('noemaloom-reuse-inventory-');
+    const repoPath = 'src/app.ts';
+    await writeProjectFile(projectRoot, repoPath, 'export const app = 1;\n');
+
+    const first = await buildFileInventory({ projectRoot, loadIndexedText: false });
+    const snapshot = createInventorySnapshot(first);
+    const firstFile = first.files[0];
+    expect(snapshot.files[0]).toMatchObject({
+      path: repoPath,
+      contentHash: firstFile.contentHash,
+      sizeBytes: firstFile.sizeBytes,
+      modifiedAt: firstFile.modifiedAt
+    });
+
+    const reusableHash = 'previous-content-hash';
+    snapshot.files[0] = { ...snapshot.files[0], contentHash: reusableHash };
+
+    const metadataOnly = await buildFileInventory({ projectRoot, loadIndexedText: false, previousFiles: snapshot.files });
+    expect(metadataOnly.files[0]).toMatchObject({
+      contentHash: reusableHash,
+      indexedText: ''
+    });
+
+    const full = await buildFileInventory({ projectRoot, previousFiles: snapshot.files });
+    expect(full.files[0].indexedText).toBe('export const app = 1;\n');
+    expect(full.files[0].contentHash).toBe(firstFile.contentHash);
   });
 
   it('applies ignore globs and excludes vendor unless explicitly requested', async () => {

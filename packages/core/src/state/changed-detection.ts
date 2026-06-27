@@ -1,11 +1,11 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import type { FileInventory, InventoryFile } from '../files/file-inventory.js';
+import type { FileInventory, InventoryFile, PreviousInventoryFile } from '../files/file-inventory.js';
 import { resolveNoemaLoomPaths } from './paths.js';
 
 export type InventorySnapshot = {
-  files: Array<{ path: string; contentHash: string }>;
+  files: PreviousInventoryFile[];
 };
 
 export type ChangedFiles = {
@@ -25,7 +25,9 @@ export async function readInventorySnapshot(projectRoot: string): Promise<Invent
 
 export function createInventorySnapshot(inventory: FileInventory): InventorySnapshot {
   return {
-    files: inventory.files.map(file => ({ path: file.path, contentHash: file.contentHash })).sort((left, right) => left.path.localeCompare(right.path))
+    files: inventory.files
+      .map(file => ({ path: file.path, contentHash: file.contentHash, sizeBytes: file.sizeBytes, modifiedAt: file.modifiedAt }))
+      .sort((left, right) => left.path.localeCompare(right.path))
   };
 }
 

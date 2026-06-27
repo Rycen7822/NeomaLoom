@@ -1,7 +1,8 @@
 import { z } from 'zod';
 
-import { createEnvelope, resolveProjectRootFromInput, type NoemaLoomEnvelope } from '../envelope.js';
-import { shapeImpact } from '../output-profile.js';
+import { createEnvelope, resolveProjectRootFromInput, type EnvelopeWarning, type NoemaLoomEnvelope } from '../envelope.js';
+import { writeMcpDebugArtifact } from '../debug-artifact.js';
+import { RESPONSE_PROFILES, shapeEvidence, shapeVerifyTaskData, trimAgentDataForBudget, type ResponseProfile } from '../output-profile.js';
 import { estimateEnvelopeTokenBudget } from '../token-budget.js';
 import { MAX_CHANGED_PATHS } from '../../files/bounded-changed-paths.js';
 import { mergeRequiredVerification, requiredVerificationPaths } from '../../verifier/required-verification.js';
@@ -43,7 +44,8 @@ export const nlVerifyTaskInputSchema = z
     targetType: z.enum(['auto', 'span', 'symbol', 'file', 'feature', 'config', 'doc']).default('auto'),
     depth: z.number().int().min(0).max(5).default(2),
     includeImpact: z.boolean().default(true),
-    includeTrace: z.boolean().default(false)
+    includeTrace: z.boolean().default(false),
+    responseProfile: z.enum(RESPONSE_PROFILES).default('compact')
   })
   .passthrough();
 
@@ -85,27 +87,72 @@ export async function handleNlVerifyTask(input: unknown): Promise<NoemaLoomEnvel
     coverage: coverage.data
   });
 
-  let data: Record<string, unknown> = {
+  const nextActions = verifyTaskNextActions(coverageData.status, coverage.graphState);
+  const responseProfile = parsed.responseProfile as ResponseProfile;
+  const data: Record<string, unknown> = {
     status: coverageData.status ?? 'unknown',
     coverage: coverage.data,
     impact: impact?.data ?? null,
     trace: trace?.data ?? null,
     requiredVerification: requiredVerificationPaths(requiredVerificationDetails),
     requiredVerificationDetails,
+    requiredActions: nextActions,
     steps: summarizeSteps(envelopes)
   };
-  const nextActions = verifyTaskNextActions(coverageData.status, coverage.graphState);
-  let tokenBudget = combineTokenBudget(envelopes);
-  let warnings = combineWarnings(envelopes);
-  const finalBudget = estimateEnvelopeTokenBudget({ requested: 2500, data, nextActions });
-  if (finalBudget.tokenBudget.truncated) {
-    data = {
-      ...data,
-      impact: impact?.data ? shapeImpact(impact.data, 'compact') : null
-    };
-    const shapedBudget = estimateEnvelopeTokenBudget({ requested: 2500, data, nextActions });
-    tokenBudget = { ...shapedBudget.tokenBudget, truncated: true };
-    warnings = [...warnings, ...finalBudget.warnings, ...shapedBudget.warnings];
+  const evidence = combineEvidence(envelopes);
+  const baseWarnings = combineWarnings(envelopes);
+  const artifactWarnings: EnvelopeWarning[] = [];
+  let shapedData = shapeVerifyTaskData(data, responseProfile) as Record<string, unknown>;
+  const shapedEvidence = shapeEvidence(evidence, responseProfile);
+  if (responseProfile !== 'debug') {
+    try {
+      shapedData = {
+        ...shapedData,
+        debugArtifact: await writeMcpDebugArtifact({
+          projectRoot,
+          tool: 'nl_verify_task',
+          responseProfile,
+          data,
+          evidence,
+          warnings: baseWarnings,
+          nextActions
+        })
+      };
+    } catch (error) {
+      artifactWarnings.push({
+        code: 'debug_artifact_write_failed',
+        severity: 'warning',
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+  let budgetWarnings: EnvelopeWarning[] = [...baseWarnings, ...artifactWarnings];
+  let finalBudget = estimateEnvelopeTokenBudget({
+    requested: responseProfile === 'agent' ? 1600 : 2500,
+    data: shapedData,
+    evidence: shapedEvidence,
+    warnings: budgetWarnings,
+    nextActions,
+    truncated: combineTokenBudget(envelopes).truncated
+  });
+  if (responseProfile === 'agent' && finalBudget.tokenBudget.used > finalBudget.tokenBudget.requested) {
+    shapedData = trimAgentDataForBudget(shapedData) as Record<string, unknown>;
+    budgetWarnings = [
+      ...budgetWarnings,
+      {
+        code: 'output_trimmed_to_budget',
+        severity: 'info',
+        message: 'Agent output exceeded the requested budget after first-pass shaping; non-critical arrays/previews were trimmed while preserving status, required verification/actions, and debugArtifact.'
+      }
+    ];
+    finalBudget = estimateEnvelopeTokenBudget({
+      requested: 1600,
+      data: shapedData,
+      evidence: shapedEvidence,
+      warnings: budgetWarnings,
+      nextActions,
+      truncated: true
+    });
   }
 
   return createEnvelope({
@@ -114,10 +161,10 @@ export async function handleNlVerifyTask(input: unknown): Promise<NoemaLoomEnvel
     projectRoot,
     graphRevision: combineGraphRevision(envelopes),
     graphState: combineGraphState(envelopes),
-    tokenBudget,
-    warnings,
-    data,
-    evidence: combineEvidence(envelopes),
+    tokenBudget: finalBudget.tokenBudget,
+    warnings: finalBudget.warnings,
+    data: shapedData,
+    evidence: shapedEvidence,
     nextActions
   });
 }
