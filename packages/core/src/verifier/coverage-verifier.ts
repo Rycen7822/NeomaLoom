@@ -1,5 +1,4 @@
 import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import path from 'node:path';
 
 import { sweepOldTerms, type OldTermHit } from './old-term-sweep.js';
@@ -9,6 +8,7 @@ import type { BrokenLink, StaleAnchor } from './link-checker.js';
 import { classifyFileRole, isGeneratedArtifactPath } from '../files/role-classifier.js';
 import { classifyPathLayer, isDefaultBusinessPath } from '../files/path-layer.js';
 import { normalizeProjectRelativePath, safeReadFileInsideProjectSync } from '../safety/path-guard.js';
+import { openSqliteDatabase } from '../shared/sqlite.js';
 
 type Statement = {
   all: (...params: unknown[]) => unknown[];
@@ -18,13 +18,6 @@ type Database = {
   prepare: (sql: string) => Statement;
   close: () => void;
 };
-
-const require = createRequire(import.meta.url);
-
-function openDatabase(filename: string): Database {
-  const sqlite = require('node:sqlite') as { DatabaseSync: new (filename: string) => Database };
-  return new sqlite.DatabaseSync(filename);
-}
 
 export type OldTermPolicy = 'changed_paths' | 'changed_paths_plus_advisory_docs' | 'strict_global';
 
@@ -112,7 +105,7 @@ function readInventoryDocRoles(input: {
 }): Array<{ path: string; role: string; indexed: boolean }> {
   let db: Database | undefined;
   try {
-    db = openDatabase(path.join(input.projectRoot, '.noemaloom', 'spans', 'spans.db'));
+    db = openSqliteDatabase<Database>(path.join(input.projectRoot, '.noemaloom', 'spans', 'spans.db'));
     const changed = placeholders(input.changedPaths.length > 0 ? input.changedPaths : ['']);
     return db
       .prepare(
@@ -170,7 +163,7 @@ function inventoryTestPathsFromSnapshot(projectRoot: string): string[] {
 function readInventoryTestPaths(projectRoot: string): string[] {
   let db: Database | undefined;
   try {
-    db = openDatabase(path.join(projectRoot, '.noemaloom', 'spans', 'spans.db'));
+    db = openSqliteDatabase<Database>(path.join(projectRoot, '.noemaloom', 'spans', 'spans.db'));
     return (db.prepare(`SELECT DISTINCT path FROM repo_files WHERE role = 'test_file' ORDER BY path ASC`).all() as Array<{ path: string }>).map(row => row.path);
   } catch {
     return inventoryTestPathsFromSnapshot(projectRoot);
@@ -290,7 +283,7 @@ function findUnverifiedLinkedTests(input: {
   }
   let db: Database | undefined;
   try {
-    db = openDatabase(path.join(input.projectRoot, '.noemaloom', 'spans', 'spans.db'));
+    db = openSqliteDatabase<Database>(path.join(input.projectRoot, '.noemaloom', 'spans', 'spans.db'));
     const changed = placeholders(input.changedPaths);
     const rows = db
       .prepare(

@@ -1,9 +1,10 @@
-import { access, mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, open, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import {
   appendFileInsideStateDir,
+  STATE_PATH_GUARD_NOFOLLOW_SUPPORTED,
   openExclusiveFileInsideStateDir,
   safeReadFileInsideProject,
   safeStatInsideProject,
@@ -16,6 +17,10 @@ async function createTempProject(): Promise<string> {
 }
 
 describe('state write path guard', () => {
+  it('exposes whether nofollow opens are supported instead of silently hiding policy', () => {
+    expect(STATE_PATH_GUARD_NOFOLLOW_SUPPORTED).toBe(true);
+  });
+
   it('throws before touching disk for writes outside .noemaloom', async () => {
     const projectRoot = await createTempProject();
     const outsidePath = path.join(projectRoot, 'README.md');
@@ -34,6 +39,27 @@ describe('state write path guard', () => {
     await writeFileInsideStateDir(projectRoot, insidePath, 'ok\n');
 
     await expect(readFile(insidePath, 'utf8')).resolves.toBe('ok\n');
+  });
+
+  it('syncs appended state data before closing the file handle', async () => {
+    const projectRoot = await createTempProject();
+    const probePath = path.join(projectRoot, 'probe');
+    const probe = await open(probePath, 'w');
+    const prototype = Object.getPrototypeOf(probe) as { sync: typeof probe.sync };
+    await probe.close();
+    const originalSync = prototype.sync;
+    let syncCalls = 0;
+    prototype.sync = async function patchedSync(this: typeof probe) {
+      syncCalls += 1;
+      return originalSync.call(this);
+    };
+    try {
+      await appendFileInsideStateDir(projectRoot, path.join(projectRoot, '.noemaloom', 'logs', 'mcp.jsonl'), 'ok\n');
+    } finally {
+      prototype.sync = originalSync;
+    }
+
+    expect(syncCalls).toBeGreaterThan(0);
   });
 
   it('rejects symlinked state path escapes before writing through them', async () => {

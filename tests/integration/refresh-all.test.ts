@@ -98,6 +98,32 @@ describe('nl_refresh target all', () => {
     expect(map.highConfidenceLinks.length).toBeGreaterThan(0);
   });
 
+  it('propagates test/example parser warnings into refresh output', async () => {
+    const projectRoot = await createProject();
+    const config = createDefaultConfig(projectRoot);
+    config.featureProjection.enabled = false;
+    await mkdir(path.join(projectRoot, '.noemaloom'), { recursive: true });
+    await writeFile(path.join(projectRoot, '.noemaloom', 'config.json'), `${JSON.stringify(config, null, 2)}\n`);
+    await writeProjectFile(projectRoot, 'tests/test_orphan_marker.py', ['import pytest', '@pytest.mark.integration', ''].join('\n'));
+
+    const result = await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'all',
+      mode: 'safe'
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'refresh_warning',
+        message: expect.stringContaining('tests/test_orphan_marker.py: dangling pytest marker integration')
+      })
+    ]));
+    expect(result.data.warnings).toEqual(expect.arrayContaining([
+      expect.stringContaining('tests/test_orphan_marker.py: dangling pytest marker integration')
+    ]));
+  });
+
   it('respects disabled feature projection and does not project stale feature files', async () => {
     const projectRoot = await createProject();
     const config = createDefaultConfig(projectRoot);

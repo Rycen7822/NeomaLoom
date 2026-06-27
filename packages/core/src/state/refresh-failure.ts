@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { unlinkInsideStateDir, writeFileInsideStateDir } from '../safety/path-guard.js';
 import { ensureStateDir } from './state-dir.js';
+import { isErrnoException } from '../shared/fs-errors.js';
 
 export type RefreshFailureRecord = {
   tool: string;
@@ -10,10 +11,6 @@ export type RefreshFailureRecord = {
   message: string;
   failedAt: string;
 };
-
-function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && 'code' in error;
-}
 
 function isRefreshFailureRecord(value: unknown): value is RefreshFailureRecord {
   if (!value || typeof value !== 'object') {

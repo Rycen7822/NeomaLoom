@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 
 import type { EdgeRelation } from '../spans/enums.js';
 import type { RepoEdge } from '../spans/types.js';
@@ -8,6 +7,7 @@ import {
   shouldWriteCandidate,
   type EvidenceKind
 } from './confidence.js';
+import { sha1 } from '../shared/hash.js';
 
 export { CONFIDENCE_SCORES, confidenceForEvidence, shouldWriteCandidate };
 
@@ -19,10 +19,6 @@ export type LinkCandidate = {
   evidence: Record<string, unknown>;
   confidence?: number;
 };
-
-function sha1(value: string): string {
-  return createHash('sha1').update(value).digest('hex');
-}
 
 function edgeId(candidate: LinkCandidate): string {
   return `xref:${sha1(

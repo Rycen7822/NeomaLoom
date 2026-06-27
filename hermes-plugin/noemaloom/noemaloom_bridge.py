@@ -8,6 +8,7 @@ Users do not need to add a separate Hermes MCP server entry.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -152,6 +153,13 @@ def _git_dirty_count(repo: Path) -> int | None:
     return len([line for line in output.splitlines() if line.strip()])
 
 
+def _sha256_file(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except Exception:
+        return None
+
+
 def _provenance_warnings(repo: Path) -> list[dict[str, str]]:
     metadata = _read_install_metadata()
     if not metadata:
@@ -173,6 +181,24 @@ def _provenance_warnings(repo: Path) -> list[dict[str, str]]:
                 "code": "installed_plugin_dirty_count_mismatch",
                 "severity": "warning",
                 "message": f"Installed NoemaLoom metadata dirtyFiles={metadata.get('dirtyFiles')} differs from source dirtyFiles={dirty}; rerun scripts/sync-hermes-plugin.py.",
+            }
+        )
+    schema_hash = _sha256_file(_plugin_root() / "schemas.py")
+    if schema_hash and metadata.get("schemaSha256") and metadata.get("schemaSha256") != schema_hash:
+        warnings.append(
+            {
+                "code": "installed_plugin_schema_hash_mismatch",
+                "severity": "warning",
+                "message": "Installed NoemaLoom schema hash differs from current plugin schemas.py; rerun scripts/sync-hermes-plugin.py.",
+            }
+        )
+    build_hash = _sha256_file(_default_build_dir(repo) / "cli" / "main.js")
+    if build_hash and metadata.get("buildMainSha256") and metadata.get("buildMainSha256") != build_hash:
+        warnings.append(
+            {
+                "code": "installed_plugin_build_hash_mismatch",
+                "severity": "warning",
+                "message": "Installed NoemaLoom build hash differs from current runtime build; rerun scripts/sync-hermes-plugin.py.",
             }
         )
     return warnings
@@ -349,11 +375,27 @@ def _runtime_metadata(repo: Path, build_dir: Path) -> dict[str, Any]:
     }
 
 
+def _allowed_project_roots() -> list[Path]:
+    return [Path(value).expanduser().resolve() for value in os.environ.get("NOEMALOOM_ALLOWED_PROJECTS", "").split(os.pathsep) if value.strip()]
+
+
+def _assert_allowed_project_cwd(project_cwd: Path) -> None:
+    allowed_roots = _allowed_project_roots()
+    if allowed_roots and not any(_is_relative_to(project_cwd, allowed) for allowed in allowed_roots):
+        raise RuntimeError(
+            f"projectPath is outside NOEMALOOM_ALLOWED_PROJECTS: {project_cwd}"
+        )
+
+
 def _project_cwd(args: dict[str, Any]) -> str:
     project = args.get("projectPath")
     if isinstance(project, str) and project and project != "default_current_project":
-        return str(Path(project).expanduser().resolve())
-    return os.getcwd()
+        resolved = Path(project).expanduser().resolve()
+        _assert_allowed_project_cwd(resolved)
+        return str(resolved)
+    resolved = Path(os.getcwd()).resolve()
+    _assert_allowed_project_cwd(resolved)
+    return str(resolved)
 
 
 def _runtime_env(repo: Path) -> dict[str, str]:

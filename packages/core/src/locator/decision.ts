@@ -8,7 +8,8 @@ export type CandidateDecision = {
 };
 
 export function decideCandidate(candidate: RankedCandidate): CandidateDecision {
-  const confidence = Math.max(0, Math.min(1, candidate.score / 100));
+  const normalizedScore = Math.max(0, candidate.score);
+  const confidence = normalizedScore === 0 ? 0 : normalizedScore / (normalizedScore + 20);
   const editRisk = candidate.boundary.risk;
 
   if (candidate.indexed === false) {

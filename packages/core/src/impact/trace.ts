@@ -1,8 +1,8 @@
-import { createRequire } from 'node:module';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 
 import type { EdgeRelation, FileRole, SpanKind } from '../spans/enums.js';
+import { openSqliteDatabase } from '../shared/sqlite.js';
 
 type Statement = {
   all: (...params: unknown[]) => unknown[];
@@ -13,13 +13,6 @@ type Database = {
   prepare: (sql: string) => Statement;
   close: () => void;
 };
-
-const require = createRequire(import.meta.url);
-
-function openDatabase(filename: string): Database {
-  const sqlite = require('node:sqlite') as { DatabaseSync: new (filename: string) => Database };
-  return new sqlite.DatabaseSync(filename);
-}
 
 export type TraceDirection = 'upstream' | 'downstream' | 'both';
 
@@ -312,9 +305,9 @@ export function traceGraph(input: {
   if (!existsSync(dbPath)) {
     return emptyTraceGraph('run nl_refresh before impact tracing');
   }
-  let db: ReturnType<typeof openDatabase>;
+  let db: Database;
   try {
-    db = openDatabase(dbPath);
+    db = openSqliteDatabase<Database>(dbPath);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return emptyTraceGraph('run nl_refresh before impact tracing', [`spans.db unreadable; run nl_refresh target="files" (${message})`]);

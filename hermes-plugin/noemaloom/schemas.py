@@ -117,11 +117,11 @@ NL_PREPARE_CONTEXT_SCHEMA = {
             "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
             "budget": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 2400},
             "includeSnippets": {"type": "boolean", "default": False},
-            "includeQueryPreview": {"type": "boolean", "default": False},
+            "includeQueryPreview": {"type": "boolean", "default": True},
             "readTopSpans": {"type": "boolean", "default": False},
             "maxReadSpans": {"type": "integer", "minimum": 0, "maximum": 10, "default": 3},
             "contextLines": {"type": "integer", "minimum": 0, "maximum": 80, "default": 10},
-            "recordNavigation": {"type": "boolean", "default": False},
+            "recordNavigation": {"type": "boolean", "default": True},
             "responseProfile": {
                 "type": "string",
                 "enum": ["agent", "compact", "standard", "debug", "navigation"],

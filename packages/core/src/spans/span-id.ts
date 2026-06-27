@@ -1,11 +1,7 @@
-import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import type { SpanKind } from './enums.js';
-
-function sha1(value: string): string {
-  return createHash('sha1').update(value).digest('hex');
-}
+import { sha1 } from '../shared/hash.js';
 
 function root(projectRoot: string): string {
   return path.resolve(projectRoot);

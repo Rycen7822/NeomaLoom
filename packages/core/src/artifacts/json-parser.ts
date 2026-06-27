@@ -1,7 +1,7 @@
-import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import type { SpanKind } from '../spans/enums.js';
+import { sha1 } from '../shared/hash.js';
 
 export type ArtifactSpan = {
   kind: Extract<SpanKind, `config.${string}`>;
@@ -31,10 +31,6 @@ const MAX_ARTIFACT_SPAN_LABEL_BYTES = 1024;
 const JSON_VALUE_PREVIEW_BYTES = 1024;
 const MAX_JSON_TRAVERSAL_DEPTH = 100;
 const MAX_JSON_HASH_KEYS = 100;
-
-function sha1(value: string): string {
-  return createHash('sha1').update(value).digest('hex');
-}
 
 function byteLength(value: string): number {
   return Buffer.byteLength(value, 'utf8');

@@ -2,6 +2,7 @@ import path from 'node:path';
 
 import { buildFileInventory, type FileInventory, type InventoryFile } from '../files/file-inventory.js';
 import { safeReadFileInsideProject } from '../safety/path-guard.js';
+import { mapWithConcurrency } from '../shared/concurrency.js';
 import { detectCodeLanguage, isCodeFactLanguage } from './language-detect.js';
 import { writeCodeGraphDb, searchCodeGraphDb, type CodeFactSearchResult } from './codegraph-db.js';
 import { extractCodeFacts, type CodeFactEdge, type CodeFactSpan } from './extractor.js';
@@ -26,20 +27,6 @@ export type IndexCodeFactsResult = {
 };
 
 const CODE_FACT_INDEX_CONCURRENCY = 8;
-
-async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array(items.length) as R[];
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await worker(items[index]);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
 
 async function indexedTextForFile(projectRoot: string, file: InventoryFile): Promise<string> {
   if (file.oversized) {

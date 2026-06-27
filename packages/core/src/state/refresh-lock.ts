@@ -2,6 +2,7 @@ import { readFile, type FileHandle } from 'node:fs/promises';
 
 import { openExclusiveFileInsideStateDir, renameInsideStateDir, unlinkInsideStateDir } from '../safety/path-guard.js';
 import { ensureStateDir } from './state-dir.js';
+import { isErrnoException } from '../shared/fs-errors.js';
 
 export type RefreshLockResult<T> =
   | {
@@ -14,10 +15,6 @@ export type RefreshLockResult<T> =
     };
 
 const REFRESH_LOCK_TTL_MS = 6 * 60 * 60 * 1000;
-
-function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && 'code' in error;
-}
 
 export function processIsAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) {

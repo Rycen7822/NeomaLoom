@@ -18,6 +18,8 @@ function mentionMetadata(value: string): Record<string, unknown> {
 
 export function parseYamlArtifact(input: ArtifactParseInput): ArtifactParseResult {
   const lines = input.text.split(/\r?\n/);
+  const maxSpans = Math.max(1, input.maxSpans ?? Number.POSITIVE_INFINITY);
+  let spanLimitReached = false;
   const spans: ArtifactSpan[] = [
     createArtifactSpan({
       kind: 'config.file',
@@ -42,6 +44,10 @@ export function parseYamlArtifact(input: ArtifactParseInput): ArtifactParseResul
       stack.pop();
     }
     const yamlPath = [...stack.map(item => item.key), key].join('.');
+    if (spans.length >= maxSpans) {
+      spanLimitReached = true;
+      return;
+    }
     spans.push(
       createArtifactSpan({
         kind: 'config.entry',
@@ -63,6 +69,6 @@ export function parseYamlArtifact(input: ArtifactParseInput): ArtifactParseResul
   return {
     path: input.path,
     spans,
-    warnings: []
+    warnings: spanLimitReached ? [`Artifact span limit reached (${maxSpans})`] : []
   };
 }

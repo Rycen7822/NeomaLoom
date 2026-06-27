@@ -6,15 +6,17 @@ function looksLikeTestPath(filePath: string): boolean {
 }
 
 export function indexTestExampleSpans(input: TestExampleParseInput): TestExampleParseResult {
+  const testResult = looksLikeTestPath(input.path) ? extractTestCases(input) : { path: input.path, spans: [], warnings: [] };
+  const exampleResult = extractExampleBlocks(input);
   const spans = [
-    ...(looksLikeTestPath(input.path) ? extractTestCases(input).spans : []),
-    ...extractExampleBlocks(input).spans
+    ...testResult.spans,
+    ...exampleResult.spans
   ];
 
   return {
     path: input.path,
     spans,
-    warnings: []
+    warnings: [...testResult.warnings, ...exampleResult.warnings]
   };
 }
 

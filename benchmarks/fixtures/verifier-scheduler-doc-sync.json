@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "kind": "verifier",
+  "name": "scheduler-doc-sync-old-term-sweep",
+  "fixtureProject": "tests/fixtures/scheduler-doc-sync",
+  "tool": "nl_verify_task",
+  "input": {
+    "goal": "Rename timeout to timeoutMs in scheduler docs",
+    "changedPaths": ["docs/api/scheduler.md", "README.md", "docs/tutorial/scheduler.md", "examples/scheduler.md"],
+    "oldTerms": ["timeout"],
+    "newTerms": ["timeoutMs"]
+  },
+  "expected": {
+    "statusAfterPartialEdit": "fail",
+    "statusAfterCompleteEdit": "pass",
+    "requiredPathsInclude": ["README.md", "docs/tutorial/scheduler.md", "examples/scheduler.md"]
+  }
+}

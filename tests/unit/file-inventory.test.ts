@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 
 import { createDefaultConfig } from '../../packages/core/src/config/default-config.js';
 import { buildFileInventory } from '../../packages/core/src/files/file-inventory.js';
+import { isTextChangedPath } from '../../packages/core/src/files/bounded-changed-paths.js';
 import { createIgnoreMatcher } from '../../packages/core/src/files/ignore-rules.js';
 import { createInventorySnapshot } from '../../packages/core/src/state/changed-detection.js';
 
@@ -22,6 +23,22 @@ async function writeProjectFile(projectRoot: string, repoPath: string, text: str
 }
 
 describe('file inventory', () => {
+  it('treats all canonical code extensions as text changed paths', () => {
+    for (const repoPath of [
+      'src/app.go',
+      'src/app.rs',
+      'src/App.java',
+      'src/app.cpp',
+      'src/app.c',
+      'src/app.h',
+      'src/app.hpp',
+      'src/app.kt',
+      'src/app.scala'
+    ]) {
+      expect(isTextChangedPath(repoPath)).toBe(true);
+    }
+  });
+
   it('combines git tracked files with visible untracked files', async () => {
     const projectRoot = await createTempProject('noemaloom-git-inventory-');
     await execFileAsync('git', ['init'], { cwd: projectRoot });

@@ -1,5 +1,4 @@
 import { mkdir, readFile, rename, stat, unlink } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 import path from 'node:path';
 import { z } from 'zod';
 
@@ -9,18 +8,16 @@ import { readCodeGraphDb, writeCodeGraphDb, type CodeGraphSnapshot } from '../..
 import type { CodeFactEdge } from '../../code-fact/extractor.js';
 import { buildRepositoryMap, writeRepositoryMap } from '../../derived-map/repository-map.js';
 import { indexDocumentSpans, type DocumentSpan } from '../../documents/document-span-indexer.js';
-import { buildFileInventory, buildFileInventoryForPaths, buildFileInventoryFromSnapshot, type FileInventory, type InventoryFile } from '../../files/file-inventory.js';
-import { isGitRepository, listGitChangedCandidateFiles, listGitDeletedFiles, listGitVisibleFiles } from '../../files/git-files.js';
+import { buildFileInventory, type FileInventory, type InventoryFile } from '../../files/file-inventory.js';
 import { projectFeatures } from '../../feature-projection/feature-projector.js';
 import { buildCrossReferenceEdges } from '../../linker/cross-reference-linker.js';
 import { extractLinkCandidatesFromSpans } from '../../linker/evidence-extractors.js';
-import { detectCodexScientistHotsetSeedPaths, isCodexScientistColdPath } from '../../profiles/codex-scientist.js';
 import { safeReadFileInsideProject, writeFileInsideStateDir } from '../../safety/path-guard.js';
+import { selectDeepFiles, tryBuildChangedSnapshotInventory, tryBuildScopedSnapshotInventory, type ScopeSelection } from '../../refresh/scope-selection.js';
 import { buildProjectionGraph, type FeatureProjectionRecord } from '../../spans/projection-builder.js';
 import type { RepoEdge, RepoSpan } from '../../spans/types.js';
 import { indexTestExampleSpans, type TestExampleSpan } from '../../tests-examples/test-example-span-indexer.js';
-import { createInventorySnapshot, detectChangedFiles, readInventorySnapshot, type ChangedFiles, type InventorySnapshot } from '../../state/changed-detection.js';
-import { hotsetRevision, manifestFiles, readHotsetManifest, upsertHotsetEntries, writeHotsetManifest } from '../../state/hotset.js';
+import { createInventorySnapshot, detectChangedFiles, readInventorySnapshot, type ChangedFiles } from '../../state/changed-detection.js';
 import { resolveNoemaLoomPaths } from '../../state/paths.js';
 import { createGraphRevision, readIndexCoverage, readLatestRefreshSummary, readLatestRevision, readStoredGraphSnapshot, writeRefreshRevision, writeRefreshRevisionDelta, type IndexCoverage, type StoredGraphSnapshot } from '../../state/refresh-revision.js';
 import { clearRefreshFailure, recordRefreshFailure, refreshFailureMessage } from '../../state/refresh-failure.js';
@@ -29,8 +26,11 @@ import { cleanupOldStateFiles } from '../../state/retention.js';
 import { ensureStateDir } from '../../state/state-dir.js';
 import { writeTransientBackup } from '../../state/transient-backup.js';
 import { loadOrCreateConfig } from '../../config/config-loader.js';
+import { mapWithConcurrency } from '../../shared/concurrency.js';
 import type { NoemaLoomConfig } from '../../config/default-config.js';
 import { createEnvelope, resolveProjectRootFromInput, type NoemaLoomEnvelope } from '../envelope.js';
+import { isErrnoException } from '../../shared/fs-errors.js';
+import { openSqliteDatabase } from '../../shared/sqlite.js';
 
 const refreshTargets = ['all', 'changed', 'files', 'hotset', 'paths', 'code', 'docs', 'artifacts', 'tests', 'features', 'links', 'map'] as const;
 const refreshModes = ['safe', 'force'] as const;
@@ -42,13 +42,6 @@ type Database = {
   prepare: (sql: string) => { get: (...params: unknown[]) => unknown };
   close: () => void;
 };
-
-const require = createRequire(import.meta.url);
-
-function openDatabase(filename: string): Database {
-  const sqlite = require('node:sqlite') as { DatabaseSync: new (filename: string) => Database };
-  return new sqlite.DatabaseSync(filename);
-}
 
 export const nlRefreshInputSchema = z
   .object({
@@ -152,20 +145,6 @@ type TextProvider = (file: InventoryFile) => Promise<string>;
 
 const REFRESH_INDEX_CONCURRENCY = 8;
 
-async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array(items.length) as R[];
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await worker(items[index]);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
-
 function createTextProvider(projectRoot: string): TextProvider {
   const cache = new Map<string, Promise<string>>();
   return (file: InventoryFile): Promise<string> => {
@@ -217,11 +196,18 @@ async function indexArtifactFiles(files: InventoryFile[], textForFile: TextProvi
   };
 }
 
-async function indexTestExampleFiles(files: InventoryFile[], textForFile: TextProvider): Promise<TestExampleSpan[]> {
-  const spanGroups = await mapWithConcurrency(files, REFRESH_INDEX_CONCURRENCY, async file =>
-    indexTestExampleSpans({ path: file.path, text: await textForFile(file) }).spans
-  );
-  return spanGroups.flat();
+async function indexTestExampleFiles(files: InventoryFile[], textForFile: TextProvider): Promise<{ spans: TestExampleSpan[]; warnings: string[] }> {
+  const results = await mapWithConcurrency(files, REFRESH_INDEX_CONCURRENCY, async file => {
+    const result = indexTestExampleSpans({ path: file.path, text: await textForFile(file) });
+    return {
+      spans: result.spans,
+      warnings: result.warnings.map(warning => `${result.path}: ${warning}`)
+    };
+  });
+  return {
+    spans: results.flatMap(result => result.spans),
+    warnings: results.flatMap(result => result.warnings)
+  };
 }
 
 type FeatureProjectionLocation = {
@@ -414,10 +400,6 @@ async function writeDocumentAnchorIndex(projectRoot: string, spans: DocumentSpan
   );
 }
 
-function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && 'code' in error;
-}
-
 async function unlinkIfExists(targetPath: string): Promise<void> {
   try {
     await unlink(targetPath);
@@ -454,7 +436,7 @@ async function sqliteLooksCorrupt(targetPath: string): Promise<boolean> {
   }
   let db: Database | undefined;
   try {
-    db = openDatabase(targetPath);
+    db = openSqliteDatabase<Database>(targetPath);
     db.prepare('PRAGMA schema_version').get();
     return false;
   } catch {
@@ -557,151 +539,6 @@ async function runFeatureProjection(projectRoot: string, graphRevision: string, 
   return result.state === 'available' ? [] : result.warnings.map(warning => `featureProjection: ${warning}`);
 }
 
-function isFullTarget(target: RefreshTarget): boolean {
-  return !['files', 'hotset', 'paths'].includes(target);
-}
-
-function normalizeRepoPath(projectRoot: string, requestedPath: string): string {
-  const resolvedRoot = path.resolve(projectRoot);
-  const absolute = path.isAbsolute(requestedPath) ? path.resolve(requestedPath) : path.resolve(resolvedRoot, requestedPath);
-  const relative = path.relative(resolvedRoot, absolute).replaceAll('\\', '/');
-  if (relative === '' || relative.startsWith('../') || relative === '..' || path.isAbsolute(relative)) {
-    throw new Error(`hotset path escapes project root: ${requestedPath}`);
-  }
-  return relative;
-}
-
-function resolveRequestedFiles(projectRoot: string, inventory: FileInventory, requestedPaths: string[]): InventoryFile[] {
-  if (requestedPaths.length === 0) {
-    throw new Error('target="paths" requires a non-empty paths array');
-  }
-  const byPath = new Map(inventory.files.map(file => [file.path, file]));
-  const selected = new Map<string, InventoryFile>();
-  for (const requestedPath of requestedPaths) {
-    const repoPath = normalizeRepoPath(projectRoot, requestedPath);
-    const file = byPath.get(repoPath);
-    if (!file) {
-      throw new Error(`hotset path is not in the current file inventory: ${requestedPath}`);
-    }
-    selected.set(file.path, file);
-  }
-  return [...selected.values()].sort((left, right) => left.path.localeCompare(right.path));
-}
-
-function uniqueStrings(values: string[]): string[] {
-  return [...new Set(values)].sort();
-}
-
-async function tryBuildScopedSnapshotInventory(input: {
-  projectRoot: string;
-  target: RefreshTarget;
-  requestedPaths: string[];
-  config: NoemaLoomConfig;
-  previousInventory?: InventorySnapshot;
-}): Promise<FileInventory | undefined> {
-  if (!input.previousInventory || !['paths', 'hotset'].includes(input.target)) {
-    return undefined;
-  }
-
-  if (input.target === 'paths' && input.requestedPaths.length === 0) {
-    return undefined;
-  }
-
-  const source = input.target === 'paths' ? 'snapshot_plus_requested_paths' as const : 'snapshot_plus_hotset' as const;
-  const snapshotInventory = buildFileInventoryFromSnapshot({
-    projectRoot: input.projectRoot,
-    config: input.config,
-    previousFiles: input.previousInventory.files,
-    source
-  });
-  const seedPaths = await detectCodexScientistHotsetSeedPaths(input.projectRoot, snapshotInventory.files);
-  const manifest = input.target === 'hotset' ? await readHotsetManifest(input.projectRoot) : undefined;
-  const manifestPaths = manifest?.entries.map(entry => entry.path) ?? [];
-
-  const requiredInventory = input.target === 'paths'
-    ? await buildFileInventoryForPaths({
-        projectRoot: input.projectRoot,
-        config: input.config,
-        paths: input.requestedPaths,
-        loadIndexedText: false,
-        previousFiles: input.previousInventory.files,
-        allowMissing: false
-      })
-    : { files: [] as InventoryFile[], ignoredPaths: [] as string[] };
-  const requiredPaths = new Set(requiredInventory.files.map(file => file.path));
-  const optionalPaths = uniqueStrings([...manifestPaths, ...seedPaths].filter(repoPath => !requiredPaths.has(normalizeRepoPath(input.projectRoot, repoPath))));
-  const optionalInventory = optionalPaths.length > 0
-    ? await buildFileInventoryForPaths({
-        projectRoot: input.projectRoot,
-        config: input.config,
-        paths: optionalPaths,
-        loadIndexedText: false,
-        previousFiles: input.previousInventory.files,
-        allowMissing: true
-      })
-    : { files: [] as InventoryFile[], ignoredPaths: [] as string[] };
-
-  return buildFileInventoryFromSnapshot({
-    projectRoot: input.projectRoot,
-    config: input.config,
-    previousFiles: input.previousInventory.files,
-    refreshedFiles: [...requiredInventory.files, ...optionalInventory.files],
-    ignoredPaths: [...requiredInventory.ignoredPaths, ...optionalInventory.ignoredPaths],
-    source
-  });
-}
-
-async function tryBuildChangedSnapshotInventory(input: {
-  projectRoot: string;
-  config: NoemaLoomConfig;
-  previousInventory?: InventorySnapshot;
-}): Promise<FileInventory | undefined> {
-  if (!input.previousInventory || !(await isGitRepository(input.projectRoot))) {
-    return undefined;
-  }
-  const [visibleFiles, changedCandidates, gitDeletedFiles] = await Promise.all([
-    listGitVisibleFiles(input.projectRoot),
-    listGitChangedCandidateFiles(input.projectRoot),
-    listGitDeletedFiles(input.projectRoot)
-  ]);
-  const visible = new Set(visibleFiles.map(repoPath => normalizeRepoPath(input.projectRoot, repoPath)));
-  for (const deletedPath of gitDeletedFiles) {
-    visible.delete(normalizeRepoPath(input.projectRoot, deletedPath));
-  }
-  const deletedPaths = input.previousInventory.files
-    .map(file => normalizeRepoPath(input.projectRoot, file.path))
-    .filter(repoPath => !visible.has(repoPath));
-  const refreshedInventory = changedCandidates.length > 0
-    ? await buildFileInventoryForPaths({
-        projectRoot: input.projectRoot,
-        config: input.config,
-        paths: changedCandidates,
-        loadIndexedText: false,
-        previousFiles: input.previousInventory.files,
-        allowMissing: true
-      })
-    : { files: [] as InventoryFile[], ignoredPaths: [] as string[] };
-
-  return buildFileInventoryFromSnapshot({
-    projectRoot: input.projectRoot,
-    config: input.config,
-    previousFiles: input.previousInventory.files,
-    refreshedFiles: refreshedInventory.files,
-    deletedPaths,
-    ignoredPaths: refreshedInventory.ignoredPaths,
-    source: 'snapshot_plus_git_changed'
-  });
-}
-
-type ScopeSelection = {
-  scoped: boolean;
-  deepFiles: InventoryFile[];
-  coverage: IndexCoverage;
-  hotsetRevision: string | null;
-  warnings: string[];
-  changedTargetStrategy?: 'scoped_hotset_reindex' | 'full_deep_reindex' | 'git_delta_reindex';
-};
-
 type RefreshTiming = {
   step: string;
   durationMs: number;
@@ -756,154 +593,6 @@ function deepIndexReportFromCoverage(target: RefreshTarget, coverage: IndexCover
     hotFiles: coverage.hotFiles,
     coldFiles: coverage.coldFiles,
     ...(target === 'changed' ? { changedTargetStrategy: 'no_change_fast_path' as const } : {})
-  };
-}
-
-async function selectDeepFiles(input: {
-  projectRoot: string;
-  target: RefreshTarget;
-  inventory: FileInventory;
-  requestedPaths: string[];
-  promotionReason?: string;
-  previousCoverage?: IndexCoverage;
-  changed?: ChangedFiles;
-  allowChangedDelta?: boolean;
-}): Promise<ScopeSelection> {
-  const now = Date.now();
-  if (input.target === 'files') {
-    return {
-      scoped: false,
-      deepFiles: [],
-      hotsetRevision: null,
-      warnings: [],
-      coverage: {
-        inventory: 'full',
-        deepSpans: 'none',
-        hotsetRevision: null,
-        hotFiles: 0,
-        coldFiles: input.inventory.files.length,
-        unindexedCandidateCount: input.inventory.files.length,
-        updatedAt: now
-      }
-    };
-  }
-
-  if (
-    input.target === 'changed' &&
-    input.allowChangedDelta &&
-    input.previousCoverage?.deepSpans === 'full' &&
-    input.inventory.strategy?.source === 'snapshot_plus_git_changed' &&
-    input.changed &&
-    (input.changed.changedPaths.length > 0 || input.changed.deletedPaths.length > 0)
-  ) {
-    const changedPathSet = new Set(input.changed.changedPaths);
-    const deepFiles = input.inventory.files
-      .filter(file => changedPathSet.has(file.path) && !file.oversized)
-      .sort((left, right) => left.path.localeCompare(right.path));
-    return {
-      scoped: false,
-      deepFiles,
-      hotsetRevision: null,
-      warnings: input.inventory.files
-        .filter(file => changedPathSet.has(file.path) && file.oversized)
-        .map(file => `${file.path}: oversized changed file kept file-only; no deep spans emitted`),
-      changedTargetStrategy: 'git_delta_reindex',
-      coverage: {
-        inventory: 'full',
-        deepSpans: 'full',
-        hotsetRevision: null,
-        hotFiles: input.inventory.files.length,
-        coldFiles: 0,
-        unindexedCandidateCount: 0,
-        updatedAt: now
-      }
-    };
-  }
-
-  if (input.target === 'paths' || input.target === 'hotset' || (input.target === 'changed' && input.previousCoverage?.deepSpans === 'scoped')) {
-    const manifest = await readHotsetManifest(input.projectRoot);
-    const seedPaths = await detectCodexScientistHotsetSeedPaths(input.projectRoot, input.inventory.files);
-    const byPath = new Map(input.inventory.files.map(file => [file.path, file]));
-    const seedFiles = seedPaths.map(repoPath => byPath.get(repoPath)).filter((file): file is InventoryFile => Boolean(file));
-    let nextManifest = manifest;
-
-    if (input.target === 'paths') {
-      const requested = resolveRequestedFiles(input.projectRoot, input.inventory, input.requestedPaths);
-      nextManifest = upsertHotsetEntries({
-        projectRoot: input.projectRoot,
-        manifest: nextManifest,
-        files: requested,
-        reason: input.promotionReason ?? 'explicit_paths',
-        pinned: true
-      });
-    }
-
-    if (seedFiles.length > 0) {
-      nextManifest = upsertHotsetEntries({
-        projectRoot: input.projectRoot,
-        manifest: nextManifest,
-        files: seedFiles,
-        reason: 'codex_scientist_seed',
-        pinned: false
-      });
-    }
-
-    const currentManifestFiles = manifestFiles(nextManifest, input.inventory.files);
-    if (input.target === 'changed' && currentManifestFiles.length > 0) {
-      nextManifest = upsertHotsetEntries({
-        projectRoot: input.projectRoot,
-        manifest: nextManifest,
-        files: currentManifestFiles,
-        reason: 'changed_hotset_refresh'
-      });
-    }
-
-    await writeHotsetManifest(input.projectRoot, nextManifest);
-    const entryByPath = new Map(nextManifest.entries.map(entry => [entry.path, entry]));
-    const manifestHotFiles = manifestFiles(nextManifest, input.inventory.files);
-    const skippedColdDefaults = manifestHotFiles.filter(file => isCodexScientistColdPath(file.path) && !entryByPath.get(file.path)?.pinned);
-    const allHotFiles = manifestHotFiles.filter(file => !isCodexScientistColdPath(file.path) || Boolean(entryByPath.get(file.path)?.pinned));
-    const deepFiles = allHotFiles.filter(file => !file.oversized).sort((left, right) => left.path.localeCompare(right.path));
-    const revision = hotsetRevision(nextManifest);
-    const hotPaths = new Set(allHotFiles.map(file => file.path));
-    const warnings = [
-      ...skippedColdDefaults.map(file => `${file.path}: cold-pattern file remains file-inventory only; use target=\"paths\" to explicitly promote`),
-      ...allHotFiles
-        .filter(file => file.oversized)
-        .map(file => `${file.path}: oversized hotset file kept file-only; no deep spans emitted`)
-    ];
-
-    return {
-      scoped: true,
-      deepFiles,
-      hotsetRevision: revision,
-      warnings,
-      coverage: {
-        inventory: 'full',
-        deepSpans: 'scoped',
-        hotsetRevision: revision,
-        hotFiles: hotPaths.size,
-        coldFiles: input.inventory.files.length - hotPaths.size,
-        unindexedCandidateCount: input.inventory.files.length - hotPaths.size,
-        updatedAt: now
-      }
-    };
-  }
-
-  return {
-    scoped: false,
-    deepFiles: input.inventory.files,
-    hotsetRevision: null,
-    warnings: [],
-    coverage: {
-      inventory: 'full',
-      deepSpans: 'full',
-      hotsetRevision: null,
-      hotFiles: input.inventory.files.length,
-      coldFiles: 0,
-      unindexedCandidateCount: 0,
-      updatedAt: now
-    }
   };
 }
 
@@ -1034,7 +723,7 @@ async function runRefresh(input: {
     textForFile,
     writeDb: !isChangedDelta
   }));
-  const [documentIndexed, artifactIndexed, testExampleSpans] = await Promise.all([
+  const [documentIndexed, artifactIndexed, testExampleIndexed] = await Promise.all([
     timed(timings, 'DocumentSpanIndexer', () => indexDocumentFiles(input.projectRoot, selection.deepFiles.filter(file => !file.oversized && isDocument(file, selection.scoped)), textForFile)),
     timed(timings, 'ArtifactSpanIndexer', () => indexArtifactFiles(selection.deepFiles.filter(file => !file.oversized && isArtifact(file, selection.scoped)), textForFile)),
     timed(timings, 'TestExampleSpanIndexer', () => indexTestExampleFiles(selection.deepFiles.filter(file => !file.oversized && isTestExampleCandidate(file, selection.scoped)), textForFile))
@@ -1043,6 +732,8 @@ async function runRefresh(input: {
   const documentWarnings = documentIndexed.warnings;
   const artifactSpans = artifactIndexed.spans;
   const artifactWarnings = artifactIndexed.warnings;
+  const testExampleSpans = testExampleIndexed.spans;
+  const testExampleWarnings = testExampleIndexed.warnings;
   const graphRevisionSeed = createGraphRevision({
     target: input.target,
     files: selection.deepFiles,
@@ -1100,7 +791,7 @@ async function runRefresh(input: {
     edges: graphEdges,
     nonce: refreshNonce
   });
-  const warnings = [...documentWarnings, ...artifactWarnings, ...featureWarnings, ...selection.warnings].sort();
+  const warnings = [...documentWarnings, ...artifactWarnings, ...testExampleWarnings, ...featureWarnings, ...selection.warnings].sort();
   const map = timedSync(timings, 'DerivedRepositoryMapBuilder', () => buildRepositoryMap({
     projectRoot: input.projectRoot,
     graphRevision,

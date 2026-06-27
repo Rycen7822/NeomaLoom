@@ -10,6 +10,7 @@ from noemaloom_bridge import (
     _copy_runtime_migrations,
     _default_build_dir,
     _format_exception,
+    _project_cwd,
     _runtime_env,
     _runtime_metadata,
     _runtime_migrations_ready,
@@ -44,6 +45,22 @@ def test_bridge_timeout_envelope_is_structured():
     assert "1.5s" in envelope["warnings"][0]["message"]
 
 
+def test_bridge_project_cwd_honors_allowed_projects_for_explicit_project_path(tmp_path, monkeypatch):
+    allowed = tmp_path / "allowed"
+    outside = tmp_path / "outside"
+    allowed.mkdir()
+    outside.mkdir()
+    monkeypatch.setenv("NOEMALOOM_ALLOWED_PROJECTS", str(allowed))
+
+    assert _project_cwd({"projectPath": str(allowed / "child")}) == str((allowed / "child").resolve())
+    try:
+        _project_cwd({"projectPath": str(outside)})
+    except RuntimeError as exc:
+        assert "NOEMALOOM_ALLOWED_PROJECTS" in str(exc)
+    else:
+        raise AssertionError("outside projectPath should be rejected by the Hermes bridge allowlist")
+
+
 def test_bridge_reports_installed_metadata_mismatch(tmp_path, monkeypatch):
     plugin_file = tmp_path / "noemaloom_bridge.py"
     plugin_file.write_text("", encoding="utf-8")
@@ -60,6 +77,37 @@ def test_bridge_reports_installed_metadata_mismatch(tmp_path, monkeypatch):
     assert {warning["code"] for warning in warnings} == {
         "installed_plugin_source_mismatch",
         "installed_plugin_dirty_count_mismatch",
+    }
+
+
+def test_bridge_reports_installed_schema_and_build_hash_mismatch(tmp_path, monkeypatch):
+    plugin_file = tmp_path / "noemaloom_bridge.py"
+    plugin_file.write_text("", encoding="utf-8")
+    (tmp_path / "schemas.py").write_text("CURRENT_SCHEMA = True\n", encoding="utf-8")
+    build_main = tmp_path / ".noemaloom-hermes-build" / "cli" / "main.js"
+    build_main.parent.mkdir(parents=True)
+    build_main.write_text("console.log('current build');\n", encoding="utf-8")
+    (tmp_path / "INSTALL_METADATA.json").write_text(
+        json.dumps(
+            {
+                "commit": "same-head",
+                "dirtyFiles": 0,
+                "installMode": "copy",
+                "schemaSha256": "old-schema-hash",
+                "buildMainSha256": "old-build-hash",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(noemaloom_bridge, "__file__", str(plugin_file))
+    monkeypatch.setattr(noemaloom_bridge, "_git_head", lambda repo: "same-head")
+    monkeypatch.setattr(noemaloom_bridge, "_git_dirty_count", lambda repo: 0)
+
+    warnings = noemaloom_bridge._provenance_warnings(Path("/tmp/source"))
+
+    assert {warning["code"] for warning in warnings} == {
+        "installed_plugin_schema_hash_mismatch",
+        "installed_plugin_build_hash_mismatch",
     }
 
 

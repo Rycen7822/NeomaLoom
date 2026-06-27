@@ -1,8 +1,10 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, statSync } from 'node:fs';
 import { open, lstat, mkdir, readdir, rename, stat, unlink, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
+import { isErrnoException } from '../shared/fs-errors.js';
 
-const O_NOFOLLOW = constants.O_NOFOLLOW ?? 0;
+export const STATE_PATH_GUARD_NOFOLLOW_SUPPORTED = typeof constants.O_NOFOLLOW === 'number' && constants.O_NOFOLLOW !== 0;
+const O_NOFOLLOW = STATE_PATH_GUARD_NOFOLLOW_SUPPORTED ? constants.O_NOFOLLOW : 0;
 const READ_NOFOLLOW_FLAGS = constants.O_RDONLY | O_NOFOLLOW;
 const APPEND_NOFOLLOW_FLAGS = constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | O_NOFOLLOW;
 const EXCLUSIVE_NOFOLLOW_FLAGS = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | O_NOFOLLOW;
@@ -47,10 +49,6 @@ export function assertWritableStatePath(projectRoot: string, targetPath: string)
   }
 
   throw new StatePathGuardError(resolvedTarget, stateDir);
-}
-
-function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && 'code' in error;
 }
 
 function isInsideRoot(root: string, targetPath: string): boolean {
@@ -306,6 +304,7 @@ export async function appendFileInsideStateDir(
       throw new StatePathGuardError(safePath, getStateDir(projectRoot));
     }
     await handle.writeFile(data);
+    await handle.sync();
     return safePath;
   } finally {
     await handle.close();

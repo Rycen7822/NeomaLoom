@@ -4,6 +4,7 @@ import path from 'node:path';
 import { writeFileInsideStateDir } from '../safety/path-guard.js';
 import { ensureStateDir } from '../state/state-dir.js';
 import { createDefaultConfig, type NoemaLoomConfig } from './default-config.js';
+import { isErrnoException } from '../shared/fs-errors.js';
 
 export type ConfigValidationError = {
   field: string;
@@ -22,10 +23,6 @@ export type ConfigLoadResult =
       created: false;
       errors: ConfigValidationError[];
     };
-
-function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && 'code' in error;
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

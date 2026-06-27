@@ -56,6 +56,8 @@ describe('Hermes plugin contract', () => {
     expect(schemas).toContain('"paths"');
     expect(schemas).toContain('"hotset"');
     expect(schemas).toContain('"promotionReason"');
+    expect(schemas).toContain('"includeQueryPreview": {"type": "boolean", "default": True}');
+    expect(schemas).toContain('"recordNavigation": {"type": "boolean", "default": True}');
 
     const skill = await readFile('hermes-plugin/noemaloom/resources/skills/usage/SKILL.md', 'utf8');
     expect(skill).toContain('Only call these public Hermes tools');

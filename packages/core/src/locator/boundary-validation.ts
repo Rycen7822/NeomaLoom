@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto';
 
 import type { FileRole, SpanKind } from '../spans/enums.js';
+import { sha1 } from '../shared/hash.js';
 
 export type BoundaryRisk = 'low' | 'medium' | 'high';
 
@@ -25,10 +25,6 @@ export type BoundaryValidationInput = {
   includeGeneratedVendor?: boolean;
   evidenceCount?: number;
 };
-
-function sha1(text: string): string {
-  return createHash('sha1').update(text).digest('hex');
-}
 
 function lineCount(text: string): number {
   return Math.max(1, text.split(/\r?\n/).length);

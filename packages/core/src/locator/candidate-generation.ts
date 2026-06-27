@@ -1,7 +1,5 @@
-import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 import path from 'node:path';
 
 import { classifyFileRole } from '../files/role-classifier.js';
@@ -16,6 +14,9 @@ import type { EditBoundary } from '../profiles/codex-scientist.js';
 import { validateBoundary } from './boundary-validation.js';
 import { normalizeQuery, type NormalizedQuery } from './query-normalizer.js';
 import type { LocatorCandidate } from './ranking.js';
+import { buildLinkedSpanIndex, type LinkedSpan } from './edge-index.js';
+import { sha1 } from '../shared/hash.js';
+import { openSqliteDatabase } from '../shared/sqlite.js';
 
 type Statement = {
   all: (...params: unknown[]) => unknown[];
@@ -27,18 +28,11 @@ type Database = {
   close: () => void;
 };
 
-const require = createRequire(import.meta.url);
-
-function openDatabase(filename: string): Database {
+function openReadableSpanIndexDatabase(filename: string): Database {
   if (!existsSync(filename)) {
     throw new Error('span index is not readable: spans.db is missing');
   }
-  const sqlite = require('node:sqlite') as { DatabaseSync: new (filename: string) => Database };
-  return new sqlite.DatabaseSync(filename);
-}
-
-function sha1(value: string): string {
-  return createHash('sha1').update(value).digest('hex');
+  return openSqliteDatabase<Database>(filename);
 }
 
 export const LOCATOR_SOURCE_PLAN_SOURCES = [
@@ -267,22 +261,11 @@ async function readCurrentText(projectRoot: string, repoPath: string, maxBytes: 
   }
 }
 
-function linkedSpansFor(row: SpanRow, edges: EdgeRow[]): Array<{ spanId: string; confidence: number; relation?: string }> {
-  return edges
-    .filter(edge => edge.source_span_id === row.span_id || edge.target_span_id === row.span_id)
-    .map(edge => ({
-      spanId: edge.source_span_id === row.span_id ? edge.target_span_id : edge.source_span_id,
-      confidence: edge.confidence,
-      relation: edge.relation
-    }))
-    .sort((left, right) => right.confidence - left.confidence || left.spanId.localeCompare(right.spanId));
-}
-
 function spanRowToCandidate(input: {
   row: SpanRow;
   query: NormalizedQuery;
   sources: Set<PlanSource>;
-  edges: EdgeRow[];
+  linkedSpanIndex: Map<string, LinkedSpan[]>;
   searchableText: SearchableText;
   currentText?: string;
   includeGeneratedVendor?: boolean;
@@ -297,7 +280,7 @@ function spanRowToCandidate(input: {
     ...hitEvidence('symbol_match', input.query.symbolTerms, input.searchableText.symbol),
     ...hitEvidence('config_match', input.query.configTerms, input.searchableText.config)
   ];
-  const linkedSpans = linkedSpansFor(input.row, input.edges);
+  const linkedSpans = input.linkedSpanIndex.get(input.row.span_id) ?? [];
   const file = {
     ignored: Boolean(input.row.file_ignored),
     generated: Boolean(input.row.file_generated) || input.row.role === 'generated_file',
@@ -750,7 +733,7 @@ function rowsFromDb(
   query: NormalizedQuery,
   limit?: number
 ): { spans: SpanRow[]; edges: EdgeRow[]; files: FileRow[]; coverage?: IndexCoverage; routeSourcesBySpanId: Map<string, Set<PlanSource>> } {
-  const db = openDatabase(dbPath);
+  const db = openReadableSpanIndexDatabase(dbPath);
   try {
     const caps = candidateCaps(limit, query);
     const selection = selectSpanCandidateIds(db, query, caps.spanCap);
@@ -883,6 +866,7 @@ export async function generateCandidates(input: {
     }
   }
 
+  const linkedSpanIndex = buildLinkedSpanIndex(edges);
   const currentTextByPath = new Map<string, string | undefined>();
   let currentTextCachedBytes = 0;
   const cachedCurrentText = async (repoPath: string): Promise<string | undefined> => {
@@ -906,7 +890,7 @@ export async function generateCandidates(input: {
         row,
         query: normalizedQuery,
         sources,
-        edges,
+        linkedSpanIndex,
         searchableText,
         currentText,
         includeGeneratedVendor: input.includeGeneratedVendor,

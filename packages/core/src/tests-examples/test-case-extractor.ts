@@ -42,8 +42,9 @@ function createSpan(input: {
   };
 }
 
-function extractPython(input: TestExampleParseInput, lines: string[]): TestExampleSpan[] {
+function extractPython(input: TestExampleParseInput, lines: string[]): { spans: TestExampleSpan[]; warnings: string[] } {
   const spans: TestExampleSpan[] = [];
+  const warnings: string[] = [];
   let pendingMarkers: string[] = [];
 
   lines.forEach((line, index) => {
@@ -83,7 +84,11 @@ function extractPython(input: TestExampleParseInput, lines: string[]): TestExamp
     }
   });
 
-  return spans;
+  if (pendingMarkers.length > 0) {
+    warnings.push(...pendingMarkers.map(marker => `dangling pytest marker ${marker}`));
+  }
+
+  return { spans, warnings };
 }
 
 function extractJsTs(input: TestExampleParseInput, lines: string[]): TestExampleSpan[] {
@@ -174,9 +179,12 @@ export function extractTestCases(input: TestExampleParseInput): TestExampleParse
   const extension = path.extname(input.path).toLowerCase();
   const lines = input.text.split(/\r?\n/);
   let spans: TestExampleSpan[] = [];
+  let warnings: string[] = [];
 
   if (extension === '.py') {
-    spans = extractPython(input, lines);
+    const extracted = extractPython(input, lines);
+    spans = extracted.spans;
+    warnings = extracted.warnings;
   } else if (['.ts', '.tsx', '.js', '.jsx'].includes(extension)) {
     spans = extractJsTs(input, lines);
   } else if (extension === '.go') {
@@ -190,6 +198,6 @@ export function extractTestCases(input: TestExampleParseInput): TestExampleParse
   return {
     path: input.path,
     spans,
-    warnings: []
+    warnings
   };
 }

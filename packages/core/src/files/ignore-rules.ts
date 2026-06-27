@@ -1,11 +1,9 @@
+import { collapseRepoPathSlashes as normalizeRepoPath } from '../shared/repo-path.js';
+
 export type IgnoreMatcher = {
   ignores: (repoPath: string) => boolean;
   patterns: string[];
 };
-
-function normalizeRepoPath(repoPath: string): string {
-  return repoPath.replaceAll('\\', '/').replace(/^\/+/, '').replace(/\/+/g, '/');
-}
 
 function normalizeGlobPattern(pattern: string): string {
   const normalized = normalizeRepoPath(pattern).replace(/(?:\/\*\*){2,}/g, '/**');

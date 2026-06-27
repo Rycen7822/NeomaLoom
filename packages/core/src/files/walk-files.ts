@@ -1,11 +1,9 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 
-export const DEFAULT_MAX_WALK_DEPTH = 64;
+import { relativeRepoPath as toRepoPath } from '../shared/repo-path.js';
 
-function toRepoPath(projectRoot: string, absolutePath: string): string {
-  return path.relative(projectRoot, absolutePath).split(path.sep).join('/');
-}
+export const DEFAULT_MAX_WALK_DEPTH = 64;
 
 export async function walkFiles(
   projectRoot: string,

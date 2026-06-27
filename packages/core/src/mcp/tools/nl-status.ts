@@ -1,5 +1,4 @@
 import { readFile, stat } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 import path from 'node:path';
 import { z } from 'zod';
 
@@ -12,6 +11,7 @@ import { readWorksetManifest } from '../../state/workset.js';
 import { detectProjectBoundaryWarnings } from '../../projects/boundary-warnings.js';
 import { createEnvelope, resolveProjectRootFromInput, type EnvelopeWarning, type NoemaLoomEnvelope } from '../envelope.js';
 import { anchorStatusData } from './nl-anchor.js';
+import { openSqliteDatabase } from '../../shared/sqlite.js';
 
 export const nlStatusInputSchema = z
   .object({
@@ -34,13 +34,6 @@ type Database = {
   prepare: (sql: string) => Statement;
   close: () => void;
 };
-
-const require = createRequire(import.meta.url);
-
-function openDatabase(filename: string): Database {
-  const sqlite = require('node:sqlite') as { DatabaseSync: new (filename: string) => Database };
-  return new sqlite.DatabaseSync(filename);
-}
 
 async function filePresent(targetPath: string): Promise<boolean> {
   try {
@@ -152,7 +145,7 @@ async function readSqliteCounts(input: {
 
   let db: Database | undefined;
   try {
-    db = openDatabase(input.targetPath);
+    db = openSqliteDatabase<Database>(input.targetPath);
     for (const [key, sql] of Object.entries(input.queries)) {
       const row = db.prepare(sql).get() as { value?: number } | undefined;
       counts[key] = Number(row?.value ?? 0);
@@ -196,7 +189,7 @@ async function readRetrievalCoreCounts(targetPath: string): Promise<{ state: Ind
 
   let db: Database | undefined;
   try {
-    db = openDatabase(targetPath);
+    db = openSqliteDatabase<Database>(targetPath);
     if (!sqliteTableExists(db, 'repo_symbols') || !sqliteTableExists(db, 'repo_symbol_aliases')) {
       return { state: 'missing', counts };
     }

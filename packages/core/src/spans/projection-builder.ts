@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import type { ArtifactSpan } from '../artifacts/json-parser.js';
@@ -16,6 +15,7 @@ import {
   createTestExampleSpanId
 } from './span-id.js';
 import type { RepoEdge, RepoSpan } from './types.js';
+import { sha1 } from '../shared/hash.js';
 
 export type FeatureProjectionRecord = {
   id: string;
@@ -38,10 +38,6 @@ export type BuildProjectionGraphInput = {
   testExampleSpans: TestExampleSpan[];
   features: FeatureProjectionRecord[];
 };
-
-function sha1(value: string): string {
-  return createHash('sha1').update(value).digest('hex');
-}
 
 function repoPath(input: string): string {
   return input.replaceAll('\\', '/').replace(/^\/+/, '');

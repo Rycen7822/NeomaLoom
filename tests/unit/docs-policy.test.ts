@@ -7,6 +7,7 @@ const requiredDocs = [
   'docs/data-model.md',
   'docs/indexing.md',
   'docs/locating.md',
+  'docs/benchmarks.md',
   'docs/safety.md',
   'docs/troubleshooting.md',
   'README.md',

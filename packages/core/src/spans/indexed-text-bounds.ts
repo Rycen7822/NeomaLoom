@@ -1,4 +1,6 @@
-import { createHash } from 'node:crypto';
+import { sha1Text } from '../shared/hash.js';
+
+export { sha1Text };
 
 export const MAX_REPO_SPAN_INDEXED_TEXT_BYTES = 8192;
 export const INDEXED_TEXT_TRUNCATION_SUFFIX = '\n…[truncated]';
@@ -6,10 +8,6 @@ const RELOCATION_FINGERPRINT_LINES = 8;
 
 export function byteLengthUtf8(value: string): number {
   return Buffer.byteLength(value, 'utf8');
-}
-
-export function sha1Text(value: string): string {
-  return createHash('sha1').update(value).digest('hex');
 }
 
 export function truncateIndexedText(value: string, maxBytes = MAX_REPO_SPAN_INDEXED_TEXT_BYTES): string {

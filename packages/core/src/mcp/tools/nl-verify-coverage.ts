@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
 import { boundedCollectChangedPathFiles, MAX_CHANGED_PATHS } from '../../files/bounded-changed-paths.js';
@@ -7,6 +6,9 @@ import { normalizeProjectRelativePath, safeReadFileInsideProject, safeStatInside
 import { readInventorySnapshot } from '../../state/changed-detection.js';
 import { readLatestRevision } from '../../state/refresh-revision.js';
 import { createEnvelope, resolveProjectRootFromInput, type EnvelopeWarning, type GraphState, type NoemaLoomEnvelope } from '../envelope.js';
+import { estimateEnvelopeTokenBudget } from '../token-budget.js';
+import { sha1 } from '../../shared/hash.js';
+import { trimRepoPathBoundarySlashes as toRepoPath } from '../../shared/repo-path.js';
 
 export const nlVerifyCoverageInputSchema = z
   .object({
@@ -20,14 +22,6 @@ export const nlVerifyCoverageInputSchema = z
   .passthrough();
 
 type CoverageStatus = 'pass' | 'needs_attention' | 'fail';
-
-function toRepoPath(repoPath: string): string {
-  return repoPath.replaceAll('\\', '/').replace(/^\/+/, '').replace(/\/+$/, '');
-}
-
-function sha1(data: string | Uint8Array): string {
-  return createHash('sha1').update(data).digest('hex');
-}
 
 async function expandChangedPaths(projectRoot: string, changedPaths: string[]): Promise<string[]> {
   return (await boundedCollectChangedPathFiles({ projectRoot, changedPaths })).files;
@@ -108,6 +102,13 @@ export async function handleNlVerifyCoverage(input: unknown): Promise<NoemaLoomE
   });
 
   const graphState = await graphStateForChangedPaths(projectRoot, parsed.changedPaths);
+  const nextActions = nextActionsFor(result.status, graphState);
+  const budgeted = estimateEnvelopeTokenBudget({
+    requested: 2500,
+    data: result,
+    warnings: warningsForStatus(result.status),
+    nextActions
+  });
 
   return createEnvelope({
     ok: result.status === 'pass',
@@ -115,13 +116,9 @@ export async function handleNlVerifyCoverage(input: unknown): Promise<NoemaLoomE
     projectRoot,
     graphRevision,
     graphState,
-    tokenBudget: {
-      requested: 2500,
-      used: Math.ceil(JSON.stringify(result).length / 4),
-      truncated: false
-    },
-    warnings: warningsForStatus(result.status),
+    tokenBudget: budgeted.tokenBudget,
+    warnings: budgeted.warnings,
     data: result,
-    nextActions: nextActionsFor(result.status, graphState)
+    nextActions
   });
 }

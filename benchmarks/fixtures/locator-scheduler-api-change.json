@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "kind": "locator",
+  "name": "scheduler-api-change-top-paths",
+  "fixtureProject": "tests/fixtures/scheduler-api-change",
+  "tool": "nl_prepare_context",
+  "input": {
+    "goal": "Change SchedulerConfig.timeout to SchedulerConfig.deadlineSeconds and update all affected repository artifacts",
+    "targetRoles": ["source_file", "config_file", "canonical_api_doc", "test_file", "example_doc", "feature_plan"],
+    "limit": 8
+  },
+  "expected": {
+    "topPathsInclude": [
+      "src/scheduler.ts",
+      "config/scheduler.json",
+      "docs/api/scheduler.md",
+      "tests/scheduler.test.ts",
+      "examples/scheduler.ts"
+    ],
+    "minTargets": 5
+  }
+}

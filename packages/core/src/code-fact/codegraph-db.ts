@@ -1,10 +1,11 @@
 import { readdir, rename, stat, unlink } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 import path from 'node:path';
 
 import { assertWritableStatePath } from '../safety/path-guard.js';
 import { ensureStateDir } from '../state/state-dir.js';
 import type { CodeFactEdge, CodeFactSpan } from './extractor.js';
+import { isErrnoException } from '../shared/fs-errors.js';
+import { openSqliteDatabase } from '../shared/sqlite.js';
 
 type Statement = {
   run: (...params: unknown[]) => unknown;
@@ -17,13 +18,6 @@ type Database = {
   prepare: (sql: string) => Statement;
   close: () => void;
 };
-
-const require = createRequire(import.meta.url);
-
-function openDatabase(filename: string): Database {
-  const sqlite = require('node:sqlite') as { DatabaseSync: new (filename: string) => Database };
-  return new sqlite.DatabaseSync(filename);
-}
 
 function createSchema(db: Database): void {
   db.exec(`
@@ -67,10 +61,6 @@ function createSchema(db: Database): void {
       signature
     );
   `);
-}
-
-function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && 'code' in error;
 }
 
 async function unlinkIfExists(targetPath: string): Promise<void> {
@@ -167,7 +157,7 @@ export async function readCodeGraphDb(projectRoot: string): Promise<CodeGraphSna
   }
   let db: Database | undefined;
   try {
-    db = openDatabase(dbPath);
+    db = openSqliteDatabase<Database>(dbPath);
     const files = db.prepare('SELECT path, language FROM facts_files ORDER BY path').all() as Array<{ path: string; language: string }>;
     const rows = db.prepare(
       `SELECT span_id, kind, path, label, signature, start_line, end_line, metadata_json
@@ -241,7 +231,7 @@ export async function writeCodeGraphDb(input: {
     path.join(paths.factDir, `codegraph.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp.db`)
   );
   await unlinkSqliteTempIfExists(tempDbPath);
-  const db = openDatabase(tempDbPath);
+  const db = openSqliteDatabase<Database>(tempDbPath);
   let wroteSuccessfully = false;
   let transactionActive = false;
 
@@ -341,7 +331,7 @@ function safeFtsQuery(term: string): string | undefined {
 }
 
 export function searchCodeGraphDb(input: { dbPath: string; query: string; limit?: number }): CodeFactSearchResult[] {
-  const db = openDatabase(input.dbPath);
+  const db = openSqliteDatabase<Database>(input.dbPath);
   try {
     const exactRows = db
       .prepare(

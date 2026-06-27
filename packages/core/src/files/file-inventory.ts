@@ -1,14 +1,17 @@
-import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import { createDefaultConfig, type NoemaLoomConfig } from '../config/default-config.js';
 import { ProjectReadPathGuardError, safeLstatInsideProject, safeReadFileInsideProject, safeStatInsideProject, resolveProjectReadPath } from '../safety/path-guard.js';
+import { mapWithConcurrency } from '../shared/concurrency.js';
 import type { FileRole, SpanKind } from '../spans/enums.js';
 import { isGitRepository, listGitVisibleFiles } from './git-files.js';
 import { createIgnoreMatcher, type IgnoreMatcher } from './ignore-rules.js';
 import { languageForPath } from './language.js';
 import { classifyFileRole } from './role-classifier.js';
 import { DEFAULT_MAX_WALK_DEPTH, walkFiles } from './walk-files.js';
+import { isErrnoException } from '../shared/fs-errors.js';
+import { sha1 } from '../shared/hash.js';
+import { toPosixRepoPath as toRepoPath } from '../shared/repo-path.js';
 
 export type InventoryFile = {
   path: string;
@@ -83,14 +86,6 @@ export type BuildFileInventoryFromSnapshotOptions = {
 
 const INVENTORY_BUILD_CONCURRENCY = 8;
 
-function toRepoPath(repoPath: string): string {
-  return repoPath.replaceAll('\\', '/').replace(/^\/+/, '');
-}
-
-function sha1(data: string | Uint8Array): string {
-  return createHash('sha1').update(data).digest('hex');
-}
-
 function normalizeExtension(extension: string): string {
   const lower = extension.toLowerCase();
   return lower.startsWith('.') ? lower : `.${lower}`;
@@ -145,10 +140,6 @@ function sortedUniquePaths(paths: string[]): string[] {
   return [...new Set(paths.map(toRepoPath))].sort();
 }
 
-function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && 'code' in error;
-}
-
 function normalizeRequestedRepoPath(projectRoot: string, requestedPath: string): string {
   const resolvedRoot = path.resolve(projectRoot);
   const absolute = path.isAbsolute(requestedPath) ? path.resolve(requestedPath) : path.resolve(resolvedRoot, requestedPath);
@@ -190,20 +181,6 @@ async function listCandidateFiles(projectRoot: string, ignoreMatcher: IgnoreMatc
     prunedDirs,
     maxWalkDepth: DEFAULT_MAX_WALK_DEPTH
   };
-}
-
-async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array(items.length) as R[];
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await worker(items[index]);
-    }
-  });
-  await Promise.all(workers);
-  return results;
 }
 
 function reusablePreviousHash(previous: PreviousInventoryFile | undefined, sizeBytes: number, modifiedAt: number): string | undefined {

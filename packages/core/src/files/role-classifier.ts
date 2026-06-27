@@ -7,7 +7,7 @@ function normalize(repoPath: string): string {
   return repoPath.replaceAll('\\', '/').replace(/^\/+/, '');
 }
 
-const CODE_EXTENSIONS = new Set([
+export const CODE_EXTENSIONS = new Set([
   '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rs', '.java', '.cpp', '.c', '.h', '.hpp', '.cs', '.rb', '.php', '.swift', '.kt', '.scala', '.lua', '.vue', '.svelte'
 ]);
 

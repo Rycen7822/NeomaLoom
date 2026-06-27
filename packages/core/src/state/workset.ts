@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { readFile, stat, type FileHandle } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import path from 'node:path';
@@ -8,6 +7,8 @@ import { processIsAlive } from './refresh-lock.js';
 import { cleanupOldStateFiles } from './retention.js';
 import { ensureStateDir } from './state-dir.js';
 import { resolveNoemaLoomPaths } from './paths.js';
+import { isErrnoException } from '../shared/fs-errors.js';
+import { sha1 } from '../shared/hash.js';
 
 export type NavigationAnchorLifecycleState = 'active' | 'dormant' | 'archived' | 'retired' | 'tombstoned';
 
@@ -154,10 +155,6 @@ const WORKSET_EVENTS_MAX_BYTES = 5 * 1024 * 1024;
 const WORKSET_ROTATED_EVENTS_RETAIN_MAX = 5;
 const WORKSET_TOMBSTONE_HARD_MAX = 512;
 
-function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && 'code' in error;
-}
-
 function capTombstones(tombstones: WorksetManifest['tombstones']): WorksetManifest['tombstones'] {
   return [...tombstones]
     .sort((left, right) =>
@@ -259,10 +256,6 @@ async function withWorksetLock<T>(projectRoot: string, task: () => Promise<T>): 
       }
     }
   }
-}
-
-function sha1(value: string): string {
-  return createHash('sha1').update(value).digest('hex');
 }
 
 function projectRootHash(projectRoot: string): string {

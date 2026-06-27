@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -7,6 +6,8 @@ import { writeFileInsideStateDir } from '../safety/path-guard.js';
 import { resolveNoemaLoomPaths } from './paths.js';
 import { ensureStateDir } from './state-dir.js';
 import { codexScientistEditBoundary, type EditBoundary } from '../profiles/codex-scientist.js';
+import { isErrnoException } from '../shared/fs-errors.js';
+import { sha1 } from '../shared/hash.js';
 
 export type HotsetTier = 'deep' | 'file_only';
 
@@ -36,14 +37,6 @@ const DEFAULT_BUDGETS = {
   maxFiles: 200,
   maxBytes: 10 * 1024 * 1024
 };
-
-function sha1(value: string): string {
-  return createHash('sha1').update(value).digest('hex');
-}
-
-function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && 'code' in error;
-}
 
 function projectRootHash(projectRoot: string): string {
   return sha1(path.resolve(projectRoot)).slice(0, 16);

@@ -1,5 +1,4 @@
 import { rename, stat, unlink } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 import path from 'node:path';
 
 import type { InventoryFile } from '../files/file-inventory.js';
@@ -18,6 +17,9 @@ import type { RepoEdge, RepoSpan } from '../spans/types.js';
 import { cleanupOldStateFiles } from './retention.js';
 import { ensureStateDir } from './state-dir.js';
 import { resolveNoemaLoomPaths } from './paths.js';
+import { isErrnoException } from '../shared/fs-errors.js';
+import { sha1 } from '../shared/hash.js';
+import { openSqliteDatabase } from '../shared/sqlite.js';
 
 type Statement = {
   run: (...params: unknown[]) => unknown;
@@ -30,8 +32,6 @@ type Database = {
   prepare: (sql: string) => Statement;
   close: () => void;
 };
-
-const require = createRequire(import.meta.url);
 
 export type IndexCoverage = {
   inventory: 'missing' | 'full';
@@ -51,15 +51,6 @@ export const EMPTY_INDEX_COVERAGE: IndexCoverage = {
   coldFiles: 0,
   unindexedCandidateCount: 0
 };
-
-function openDatabase(filename: string): Database {
-  const sqlite = require('node:sqlite') as { DatabaseSync: new (filename: string) => Database };
-  return new sqlite.DatabaseSync(filename);
-}
-
-function sha1(value: string): string {
-  return sha1Text(value);
-}
 
 const MAX_REPO_SPAN_LABEL_BYTES = 1024;
 const MAX_REPO_SPAN_SUMMARY_BYTES = 2048;
@@ -106,10 +97,6 @@ function uniqueBy<T>(items: T[], keyFor: (item: T) => string): T[] {
     seen.add(key);
     return true;
   });
-}
-
-function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && 'code' in error;
 }
 
 async function fileExists(targetPath: string): Promise<boolean> {
@@ -254,7 +241,7 @@ export async function readLatestRevision(projectRoot: string): Promise<string | 
     return undefined;
   }
   try {
-    const db = openDatabase(dbPath);
+    const db = openSqliteDatabase<Database>(dbPath);
     try {
       const row = db
         .prepare('SELECT graph_revision AS graphRevision FROM refresh_revisions ORDER BY finished_at DESC LIMIT 1')
@@ -275,7 +262,7 @@ export async function readLatestRefreshSummary(projectRoot: string): Promise<Lat
     return undefined;
   }
   try {
-    const db = openDatabase(dbPath);
+    const db = openSqliteDatabase<Database>(dbPath);
     try {
       const row = db
         .prepare(
@@ -313,7 +300,7 @@ export async function readIndexCoverage(projectRoot: string): Promise<IndexCover
     return undefined;
   }
   try {
-    const db = openDatabase(dbPath);
+    const db = openSqliteDatabase<Database>(dbPath);
     try {
       const row = db.prepare("SELECT value_json AS valueJson FROM index_metadata WHERE key = 'coverage'").get() as
         | { valueJson?: string }
@@ -400,7 +387,7 @@ export async function readStoredGraphSnapshot(projectRoot: string): Promise<Stor
     return undefined;
   }
   try {
-    const db = openDatabase(dbPath);
+    const db = openSqliteDatabase<Database>(dbPath);
     try {
       const spanRows = db.prepare(
         `SELECT span_id, path, kind, role, label, start_line, end_line, start_column, end_column, parent_span_id, language,
@@ -483,7 +470,7 @@ export async function writeRefreshRevisionDelta(input: {
   if (!(await fileExists(dbPath))) {
     throw new Error('Cannot run changed delta writer without an existing spans.db');
   }
-  const db = openDatabase(dbPath);
+  const db = openSqliteDatabase<Database>(dbPath);
   let transactionActive = false;
   const uniqueSpans = uniqueBy(input.spans, span => span.spanId);
   const uniqueEdges = uniqueBy(input.edges, edge => edge.edgeId);
@@ -737,7 +724,7 @@ export async function writeRefreshRevision(input: {
   );
   let existingRevisions: RevisionRow[] = [];
   if (await fileExists(dbPath)) {
-    const existingDb = openDatabase(dbPath);
+    const existingDb = openSqliteDatabase<Database>(dbPath);
     try {
       existingRevisions = readExistingRevisions(existingDb);
     } finally {
@@ -745,7 +732,7 @@ export async function writeRefreshRevision(input: {
     }
   }
   await unlinkSqliteTempIfExists(tempDbPath);
-  const db = openDatabase(tempDbPath);
+  const db = openSqliteDatabase<Database>(tempDbPath);
   let wroteSuccessfully = false;
   let transactionActive = false;
   const uniqueSpans = uniqueBy(input.spans, span => span.spanId);

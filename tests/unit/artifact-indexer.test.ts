@@ -115,6 +115,24 @@ describe('ArtifactSpanIndexer', () => {
     );
   });
 
+  it('caps YAML and TOML artifact span counts and reports truncation', () => {
+    const yaml = indexArtifactSpans({
+      path: 'deploy/large.yaml',
+      text: Array.from({ length: 20 }, (_, index) => `key_${index}: value_${index}`).join('\n'),
+      maxSpans: 5
+    });
+    const toml = indexArtifactSpans({
+      path: 'config/large.toml',
+      text: Array.from({ length: 20 }, (_, index) => `key_${index} = "value_${index}"`).join('\n'),
+      maxSpans: 5
+    });
+
+    expect(yaml.spans).toHaveLength(5);
+    expect(yaml.warnings).toEqual(expect.arrayContaining([expect.stringContaining('Artifact span limit reached (5)')]));
+    expect(toml.spans).toHaveLength(5);
+    expect(toml.warnings).toEqual(expect.arrayContaining([expect.stringContaining('Artifact span limit reached (5)')]));
+  });
+
   it('caps very large JSON artifacts and reports truncation', () => {
     const result = indexArtifactSpans({
       path: 'resources/models/vocab.json',

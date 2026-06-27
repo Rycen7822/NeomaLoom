@@ -1,8 +1,9 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 
-import { isGeneratedArtifactPath } from './role-classifier.js';
+import { CODE_EXTENSIONS, isGeneratedArtifactPath } from './role-classifier.js';
 import { normalizeProjectRelativePath, resolveProjectReadPath, safeStatInsideProject } from '../safety/path-guard.js';
+import { trimRepoPathBoundarySlashes as normalizeRepoPath } from '../shared/repo-path.js';
 
 export const MAX_CHANGED_PATHS = 500;
 export const MAX_DIRECTORY_EXPANSION_FILES = 1000;
@@ -20,6 +21,7 @@ export const HEAVY_DIRECTORY_NAMES = new Set([
 ]);
 
 const TEXT_EXTENSIONS = new Set([
+  ...CODE_EXTENSIONS,
   '.md',
   '.mdx',
   '.rst',
@@ -51,10 +53,6 @@ export type BoundedChangedPathExpansion = {
   truncated: boolean;
   warnings: string[];
 };
-
-function normalizeRepoPath(repoPath: string): string {
-  return repoPath.replaceAll('\\', '/').replace(/^\/+/, '').replace(/\/+$/, '');
-}
 
 export function isTextChangedPath(repoPath: string): boolean {
   const normalized = normalizeRepoPath(repoPath);

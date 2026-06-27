@@ -2,6 +2,7 @@ import { lstat, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import { assertWritableStatePath, unlinkInsideStateDir } from '../safety/path-guard.js';
+import { isErrnoException } from '../shared/fs-errors.js';
 
 export type StateFileRetentionInput = {
   projectRoot: string;
@@ -9,10 +10,6 @@ export type StateFileRetentionInput = {
   keepNewest: number;
   match: (fileName: string) => boolean;
 };
-
-function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && 'code' in error;
-}
 
 export async function cleanupOldStateFiles(input: StateFileRetentionInput): Promise<number> {
   if (input.keepNewest < 0) {

@@ -1,6 +1,4 @@
-import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import path from 'node:path';
 import { z } from 'zod';
 
@@ -11,6 +9,8 @@ import { relocateSpan, type RelocatableSpan } from '../../spans/relocation.js';
 import type { SpanKind } from '../../spans/enums.js';
 import { readLatestRevision } from '../../state/refresh-revision.js';
 import { createEnvelope, resolveProjectRootFromInput, type NoemaLoomEnvelope } from '../envelope.js';
+import { sha1 } from '../../shared/hash.js';
+import { openSqliteDatabase } from '../../shared/sqlite.js';
 
 type Statement = {
   get: (...params: unknown[]) => unknown;
@@ -38,16 +38,10 @@ type SpanRow = {
   file_content_hash: string | null;
 };
 
-const require = createRequire(import.meta.url);
 const TRUNCATION_SUFFIX = '\n…[truncated]';
 const MAX_RELOCATION_SCAN_BYTES = 5 * 1024 * 1024;
 const MAX_RELOCATION_SCAN_LINES = 500_000;
 const MAX_RELOCATION_CANDIDATES = 20_000;
-
-function openDatabase(filename: string): Database {
-  const sqlite = require('node:sqlite') as { DatabaseSync: new (filename: string) => Database };
-  return new sqlite.DatabaseSync(filename);
-}
 
 export const nlReadSpanInputSchema = z
   .object({
@@ -60,10 +54,6 @@ export const nlReadSpanInputSchema = z
     focusLine: z.number().int().positive().optional()
   })
   .passthrough();
-
-function sha1(text: string): string {
-  return createHash('sha1').update(text).digest('hex');
-}
 
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
   if (!value) {
@@ -89,7 +79,7 @@ function readSpanRow(projectRoot: string, spanId: string): SpanRowReadResult {
 
   let db: Database | undefined;
   try {
-    db = openDatabase(dbPath);
+    db = openSqliteDatabase<Database>(dbPath);
     return {
       status: 'ready',
       row: db

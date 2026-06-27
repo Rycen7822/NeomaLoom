@@ -1,10 +1,6 @@
-import { createHash } from 'node:crypto';
 
 import type { CodeFactEdge, CodeFactSpan } from './extractor.js';
-
-function sha1(value: string): string {
-  return createHash('sha1').update(value).digest('hex');
-}
+import { sha1 } from '../shared/hash.js';
 
 function edgeId(input: {
   sourceSpanId: string;

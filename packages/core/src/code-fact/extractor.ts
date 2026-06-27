@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import type { EdgeRelation, SpanKind } from '../spans/enums.js';
@@ -11,6 +10,8 @@ import {
 } from '../spans/indexed-text-bounds.js';
 import { createCodeSpanId } from '../spans/span-id.js';
 import { detectFallbackBoundary, detectTypescriptBlockBoundary, wrapPythonBlockBoundary, type CodeBoundary } from './boundary-parser.js';
+import { codeFactLanguageFamily } from './language-dispatch.js';
+import { sha1 } from '../shared/hash.js';
 
 export type CodeFactSpan = {
   spanId: string;
@@ -54,10 +55,6 @@ const MAX_CALLSITE_SCAN_LINE_CHARS = 20_000;
 type CallsiteBudget = {
   count: number;
 };
-
-function sha1(value: string): string {
-  return createHash('sha1').update(value).digest('hex');
-}
 
 function moduleIndexedText(text: string, lineCount: number): { text: string; metadata: Record<string, unknown> } {
   const originalBytes = byteLengthUtf8(text);
@@ -710,16 +707,24 @@ export function extractCodeFacts(input: ExtractCodeFactsInput): ExtractCodeFacts
   ];
   const budget: CallsiteBudget = { count: 0 };
 
-  if (input.language === 'typescript' || input.language === 'javascript') {
-    addJavascriptTypescriptSpans(input, lines, spans, budget);
-  } else if (input.language === 'python') {
-    addPythonSpans(input, lines, spans);
-  } else if (input.language === 'go') {
-    addGoSpans(input, lines, spans, budget);
-  } else if (input.language === 'rust') {
-    addRustSpans(input, lines, spans, budget);
-  } else if (['java', 'kotlin', 'scala'].includes(input.language)) {
-    addJavaFamilySpans(input, lines, spans, budget);
+  switch (codeFactLanguageFamily(input.language)) {
+    case 'javascript_typescript':
+      addJavascriptTypescriptSpans(input, lines, spans, budget);
+      break;
+    case 'python':
+      addPythonSpans(input, lines, spans);
+      break;
+    case 'go':
+      addGoSpans(input, lines, spans, budget);
+      break;
+    case 'rust':
+      addRustSpans(input, lines, spans, budget);
+      break;
+    case 'java_family':
+      addJavaFamilySpans(input, lines, spans, budget);
+      break;
+    case 'unknown':
+      break;
   }
 
   return { spans };
