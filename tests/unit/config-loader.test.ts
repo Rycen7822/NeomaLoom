@@ -86,7 +86,7 @@ describe('NoemaLoom config loader', () => {
       maxOutputBytes: createDefaultConfig(projectRoot).featureProjection.maxOutputBytes
     });
     expect(result.config.fileInventory.ignoreGlobs).toEqual(
-      expect.arrayContaining(['node_modules/**', 'custom-cache/**', '.noemaloom/**', 'hermes-plugin-backups/**'])
+      expect.arrayContaining(['node_modules/**', 'custom-cache/**', '.noemaloom/**', 'hermes-plugin-backups/**', '**/runs/**', '**/outputs/**'])
     );
     const stored = JSON.parse(await readFile(paths.configFile, 'utf8')) as { featureProjection: Record<string, unknown>; fileInventory: { ignoreGlobs: string[] } };
     expect(stored.featureProjection.timeoutMs).toBeUndefined();

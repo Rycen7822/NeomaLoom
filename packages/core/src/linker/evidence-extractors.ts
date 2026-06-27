@@ -59,8 +59,12 @@ function configMatches(span: RepoSpan, mention: string): boolean {
     .includes(mention);
 }
 
-function textCalls(span: RepoSpan, label: string): boolean {
-  return new RegExp(`\\b${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\(`).test(span.indexedText);
+function textCallTokens(span: RepoSpan): Set<string> {
+  return new Set(tokensMatching(span.indexedText, /\b([A-Za-z_$][\w$]*)\s*\(/g));
+}
+
+function textWordTokens(span: RepoSpan): Set<string> {
+  return new Set(tokensMatching(span.indexedText, /\b([A-Za-z_$][\w$]*)\b/g));
 }
 
 function pushCandidate(candidates: LinkCandidate[], keys: Set<string>, candidate: LinkCandidate): void {
@@ -116,7 +120,7 @@ export function extractLinkCandidatesFromSpans(spans: RepoSpan[]): LinkCandidate
 
   for (const span of spans) {
     const normalizedPath = normalizePath(span.path);
-    byPath.set(normalizedPath, [...(byPath.get(normalizedPath) ?? []), span]);
+    addToIndex(byPath, normalizedPath, span);
     if (span.kind.startsWith('code.')) {
       for (const key of codeLookupKeys(span)) addToIndex(codeIndex, key, span);
     }
@@ -179,9 +183,10 @@ export function extractLinkCandidatesFromSpans(spans: RepoSpan[]): LinkCandidate
     }
 
     if (span.kind.startsWith('test.')) {
-      for (const token of tokensMatching(span.indexedText, /\b([A-Za-z_$][\w$]*)\s*\(/g)) {
+      const callTokens = textCallTokens(span);
+      for (const token of callTokens) {
         for (const target of codeIndex.get(token) ?? []) {
-          if (!textCalls(span, target.label)) continue;
+          if (!callTokens.has(target.label)) continue;
           pushCandidate(
             candidates,
             candidateKeys,
@@ -198,9 +203,10 @@ export function extractLinkCandidatesFromSpans(spans: RepoSpan[]): LinkCandidate
     }
 
     if (span.kind.startsWith('example.')) {
-      for (const token of tokensMatching(span.indexedText, /\b([A-Za-z_$][\w$]*)\b/g)) {
+      const wordTokens = textWordTokens(span);
+      for (const token of wordTokens) {
         for (const target of codeIndex.get(token) ?? []) {
-          if (!span.indexedText.includes(target.label)) continue;
+          if (!wordTokens.has(target.label)) continue;
           pushCandidate(
             candidates,
             candidateKeys,

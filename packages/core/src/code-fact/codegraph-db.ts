@@ -8,6 +8,7 @@ import type { CodeFactEdge, CodeFactSpan } from './extractor.js';
 
 type Statement = {
   run: (...params: unknown[]) => unknown;
+  get: (...params: unknown[]) => unknown;
   all: (...params: unknown[]) => unknown[];
 };
 
@@ -129,6 +130,100 @@ async function cleanupStaleCodeGraphTemps(factDir: string): Promise<void> {
   }
   for (const base of staleBases) {
     await unlinkSqliteTempIfExists(path.join(factDir, base));
+  }
+}
+
+export type CodeGraphSnapshot = {
+  files: Array<{ path: string; language: string }>;
+  spans: CodeFactSpan[];
+  edges: CodeFactEdge[];
+};
+
+function parseMetadataJson(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'string') {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+async function sqliteFileExists(targetPath: string): Promise<boolean> {
+  try {
+    return (await stat(targetPath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+export async function readCodeGraphDb(projectRoot: string): Promise<CodeGraphSnapshot | undefined> {
+  const paths = await ensureStateDir(projectRoot);
+  const dbPath = assertWritableStatePath(paths.projectRoot, path.join(paths.factDir, 'codegraph.db'));
+  if (!(await sqliteFileExists(dbPath))) {
+    return undefined;
+  }
+  let db: Database | undefined;
+  try {
+    db = openDatabase(dbPath);
+    const files = db.prepare('SELECT path, language FROM facts_files ORDER BY path').all() as Array<{ path: string; language: string }>;
+    const rows = db.prepare(
+      `SELECT span_id, kind, path, label, signature, start_line, end_line, metadata_json
+       FROM facts_nodes
+       ORDER BY path ASC, start_line ASC, span_id ASC`
+    ).all() as Array<{
+      span_id: string;
+      kind: CodeFactSpan['kind'];
+      path: string;
+      label: string;
+      signature: string;
+      start_line: number;
+      end_line: number;
+      metadata_json: string;
+    }>;
+    const spans: CodeFactSpan[] = rows.map(row => ({
+      spanId: row.span_id,
+      kind: row.kind,
+      path: row.path,
+      label: row.label,
+      startLine: Number(row.start_line),
+      endLine: Number(row.end_line),
+      text: row.signature,
+      metadata: parseMetadataJson(row.metadata_json)
+    }));
+    const labelBySpanId = new Map(spans.map(span => [span.spanId, span.label]));
+    const edges = db.prepare(
+      `SELECT edge_id, source_span_id, target_span_id, relation, confidence, evidence_json
+       FROM facts_edges
+       ORDER BY edge_id ASC`
+    ).all() as Array<{
+      edge_id: string;
+      source_span_id: string;
+      target_span_id: string;
+      relation: CodeFactEdge['relation'];
+      confidence: number;
+      evidence_json: string;
+    }>;
+    return {
+      files,
+      spans,
+      edges: edges.map(edge => ({
+        edgeId: edge.edge_id,
+        sourceSpanId: edge.source_span_id,
+        targetSpanId: edge.target_span_id,
+        relation: edge.relation,
+        sourceLabel: labelBySpanId.get(edge.source_span_id) ?? edge.source_span_id,
+        targetLabel: labelBySpanId.get(edge.target_span_id) ?? edge.target_span_id,
+        confidence: Number(edge.confidence),
+        evidence: parseMetadataJson(edge.evidence_json)
+      }))
+    };
+  } catch {
+    return undefined;
+  } finally {
+    db?.close();
   }
 }
 

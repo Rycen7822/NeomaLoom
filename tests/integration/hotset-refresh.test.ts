@@ -81,6 +81,8 @@ async function createLoopLikeProject(): Promise<string> {
 describe('scoped hotset refresh', () => {
   it('promotes explicit paths into scoped spans while keeping repo_files global', async () => {
     const projectRoot = await createPathProject();
+    const initial = await callRegisteredTool('nl_refresh', { projectPath: projectRoot, target: 'all' });
+    expect(initial.ok).toBe(true);
 
     const result = await callRegisteredTool('nl_refresh', {
       projectPath: projectRoot,
@@ -94,7 +96,8 @@ describe('scoped hotset refresh', () => {
     expect(result.data).toMatchObject({
       status: 'refreshed',
       target: 'paths',
-      coverage: { inventory: 'full', deepSpans: 'scoped', hotFiles: 1 }
+      coverage: { inventory: 'full', deepSpans: 'scoped', hotFiles: 1 },
+      inventoryStrategy: { source: 'snapshot_plus_requested_paths' }
     });
     const dbPath = path.join(projectRoot, '.noemaloom', 'spans', 'spans.db');
     expect(values(dbPath, 'SELECT path AS value FROM repo_files ORDER BY path')).toEqual([
@@ -148,6 +151,34 @@ describe('scoped hotset refresh', () => {
     expect(query.data).toMatchObject({ coverage: { inventory: 'full', deepSpans: 'scoped' } });
     const results = (query.data as { results: Array<{ path: string; editBoundary?: { editable: boolean; warning?: string } }> }).results;
     expect(results.find(item => item.path.endsWith('CURRENT_STATUS.md'))?.editBoundary).toMatchObject({ editable: false });
+  });
+
+  it('reuses the previous inventory snapshot for repeated hotset refreshes', async () => {
+    const projectRoot = await createLoopLikeProject();
+    const initial = await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'all'
+    });
+    expect(initial.ok).toBe(true);
+
+    const result = await callRegisteredTool('nl_refresh', {
+      projectPath: projectRoot,
+      target: 'hotset'
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({
+      coverage: { inventory: 'full', deepSpans: 'scoped' },
+      inventoryStrategy: { source: 'snapshot_plus_hotset' }
+    });
+    const dbPath = path.join(projectRoot, '.noemaloom', 'spans', 'spans.db');
+    const spanPaths = values(dbPath, 'SELECT DISTINCT path AS value FROM repo_spans ORDER BY path');
+    expect(spanPaths).toEqual(expect.arrayContaining([
+      'CODEX_STATE.md',
+      'DeepScientist/quests/001/AGENTS.md',
+      'DeepScientist/quests/001/experiments/CURRENT_STATUS.md'
+    ]));
+    expect(spanPaths.some(repoPath => repoPath.includes('/runs/'))).toBe(false);
   });
 
   it('allows explicit paths promotion for files that are default-cold patterns', async () => {

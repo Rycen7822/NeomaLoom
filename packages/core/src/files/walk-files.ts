@@ -1,7 +1,7 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 
-const DEFAULT_MAX_WALK_DEPTH = 64;
+export const DEFAULT_MAX_WALK_DEPTH = 64;
 
 function toRepoPath(projectRoot: string, absolutePath: string): string {
   return path.relative(projectRoot, absolutePath).split(path.sep).join('/');

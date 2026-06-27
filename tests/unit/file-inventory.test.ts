@@ -117,17 +117,17 @@ describe('file inventory', () => {
 
     expect(inventory.files.map(file => file.path)).toEqual(['docs/secrets.md', 'src/app.ts']);
     expect(inventory.ignoredPaths).toEqual([
-      '.aws/credentials',
+      '.aws',
       '.env',
       '.env.local',
       '.envrc',
-      '.gnupg/private-keys-v1.d/key',
+      '.gnupg',
       '.htpasswd',
-      '.kube/config',
+      '.kube',
       '.netrc',
       '.npmrc',
       '.pypirc',
-      '.ssh/id_ed25519',
+      '.ssh',
       'certs/client.key',
       'certs/client.pem',
       'config/secrets.json',
@@ -235,16 +235,17 @@ describe('file inventory', () => {
 
     expect(inventory.files.map(file => file.path)).toEqual(['src/app.ts']);
     expect(inventory.ignoredPaths).toEqual([
-      '.noemaloom/cache.json',
-      '.venv/bin/python',
-      'build/app.js',
-      'coverage/summary.json',
-      'dist/app.js',
-      'node_modules/pkg/index.js',
-      'src/__pycache__/app.cpython-312.pyc',
-      'target/debug/app.js',
-      'vendor/pkg/index.js'
+      '.noemaloom',
+      '.venv',
+      'build',
+      'coverage',
+      'dist',
+      'node_modules',
+      'src/__pycache__',
+      'target',
+      'vendor'
     ]);
+    expect(inventory.strategy).toMatchObject({ source: 'walk', prunedDirs: 9 });
 
     const withVendor = await buildFileInventory({ projectRoot, includeVendor: true });
     expect(withVendor.files.map(file => file.path)).toEqual(['src/app.ts', 'vendor/pkg/index.js']);
@@ -257,6 +258,44 @@ describe('file inventory', () => {
     expect(matcher.patterns).toEqual(['src/**/*.ts', '**/foo.js', '.noemaloom/**']);
     expect(matcher.ignores('src/a/b/app.ts')).toBe(true);
     expect(matcher.ignores('lib/foo.js')).toBe(true);
+  });
+
+  it('defaults to ignoring deep experiment output directories', () => {
+    const config = createDefaultConfig('/tmp/noemaloom-default-ignore-demo');
+
+    expect(config.fileInventory.ignoreGlobs).toEqual(expect.arrayContaining([
+      '**/runs/**',
+      '**/outputs/**',
+      '**/artifacts/**',
+      '**/artifact/**',
+      '**/checkpoints/**',
+      '**/wandb/**',
+      '**/mlruns/**',
+      '**/.cache/**',
+      '**/.pytest_cache/**',
+      '**/.mypy_cache/**'
+    ]));
+  });
+
+  it('prunes deep ignored directories before enumerating their children in non-git projects', async () => {
+    const projectRoot = await createTempProject('noemaloom-pruned-walk-inventory-');
+    await writeProjectFile(projectRoot, 'src/app.ts', 'export const app = true;\n');
+    await writeProjectFile(projectRoot, 'benchmarks/demo/runs/job-001/src/huge.ts', 'export const ignored = true;\n');
+    await writeProjectFile(projectRoot, 'benchmarks/demo/outputs/job-002/report.json', '{"ignored": true}\n');
+
+    const inventory = await buildFileInventory({ projectRoot });
+
+    expect(inventory.files.map(file => file.path)).toEqual(['src/app.ts']);
+    expect(inventory.ignoredPaths).toEqual(['benchmarks/demo/outputs', 'benchmarks/demo/runs']);
+    expect(inventory.strategy).toMatchObject({
+      source: 'walk',
+      candidateFiles: 1,
+      includedFiles: 1,
+      ignoredPaths: 2,
+      prunedDirs: 2,
+      prunedDirSamples: ['benchmarks/demo/outputs', 'benchmarks/demo/runs'],
+      maxWalkDepth: 64
+    });
   });
 
   it('supports common glob patterns in custom ignore rules', async () => {

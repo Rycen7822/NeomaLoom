@@ -77,6 +77,19 @@ function evidenceKind(edge: RepoEdge): string {
   return 'unknown';
 }
 
+function linksBySpanId(edges: RepositoryMap['highConfidenceLinks']): Map<string, Set<string>> {
+  const bySpanId = new Map<string, Set<string>>();
+  for (const edge of edges) {
+    const sourceLinks = bySpanId.get(edge.sourceSpanId) ?? new Set<string>();
+    sourceLinks.add(edge.targetSpanId);
+    bySpanId.set(edge.sourceSpanId, sourceLinks);
+    const targetLinks = bySpanId.get(edge.targetSpanId) ?? new Set<string>();
+    targetLinks.add(edge.sourceSpanId);
+    bySpanId.set(edge.targetSpanId, targetLinks);
+  }
+  return bySpanId;
+}
+
 export function buildRepositoryMap(input: BuildRepositoryMapInput): RepositoryMap {
   const safeSpans = [...input.spans].filter(span => !hasForbiddenContent(span));
   const safeSpanIds = new Set(safeSpans.map(span => span.spanId));
@@ -106,6 +119,7 @@ export function buildRepositoryMap(input: BuildRepositoryMapInput): RepositoryMa
         left.targetSpanId.localeCompare(right.targetSpanId) ||
         left.relation.localeCompare(right.relation)
     );
+  const linkedSpanIdsBySpanId = linksBySpanId(highConfidenceLinks);
 
   return {
     graphRevision: input.graphRevision,
@@ -143,11 +157,7 @@ export function buildRepositoryMap(input: BuildRepositoryMapInput): RepositoryMa
           id: span.spanId,
           path: span.path,
           label: span.label,
-          linkedSpanIds: highConfidenceLinks
-            .filter(edge => edge.sourceSpanId === span.spanId || edge.targetSpanId === span.spanId)
-            .flatMap(edge => [edge.sourceSpanId, edge.targetSpanId])
-            .filter(spanId => spanId !== span.spanId)
-            .sort()
+          linkedSpanIds: [...(linkedSpanIdsBySpanId.get(span.spanId) ?? new Set<string>())].sort()
         }))
     ).map(({ id, label, linkedSpanIds }) => ({ id, label, linkedSpanIds })),
     highConfidenceLinks,

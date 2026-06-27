@@ -345,6 +345,378 @@ export async function readIndexCoverage(projectRoot: string): Promise<IndexCover
   }
 }
 
+type StoredSpanRow = {
+  span_id: string;
+  path: string;
+  kind: string;
+  role: string;
+  label: string;
+  start_line: number;
+  end_line: number;
+  start_column: number | null;
+  end_column: number | null;
+  parent_span_id: string | null;
+  language: string;
+  heading_path_json: string;
+  symbol_path_json: string;
+  anchor: string | null;
+  stable_locator_json: string;
+  text_hash: string;
+  indexed_text: string;
+  summary: string;
+  metadata_json: string;
+  source: string;
+  updated_at: number;
+};
+
+type StoredEdgeRow = {
+  edge_id: string;
+  source_span_id: string;
+  target_span_id: string;
+  relation: string;
+  confidence: number;
+  source: string;
+  evidence_json: string;
+  updated_at: number;
+};
+
+export type StoredGraphSnapshot = {
+  spans: RepoSpan[];
+  edges: RepoEdge[];
+};
+
+function parseJsonValue<T>(value: string, fallback: T): T {
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+export async function readStoredGraphSnapshot(projectRoot: string): Promise<StoredGraphSnapshot | undefined> {
+  const paths = resolveNoemaLoomPaths(projectRoot);
+  const dbPath = path.join(paths.spansDir, 'spans.db');
+  if (!(await fileExists(dbPath))) {
+    return undefined;
+  }
+  try {
+    const db = openDatabase(dbPath);
+    try {
+      const spanRows = db.prepare(
+        `SELECT span_id, path, kind, role, label, start_line, end_line, start_column, end_column, parent_span_id, language,
+                heading_path_json, symbol_path_json, anchor, stable_locator_json, text_hash, indexed_text, summary,
+                metadata_json, source, updated_at
+         FROM repo_spans
+         ORDER BY path ASC, start_line ASC, span_id ASC`
+      ).all() as StoredSpanRow[];
+      const edgeRows = db.prepare(
+        `SELECT edge_id, source_span_id, target_span_id, relation, confidence, source, evidence_json, updated_at
+         FROM repo_edges
+         ORDER BY edge_id ASC`
+      ).all() as StoredEdgeRow[];
+      return {
+        spans: spanRows.map(row => ({
+          spanId: row.span_id,
+          path: row.path,
+          kind: row.kind as RepoSpan['kind'],
+          role: row.role as RepoSpan['role'],
+          label: row.label,
+          startLine: Number(row.start_line),
+          endLine: Number(row.end_line),
+          startColumn: row.start_column ?? undefined,
+          endColumn: row.end_column ?? undefined,
+          parentSpanId: row.parent_span_id ?? undefined,
+          language: row.language,
+          headingPath: parseJsonValue<string[]>(row.heading_path_json, []),
+          symbolPath: parseJsonValue<string[]>(row.symbol_path_json, []),
+          anchor: row.anchor ?? undefined,
+          stableLocator: parseJsonValue<RepoSpan['stableLocator']>(row.stable_locator_json, {
+            path: row.path,
+            kind: row.kind as RepoSpan['kind'],
+            headingPath: [],
+            blockOrdinal: 0,
+            normalizedTextHash: row.text_hash,
+            nearbyHeadingHash: row.text_hash
+          }),
+          textHash: row.text_hash,
+          indexedText: row.indexed_text,
+          summary: row.summary,
+          metadata: parseJsonValue<Record<string, unknown>>(row.metadata_json, {}),
+          source: row.source,
+          updatedAt: Number(row.updated_at)
+        })),
+        edges: edgeRows.map(row => ({
+          edgeId: row.edge_id,
+          sourceSpanId: row.source_span_id,
+          targetSpanId: row.target_span_id,
+          relation: row.relation as RepoEdge['relation'],
+          confidence: Number(row.confidence),
+          source: row.source,
+          evidence: parseJsonValue<Record<string, unknown>>(row.evidence_json, {}),
+          updatedAt: Number(row.updated_at)
+        }))
+      };
+    } finally {
+      db.close();
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+export async function writeRefreshRevisionDelta(input: {
+  projectRoot: string;
+  graphRevision: string;
+  target: string;
+  startedAt: number;
+  finishedAt: number;
+  files: InventoryFile[];
+  spans: RepoSpan[];
+  edges: RepoEdge[];
+  warnings: string[];
+  coverage?: IndexCoverage;
+  replacedPaths: string[];
+  deletedPaths: string[];
+}): Promise<string> {
+  const paths = await ensureStateDir(input.projectRoot);
+  const dbPath = assertWritableStatePath(paths.projectRoot, path.join(paths.spansDir, 'spans.db'));
+  if (!(await fileExists(dbPath))) {
+    throw new Error('Cannot run changed delta writer without an existing spans.db');
+  }
+  const db = openDatabase(dbPath);
+  let transactionActive = false;
+  const uniqueSpans = uniqueBy(input.spans, span => span.spanId);
+  const uniqueEdges = uniqueBy(input.edges, edge => edge.edgeId);
+  const replacedPaths = [...new Set(input.replacedPaths)].sort();
+  const deletedPaths = [...new Set(input.deletedPaths)].sort();
+  const touchedPaths = [...new Set([...replacedPaths, ...deletedPaths])].sort();
+
+  try {
+    db.exec('PRAGMA temp_store = MEMORY; BEGIN IMMEDIATE;');
+    transactionActive = true;
+    const upsertFile = db.prepare(
+      `INSERT OR REPLACE INTO repo_files
+        (path, absolute_path, role, language, content_hash, size_bytes, modified_at, indexed_at, generated, ignored, metadata_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    const insertSpan = db.prepare(
+      `INSERT OR REPLACE INTO repo_spans
+        (span_id, path, kind, role, label, start_line, end_line, start_column, end_column, parent_span_id, language,
+         heading_path_json, symbol_path_json, anchor, stable_locator_json, text_hash, indexed_text, summary, metadata_json, source, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    const insertSpanFts = db.prepare(
+      `INSERT INTO repo_spans_fts
+        (span_id, path, kind, role, label, heading_path, symbol_path, indexed_text, summary)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    const insertEdge = db.prepare(
+      `INSERT OR IGNORE INTO repo_edges
+        (edge_id, source_span_id, target_span_id, relation, confidence, source, evidence_json, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    const insertSymbol = db.prepare(
+      `INSERT INTO repo_symbols
+        (symbol_fqn, span_id, path, language, symbol_name, symbol_kind, parent_symbol_fqn, module_path, signature,
+         exported, deprecated, deprecated_message, superseded_by, metadata_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    const insertSymbolAlias = db.prepare(
+      `INSERT INTO repo_symbol_aliases
+        (alias_fqn, target_fqn, alias_kind, path, line, metadata_json)
+        VALUES (?, ?, ?, ?, ?, ?)`
+    );
+    const insertRevision = db.prepare(
+      `INSERT OR REPLACE INTO refresh_revisions
+        (graph_revision, project_root, target, started_at, finished_at, file_count, span_count, edge_count, warnings_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    const upsertMetadata = db.prepare(
+      `INSERT INTO index_metadata (key, value_json, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`
+    );
+
+    for (const file of input.files) {
+      upsertFile.run(
+        file.path,
+        file.absolutePath,
+        file.role,
+        file.language,
+        file.contentHash,
+        file.sizeBytes,
+        file.modifiedAt,
+        file.indexedAt,
+        file.generated ? 1 : 0,
+        file.ignored ? 1 : 0,
+        JSON.stringify({ oversized: file.oversized, fileOnlySpan: file.fileOnlySpan })
+      );
+    }
+
+    for (const deletedPath of deletedPaths) {
+      db.prepare('DELETE FROM repo_files WHERE path = ?').run(deletedPath);
+    }
+    for (const repoPath of touchedPaths) {
+      db.prepare('DELETE FROM repo_spans_fts WHERE path = ?').run(repoPath);
+      db.prepare('DELETE FROM repo_spans WHERE path = ?').run(repoPath);
+    }
+    db.prepare('DELETE FROM repo_edges').run();
+    db.prepare('DELETE FROM repo_symbols').run();
+    db.prepare('DELETE FROM repo_symbol_aliases').run();
+
+    const touched = new Set(touchedPaths);
+    for (const span of uniqueSpans.filter(span => touched.has(span.path))) {
+      const bounded = boundedIndexedText(span);
+      const boundedLabel = boundedField(span.label, MAX_REPO_SPAN_LABEL_BYTES);
+      const boundedSummary = boundedField(span.summary, MAX_REPO_SPAN_SUMMARY_BYTES);
+      insertSpan.run(
+        span.spanId,
+        span.path,
+        span.kind,
+        span.role,
+        boundedLabel,
+        span.startLine,
+        span.endLine,
+        span.startColumn ?? null,
+        span.endColumn ?? null,
+        span.parentSpanId ?? null,
+        span.language,
+        JSON.stringify(span.headingPath),
+        JSON.stringify(span.symbolPath),
+        span.anchor ?? null,
+        JSON.stringify(span.stableLocator),
+        span.textHash,
+        bounded.indexedText,
+        boundedSummary,
+        JSON.stringify(bounded.metadata),
+        span.source,
+        span.updatedAt
+      );
+      insertSpanFts.run(
+        span.spanId,
+        span.path,
+        span.kind,
+        span.role,
+        boundedLabel,
+        JSON.stringify(span.headingPath),
+        JSON.stringify(span.symbolPath),
+        bounded.indexedText,
+        boundedSummary
+      );
+    }
+
+    for (const edge of uniqueEdges) {
+      insertEdge.run(
+        edge.edgeId,
+        edge.sourceSpanId,
+        edge.targetSpanId,
+        edge.relation,
+        edge.confidence,
+        edge.source,
+        JSON.stringify(edge.evidence),
+        edge.updatedAt
+      );
+    }
+
+    const retrievalCore = buildRetrievalCoreRecords(uniqueSpans);
+    for (const symbol of retrievalCore.symbols) {
+      insertSymbol.run(
+        symbol.symbolFqn,
+        symbol.spanId,
+        symbol.path,
+        symbol.language,
+        symbol.symbolName,
+        symbol.symbolKind,
+        symbol.parentSymbolFqn ?? null,
+        symbol.modulePath,
+        symbol.signature,
+        symbol.exported ? 1 : 0,
+        symbol.deprecated ? 1 : 0,
+        symbol.deprecatedMessage ?? null,
+        symbol.supersededBy ?? null,
+        JSON.stringify(symbol.metadata)
+      );
+    }
+    for (const alias of retrievalCore.aliases) {
+      insertSymbolAlias.run(
+        alias.aliasFqn,
+        alias.targetFqn,
+        alias.aliasKind,
+        alias.path,
+        alias.line,
+        JSON.stringify(alias.metadata)
+      );
+    }
+
+    insertRevision.run(
+      input.graphRevision,
+      paths.projectRoot,
+      input.target,
+      input.startedAt,
+      input.finishedAt,
+      input.files.length,
+      uniqueSpans.length,
+      uniqueEdges.length,
+      JSON.stringify(input.warnings)
+    );
+    db.prepare(
+      `DELETE FROM refresh_revisions
+       WHERE graph_revision NOT IN (
+         SELECT graph_revision FROM refresh_revisions ORDER BY finished_at DESC LIMIT ?
+       )`
+    ).run(MAX_REFRESH_REVISIONS);
+    if (input.coverage) {
+      const updatedAt = input.coverage.updatedAt ?? input.finishedAt;
+      upsertMetadata.run('coverage', JSON.stringify({ ...input.coverage, updatedAt }), updatedAt);
+    }
+    upsertMetadata.run(
+      'retrievalCore',
+      JSON.stringify({
+        state: 'ready',
+        symbols: retrievalCore.symbols.length,
+        aliases: retrievalCore.aliases.length,
+        revision: sha1(`${input.graphRevision}:${retrievalCore.symbols.length}:${retrievalCore.aliases.length}`),
+        updatedAt: input.finishedAt
+      }),
+      input.finishedAt
+    );
+    db.exec('COMMIT');
+    transactionActive = false;
+  } finally {
+    if (transactionActive) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        // Best effort rollback for changed delta writes.
+      }
+    }
+    db.close();
+  }
+
+  await writeFileInsideStateDir(
+    paths.projectRoot,
+    path.join(paths.logsDir, 'latest-revision.json'),
+    `${JSON.stringify({ graphRevision: input.graphRevision, target: input.target, coverage: input.coverage ?? null }, null, 2)}\n`
+  );
+  const refreshLogPath = path.join(paths.logsDir, 'refresh.jsonl');
+  await rotateRefreshLogIfLarge(paths.projectRoot, refreshLogPath);
+  await appendFileInsideStateDir(
+    paths.projectRoot,
+    refreshLogPath,
+    `${JSON.stringify({
+      graphRevision: input.graphRevision,
+      target: input.target,
+      fileCount: input.files.length,
+      spanCount: uniqueSpans.length,
+      edgeCount: uniqueEdges.length,
+      coverage: input.coverage ?? null,
+      warnings: input.warnings,
+      writer: 'changed_delta'
+    })}\n`
+  );
+  return dbPath;
+}
+
 export async function writeRefreshRevision(input: {
   projectRoot: string;
   graphRevision: string;

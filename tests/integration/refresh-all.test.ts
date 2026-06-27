@@ -70,6 +70,13 @@ describe('nl_refresh target all', () => {
       expect.objectContaining({ step: 'RefreshRevisionWriter', durationMs: expect.any(Number) })
     ]));
     expect(result.data.deepIndex).toMatchObject({ scope: 'full', deepFiles: expect.any(Number) });
+    expect(result.data.inventoryStrategy).toMatchObject({
+      source: 'walk',
+      candidateFiles: expect.any(Number),
+      includedFiles: expect.any(Number),
+      prunedDirs: expect.any(Number),
+      maxWalkDepth: 64
+    });
     await expect(access(path.join(projectRoot, '.noemaloom', 'files', 'inventory.json'))).resolves.toBeUndefined();
     await expect(access(path.join(projectRoot, '.noemaloom', 'files', 'inventory.sqlite'))).rejects.toThrow();
     await expect(access(path.join(projectRoot, '.noemaloom', 'fact', 'codegraph.db'))).resolves.toBeUndefined();

@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import { buildFileInventory, type FileInventory, type InventoryFile } from '../files/file-inventory.js';
 import { safeReadFileInsideProject } from '../safety/path-guard.js';
 import { detectCodeLanguage, isCodeFactLanguage } from './language-detect.js';
@@ -6,11 +8,15 @@ import { extractCodeFacts, type CodeFactEdge, type CodeFactSpan } from './extrac
 import { projectCodeFacts } from './projector.js';
 import { resolveCodeFactEdges } from './reference-resolver.js';
 
+export type CodeFactTextProvider = (file: InventoryFile) => Promise<string>;
+
 export type IndexCodeFactsInput = {
   projectRoot: string;
   inventory?: FileInventory;
   includeExperimentNotes?: boolean;
   includeVendor?: boolean;
+  textForFile?: CodeFactTextProvider;
+  writeDb?: boolean;
 };
 
 export type IndexCodeFactsResult = {
@@ -57,6 +63,7 @@ export async function indexCodeFacts(input: IndexCodeFactsInput): Promise<IndexC
         (input.includeVendor || file.role !== 'vendor_file') &&
         isCodeFactLanguage(file.language)
     );
+  const textForFile = input.textForFile ?? ((file: InventoryFile) => indexedTextForFile(input.projectRoot, file));
   const spanGroups = await mapWithConcurrency(
     codeFiles,
     CODE_FACT_INDEX_CONCURRENCY,
@@ -65,18 +72,20 @@ export async function indexCodeFacts(input: IndexCodeFactsInput): Promise<IndexC
         projectRoot: input.projectRoot,
         path: file.path,
         language: file.language,
-        text: await indexedTextForFile(input.projectRoot, file)
+        text: await textForFile(file)
       }).spans
   );
   const spans = spanGroups.flat();
   const edges = resolveCodeFactEdges(spans);
   const projected = projectCodeFacts({ spans, edges });
-  const dbPath = await writeCodeGraphDb({
-    projectRoot: input.projectRoot,
-    files: codeFiles.map(file => ({ path: file.path, language: file.language })),
-    spans: projected.spans,
-    edges: projected.edges
-  });
+  const dbPath = input.writeDb === false
+    ? path.join(input.projectRoot, '.noemaloom', 'fact', 'codegraph.db')
+    : await writeCodeGraphDb({
+        projectRoot: input.projectRoot,
+        files: codeFiles.map(file => ({ path: file.path, language: file.language })),
+        spans: projected.spans,
+        edges: projected.edges
+      });
 
   return {
     dbPath,

@@ -136,9 +136,24 @@ function valuePreview(value: unknown): string {
   return stableStringify(value);
 }
 
-function lineForNeedle(lines: string[], needle: string): number {
-  const index = lines.findIndex(line => line.includes(needle));
-  return index >= 0 ? index + 1 : 1;
+type JsonLineFinder = (needle: string) => number;
+
+function createJsonLineFinder(lines: string[]): JsonLineFinder {
+  const cache = new Map<string, number>();
+  return (needle: string): number => {
+    const cached = cache.get(needle);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const index = lines.findIndex(line => line.includes(needle));
+    const line = index >= 0 ? index + 1 : 1;
+    cache.set(needle, line);
+    return line;
+  };
+}
+
+function lineForNeedle(lineFor: JsonLineFinder, needle: string): number {
+  return lineFor(needle);
 }
 
 export function createArtifactSpan(input: {
@@ -210,6 +225,7 @@ function pointerJoin(parent: string, key: string): string {
 function traverseJson(input: {
   path: string;
   lines: string[];
+  lineFor: JsonLineFinder;
   spans: ArtifactSpan[];
   value: unknown;
   pointer: string;
@@ -230,9 +246,9 @@ function traverseJson(input: {
     return;
   }
   const line = input.arrayItem
-    ? lineForNeedle(input.lines, JSON.stringify(input.value))
+    ? lineForNeedle(input.lineFor, JSON.stringify(input.value))
     : input.key
-      ? lineForNeedle(input.lines, JSON.stringify(input.key))
+      ? lineForNeedle(input.lineFor, JSON.stringify(input.key))
       : 1;
   if (input.arrayItem) {
     if (input.spans.length < input.maxSpans) {
@@ -350,6 +366,7 @@ export function parseJsonArtifact(input: ArtifactParseInput): ArtifactParseResul
   const maxSpans = input.maxSpans ?? DEFAULT_MAX_ARTIFACT_SPANS;
   const truncated = { value: false };
   const indexedTextTruncated = { value: false };
+  const lineFor = createJsonLineFinder(lines);
   const fileText = boundedText({
     text: input.text,
     metadata: byteLength(input.text) > MAX_ARTIFACT_SPAN_TEXT_BYTES
@@ -374,6 +391,7 @@ export function parseJsonArtifact(input: ArtifactParseInput): ArtifactParseResul
     traverseJson({
       path: input.path,
       lines,
+      lineFor,
       spans,
       value,
       pointer: '',
